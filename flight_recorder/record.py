@@ -52,7 +52,9 @@ def _emit(ev: dict) -> None:
 
 # --- effect wrapping (module-level functions, sync or async) ---------------------
 
-def _effect_event(name: str, args: tuple, kwargs: dict) -> dict:
+def _effect_event(name: str, args: tuple, kwargs: dict, opts: dict) -> dict:
+    if opts.get("method"):
+        args = args[1:]  # self is identity, not input
     return {"k": "fx", "fn": name,
             "args": [to_jsonable(a) for a in args],
             "kwargs": {k: to_jsonable(v) for k, v in kwargs.items()}}
@@ -67,11 +69,13 @@ def _record_result(ev: dict, res: Any = None, err: Optional[BaseException] = Non
     _emit(ev)
 
 
-def _replay_effect(boundary: Boundary, name: str, args: tuple, kwargs: dict) -> Any:
+def _replay_effect(boundary: Boundary, name: str, args: tuple, kwargs: dict,
+                   opts: dict) -> Any:
     from flight_recorder.replay import ReplayDivergence
     ev = hook.feed.pop_expect("fx", fn=name)
-    asked = _effect_event(name, args, kwargs)
-    if asked["args"] != ev.get("args") or asked["kwargs"] != ev.get("kwargs"):
+    asked = _effect_event(name, args, kwargs, opts)
+    if not opts.get("loose_args") and (
+            asked["args"] != ev.get("args") or asked["kwargs"] != ev.get("kwargs")):
         raise ReplayDivergence(
             f"effect {name} called with different arguments than recorded:\n"
             f"  recorded: {json.dumps({'args': ev.get('args'), 'kwargs': ev.get('kwargs')}, ensure_ascii=False)[:400]}\n"
@@ -82,15 +86,22 @@ def _replay_effect(boundary: Boundary, name: str, args: tuple, kwargs: dict) -> 
     return from_jsonable(ev.get("res"))
 
 
-def _wrap_effect(boundary: Boundary, qualname: str, fn: Callable) -> Callable:
+def _wrap_effect(boundary: Boundary, qualname: str, fn: Callable,
+                 opts: Optional[dict] = None) -> Callable:
+    """opts: {"method": True} — the wrapped callable is a class function; args[0] (self)
+    is identity, not input, and is skipped in recording and replay comparison.
+    {"loose_args": True} — record args for inspection but don't compare them on replay
+    (for effects whose args are machine-dependent, e.g. filesystem paths); the event
+    order and effect name still gate the replay."""
+    opts = opts or {}
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def awrapper(*args: Any, **kwargs: Any) -> Any:
             if hook.mode == "replay":
-                return _replay_effect(boundary, qualname, args, kwargs)
+                return _replay_effect(boundary, qualname, args, kwargs, opts)
             if hook.mode != "record" or _active.get() is None:
                 return await fn(*args, **kwargs)
-            ev = _effect_event(qualname, args, kwargs)
+            ev = _effect_event(qualname, args, kwargs, opts)
             try:
                 res = await fn(*args, **kwargs)
             except BaseException as e:
@@ -104,10 +115,10 @@ def _wrap_effect(boundary: Boundary, qualname: str, fn: Callable) -> Callable:
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         if hook.mode == "replay":
-            return _replay_effect(boundary, qualname, args, kwargs)
+            return _replay_effect(boundary, qualname, args, kwargs, opts)
         if hook.mode != "record" or _active.get() is None:
             return fn(*args, **kwargs)
-        ev = _effect_event(qualname, args, kwargs)
+        ev = _effect_event(qualname, args, kwargs, opts)
         try:
             res = fn(*args, **kwargs)
         except BaseException as e:
@@ -333,11 +344,14 @@ def _patch(target: Any, attr: str, value: Any) -> None:
 def patch_boundary(boundary: Boundary) -> None:
     """Wrap the boundary's effects, chains, and shims in place (used by both record and
     replay; behavior switches on hook.mode). Idempotence is the caller's business."""
-    for module, names in boundary.effects:
+    for entry in boundary.effects:
+        module, names = entry[0], entry[1]
+        opts = entry[2] if len(entry) > 2 else None
         for name in names:
             fn = getattr(module, name)
             fn = getattr(fn, "__flight_wrapped__", fn)
-            _patch(module, name, _wrap_effect(boundary, f"{module.__name__}.{name}", fn))
+            _patch(module, name,
+                   _wrap_effect(boundary, f"{module.__name__}.{name}", fn, opts))
     for target in boundary.chains:
         real = getattr(target.holder, target.attr, None)
         if real is not None:
@@ -369,6 +383,21 @@ def install(boundary: Boundary, tools_module: Any, directory: str = "flight",
                 and getattr(fn, "__module__", "") == tools_module.__name__
                 and not inspect.isclass(fn)):
             _patch(tools_module, name, _wrap_tool(fn, tool_skip_params))
+    hook.mode = "record"
+
+
+def install_mcp(boundary: Boundary, mcp_server: Any, directory: str = "flight",
+                enabled: bool = True, tool_skip_params: tuple = ()) -> None:
+    """Like install(), but for apps whose tool bodies don't live in one module (e.g. tools
+    registered from libraries): wraps every tool already registered on the FastMCP server,
+    at the registry (`Tool.fn`). Register all tools before calling this."""
+    global _recorder
+    if not enabled or _recorder is not None:
+        return
+    _recorder = Recorder(directory, boundary)
+    patch_boundary(boundary)
+    for tool in mcp_server._tool_manager._tools.values():
+        _patch(tool, "fn", _wrap_tool(tool.fn, tool_skip_params))
     hook.mode = "record"
 
 

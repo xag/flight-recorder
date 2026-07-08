@@ -18,7 +18,7 @@ from flight_recorder.boundary import (
 )
 from flight_recorder.record import (
     ChainNode, DatetimeShim, RandomShim, FORMAT_VERSION,
-    hook, install, session_path, uninstall,
+    hook, install, install_mcp, session_path, uninstall,
 )
 from flight_recorder.replay import (
     Feed, PlaybackChain, ReplayAdapter, ReplayDivergence, ReplayedEffectError,
@@ -29,7 +29,7 @@ from flight_recorder.serial import from_jsonable, snapshot_jsonable, to_jsonable
 __all__ = [
     "Boundary", "ChainTarget", "DEFAULT_TERMINAL_READS", "DEFAULT_TERMINAL_WRITES",
     "ChainNode", "DatetimeShim", "RandomShim", "FORMAT_VERSION",
-    "hook", "install", "session_path", "uninstall",
+    "hook", "install", "install_mcp", "session_path", "uninstall",
     "Feed", "PlaybackChain", "ReplayAdapter", "ReplayDivergence", "ReplayedEffectError",
     "ReplayReport", "Snap", "Tracer", "load_session", "replay_call", "run_cli",
     "from_jsonable", "snapshot_jsonable", "to_jsonable",
