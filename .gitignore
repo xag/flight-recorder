@@ -1,0 +1,5 @@
+flight/
+__pycache__/
+*.pyc
+.venv/
+dist/
