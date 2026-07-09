@@ -45,6 +45,11 @@ class FlightViolation(Exception):
     finding from a divergence: the recording is fine, the claim about the code is not."""
 
 
+class FlightUnanswerable(Exception):
+    """A mutated recording sent the code down a path the tape cannot answer. Impeaches
+    neither the code nor the invariants — this fixture just doesn't reach that far."""
+
+
 class FlightUnreadable(Exception):
     """A file under the recordings directory is not a readable flight session."""
 
@@ -152,22 +157,38 @@ class FlightSessionFile(pytest.File):
             # A stray, truncated, or half-written .jsonl under the recordings directory.
             # It is a failing test of its own, not a collection error: raising here would
             # abort collection for the entire run, including the recordings that are fine.
-            yield FlightUnreadableItem.from_parent(self, name="unreadable", reason=str(e))
+            yield FlightUnreadableItem.from_parent(
+                self, name="unreadable",
+                reason=f"{Path(self.path).name} is under flight_recordings but is not a "
+                       f"readable flight session: {e}")
             return
+        has_invariants = bool(str(self.config.getini("flight_invariants")).strip())
         for i, call in enumerate(calls):
+            probe = bool(call.get("probe"))
+            if probe and not has_invariants:
+                # A mutated recording asserts nothing by itself: its recorded result
+                # predates the mutation, so only a declared claim can judge the code.
+                yield FlightUnreadableItem.from_parent(
+                    self, name=f"call{i}::{call['fn']}::probe",
+                    reason=f"{Path(self.path).name} call {i} is a probe (mutated) "
+                           "recording, which is only meaningful against invariants — "
+                           "set flight_invariants")
+                continue
             yield FlightCallItem.from_parent(
-                self, name=f"call{i}::{call['fn']}", index=i)
+                self, name=f"call{i}::{call['fn']}" + ("::probe" if probe else ""),
+                index=i, probe=probe)
 
 
 class FlightUnreadableItem(pytest.Item):
+    """A recordings-directory entry that cannot serve as a test, failing with the reason
+    (pre-formatted by the collector) instead of aborting the run."""
+
     def __init__(self, *, reason: str, **kw):
         super().__init__(**kw)
         self.reason = reason
 
     def runtest(self) -> None:
-        raise FlightUnreadable(
-            f"{self.path.name} is under flight_recordings but is not a readable flight "
-            f"session: {self.reason}")
+        raise FlightUnreadable(self.reason)
 
     def repr_failure(self, excinfo, style=None):
         if isinstance(excinfo.value, FlightUnreadable):
@@ -179,9 +200,10 @@ class FlightUnreadableItem(pytest.Item):
 
 
 class FlightCallItem(pytest.Item):
-    def __init__(self, *, index: int, **kw):
+    def __init__(self, *, index: int, probe: bool = False, **kw):
         super().__init__(**kw)
         self.index = index
+        self.probe = probe
 
     def runtest(self) -> None:
         session = Path(self.path)
@@ -192,6 +214,21 @@ class FlightCallItem(pytest.Item):
             trace_path = trace_dir / f"{session.stem}.call{self.index}.trace.jsonl"
         adapter = _load_adapter(self.config)
         invariants = _resolve_invariants(self.config)
+
+        if self.probe:
+            # Collection already guaranteed invariants exist for probe items.
+            result = check_invariants(session, self.index, adapter, invariants, trace_path)
+            if result.outcome == "unanswerable":
+                raise FlightUnanswerable(format_invariant_report(result))
+            if result.outcome == "raised":
+                # A crash every claim politely guarded around: fail, and say how to
+                # judge it explicitly (assert not t.raised, or judges_raise=True).
+                raise FlightViolation(format_invariant_report(result))
+            if result.violations:
+                exc = FlightViolation(format_invariant_report(result))
+                exc.all_broke = all(v.broke for v in result.violations)
+                raise exc
+            return
 
         if not invariants:
             report = replay_call(session, self.index, adapter, trace_path)
@@ -212,11 +249,17 @@ class FlightCallItem(pytest.Item):
     def repr_failure(self, excinfo, style=None):
         if isinstance(excinfo.value, FlightDivergence):
             return f"{self.path.name} no longer reproduces:\n\n{excinfo.value}"
+        if isinstance(excinfo.value, FlightUnanswerable):
+            return (f"{self.path.name} cannot answer the path the code now takes:\n\n"
+                    f"{excinfo.value}")
+        if isinstance(excinfo.value, FlightUnreadable):
+            return str(excinfo.value)
         if isinstance(excinfo.value, FlightViolation):
             # Blame accurately: a claim that itself raised impeaches the claim, not the code.
             blame = ("an invariant is broken" if getattr(excinfo.value, "all_broke", False)
                      else "the code is wrong")
-            return f"{self.path.name} reproduces, but {blame}:\n\n{excinfo.value}"
+            lead = "under mutation, " if self.probe else "reproduces, but "
+            return f"{self.path.name} {lead}{blame}:\n\n{excinfo.value}"
         return super().repr_failure(excinfo, style=style)
 
     def reportinfo(self):
