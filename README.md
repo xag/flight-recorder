@@ -50,6 +50,62 @@ fr.install(BOUNDARY, tools_core, directory="flight",
 Off by default; when enabled, every public function in `tools_core` writes one record per
 call — bound args, ordered boundary events, result — to a session file.
 
+### Record one call, not one deployment
+
+`enabled` is a gate. A bool decides once for the whole process — falsy is a total no-op,
+nothing is patched. A **callable `(tool_name, kwargs) -> bool` is consulted on every tool
+call**, so a running server can record a single user's request while leaving the rest of
+its traffic untouched, with no env flip and no redeploy:
+
+```python
+RECORDING_FOR = contextvars.ContextVar("recording_for", default=None)
+
+fr.install(BOUNDARY, tools_core, directory="flight",
+           enabled=lambda tool, kwargs: kwargs.get("email") == RECORDING_FOR.get())
+```
+
+The session file is opened by the first call the gate admits — a gate that never fires
+leaves no file at all, and `session_path()` stays `None`. A gate that raises is treated as
+a "no": it can never break the call it was asked about.
+
+The **outermost tool call decides for the whole tree**. The gate is asked once, about the
+call that entered the process; a tool invoked by another tool is never gated again, and
+folds into its caller's record — so a declined outer call cannot leave a fragmentary
+recording of some inner tool that starts mid-request. The name the gate is asked about is
+the name clients call, which under `install_mcp` is the registered tool name, not the
+Python function's.
+
+### Retrieve without touching the box
+
+Pass a `sink` and the session is published as it grows — after the header, then after every
+completed call — so recordings are retrievable from a machine you have no shell on. The
+protocol is one method, and the library stays dependency-free:
+
+```python
+class S3Sink:
+    def __init__(self):
+        self.q = queue.SimpleQueue()
+        threading.Thread(target=self._drain, daemon=True).start()
+
+    def publish(self, name: str, data: bytes) -> None:
+        self.q.put((name, data))          # hand off and return; never block the caller
+
+    def _drain(self):
+        while True:
+            name, data = self.q.get()
+            boto3.client("s3").put_object(Bucket="flight", Key=name, Body=data)
+
+fr.install(BOUNDARY, tools_core, directory="flight", sink=S3Sink())
+```
+
+**`publish` runs synchronously, under the recorder's write lock, on the thread that finished
+the call** — in an async server, the event-loop thread. A sink that blocks on network I/O
+therefore stalls every concurrent request, not just the recorded one. Hand the bytes off and
+return, as above. Raising `Exception` is ignored: like the crash sidecars, publication is
+best-effort and will not break the call. Only *completed* calls are published; a call that
+dies mid-flight leaves its last words in a local `.inflight` sidecar, readable only on the
+box.
+
 ## Replay
 
 ```python
@@ -71,6 +127,35 @@ python -m app.replay ... --call 2 --watch level,total    # variable timeline
 Exit 0: the replay reproduced the recording bit-for-bit. Exit 2: divergence — in the code
 path (the first differing boundary question is named), the result, or the writes (compared,
 never executed). Pin recordings as fixtures: record once, replay against every build.
+
+## Non-regression testing
+
+Pinning is the point, so the pytest plugin ships with the library. Point it at a directory
+of pinned sessions; every recorded call becomes its own test:
+
+```toml
+# pyproject.toml
+[tool.pytest.ini_options]
+flight_recordings = "tests/recordings"          # a directory of pinned .jsonl sessions
+flight_adapter = "app.replay:Adapter"           # your ReplayAdapter
+flight_trace = "build/traces"                   # optional: state traces per replay
+```
+
+```
+$ pytest
+tests/recordings/login-bug.jsonl::call0::authenticate PASSED
+tests/recordings/login-bug.jsonl::call1::fetch_profile FAILED
+```
+
+A failure prints the same divergence report the CLI does — which boundary question changed,
+or how the result differs. The plugin is inert until `flight_recordings` is set, so it costs
+nothing to projects that merely depend on this library. It also exposes a `flight_replay`
+fixture for assertions the collector can't express. Replay patches the boundary
+process-wide, so don't run these under `pytest-xdist`.
+
+**A pinned recording is a regression oracle, not a correctness one.** It asserts that the
+code still behaves as it behaved when you pinned it — never that the recorded behavior was
+right. Deciding *that* needs a spec, and no recording contains one.
 
 ## What it can and cannot see
 

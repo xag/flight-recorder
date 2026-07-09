@@ -1,11 +1,16 @@
 [project]
 name = "flight-recorder"
-version = "0.3.0"
+version = "0.4.0"
 description = "Record tool calls at an app's nondeterminism boundary; replay them deterministically with every internal variable observable"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 dependencies = []
+
+# Loaded by pytest when installed; inert unless `flight_recordings` is set (see
+# flight_recorder/pytest_plugin.py). pytest is never imported at library import time.
+[project.entry-points.pytest11]
+flight_recorder = "flight_recorder.pytest_plugin"
 
 [dependency-groups]
 dev = [

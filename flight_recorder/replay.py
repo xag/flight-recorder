@@ -386,25 +386,31 @@ def _print_watch(trace_path: Path, names: list) -> None:
                     print(f"  {ev['at']:<34} {ev['fn']:<30} {name} = {vals[name]}")
 
 
-def _print_report(rec_index: int, report: ReplayReport) -> None:
-    for w in report.warnings:
-        print(f"  warning: {w}")
+def format_report(rec_index: int, report: ReplayReport) -> str:
+    """The human-readable verdict: what matched, and where the first divergence was. Shared
+    by the CLI and the pytest plugin, so a failing pinned recording reads the same in CI as
+    it does under `--call`."""
+    out: list[str] = [f"  warning: {w}" for w in report.warnings]
     verdict = "MATCH — replay reproduced the recording bit-for-bit" if report.ok \
         else "DIVERGED"
-    print(f"Replayed {report.fn} (call {rec_index}): {verdict}")
-    print(f"  boundary events: {report.events_consumed}/{report.events_total} consumed"
-          + ("" if report.events_consumed == report.events_total
-             else "  <-- replayed code took a SHORTER path than recorded"))
+    out.append(f"Replayed {report.fn} (call {rec_index}): {verdict}")
+    out.append(f"  boundary events: {report.events_consumed}/{report.events_total} consumed"
+               + ("" if report.events_consumed == report.events_total
+                  else "  <-- replayed code took a SHORTER path than recorded"))
     if report.divergence:
-        print(f"  {report.divergence}")
+        out.append(f"  {report.divergence}")
     if report.result_diff:
-        print("\n".join("  " + l for l in report.result_diff))
+        out.extend("  " + l for l in report.result_diff)
     if report.write_divergences:
-        print(f"  write divergences ({len(report.write_divergences)}):")
-        for d in report.write_divergences:
-            print(f"    {d}")
+        out.append(f"  write divergences ({len(report.write_divergences)}):")
+        out.extend(f"    {d}" for d in report.write_divergences)
     if report.trace_path:
-        print(f"  trace: {report.trace_path} ({report.transitions} state transitions)")
+        out.append(f"  trace: {report.trace_path} ({report.transitions} state transitions)")
+    return "\n".join(out)
+
+
+def _print_report(rec_index: int, report: ReplayReport) -> None:
+    print(format_report(rec_index, report))
 
 
 def run_cli(adapter: ReplayAdapter, argv: Optional[list] = None,
