@@ -155,7 +155,57 @@ process-wide, so don't run these under `pytest-xdist`.
 
 **A pinned recording is a regression oracle, not a correctness one.** It asserts that the
 code still behaves as it behaved when you pinned it — never that the recorded behavior was
-right. Deciding *that* needs a spec, and no recording contains one.
+right. Deciding *that* needs a spec — which is what invariants are.
+
+## Invariants
+
+An invariant is a claim about **every** execution, written once and checked against any
+recording — so it can condemn the very first observation of a bug, which no recording can.
+A bug replays bit-for-bit forever; only a spec can call it wrong.
+
+```python
+@fr.invariant("never claims end-of-corpus while words remain")
+def _(t: fr.Trajectory):
+    assert not (t.result["done"] and t.result["corpus"] - t.result["deck"] > 0)
+
+@fr.invariant("level never excludes the whole corpus")
+def _(t: fr.Trajectory):
+    for obs in t.trace.values("level"):
+        assert obs.value > 0, f"level={obs.value} at {obs.at}"
+```
+
+The second claim is the reason this exists: the production bug that shaped this library was
+an internal variable (`level=0`) silently emptying a whole corpus, with a perfectly
+self-consistent output. `t.result` is what the replayed code produced; `t.trace` is its
+internal trajectory, queryable — `values(name)` is the `--watch` timeline as data,
+`calls`/`returns`/`raised` cover the control flow. Traced values are recorded as **data**,
+not reprs: numbers compare, documents read as dicts, and long collections carry a prefix
+that still reports its true `len()`.
+
+Check by hand:
+
+```python
+report = fr.check_invariants(session, 0, Adapter(), INVARIANTS)
+assert report.ok, fr.format_invariant_report(report)
+```
+
+`report.ok` demands both verdicts: the replay reproduced the recording AND every invariant
+held. They stay separately readable (`report.reproduced`, `report.outcome`) because they
+impeach different things. For a tool that legitimately raises, `t.result` is None on the
+error path — guard result-reading invariants with `t.raised`.
+
+or wire them into the pytest plugin, where every pinned recording then answers both
+questions — does the code still do what it did (replay), and is what it does right
+(invariants):
+
+```toml
+flight_invariants = "myapp.claims"          # a module of @invariant defs, or "module:LIST"
+```
+
+A failed invariant is reported as `reproduces, but the code is wrong` — a different finding
+from a divergence, because it is one: a divergence impeaches the recording, a violation
+impeaches the code. A replay that diverged checks nothing (its trajectory is fiction), and
+an invariant that itself raises is reported as a broken invariant, not as a bug in the code.
 
 ## What it can and cannot see
 

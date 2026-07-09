@@ -27,6 +27,9 @@ from typing import Optional
 
 import pytest
 
+from flight_recorder.invariants import (
+    check_invariants, collect, format_invariant_report,
+)
 from flight_recorder.replay import (
     ReplayAdapter, format_report, load_session, replay_call,
 )
@@ -35,6 +38,11 @@ from flight_recorder.replay import (
 class FlightDivergence(Exception):
     """A pinned recording no longer reproduces. Carries the formatted report as its message
     so pytest prints the divergence rather than a traceback into the replay machinery."""
+
+
+class FlightViolation(Exception):
+    """The recording reproduced, but the code broke a declared invariant. A different
+    finding from a divergence: the recording is fine, the claim about the code is not."""
 
 
 class FlightUnreadable(Exception):
@@ -52,6 +60,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                   default="")
     parser.addini("flight_trace",
                   "directory to write replay state traces into (default: no tracing)",
+                  default="")
+    parser.addini("flight_invariants",
+                  "module (or 'module:ATTR') declaring @invariant claims to assert against "
+                  "every replayed call",
                   default="")
 
 
@@ -79,12 +91,32 @@ def _resolve_adapter(config: pytest.Config):
         raise pytest.UsageError(f"flight_adapter {spec!r} is not importable: {e}") from e
 
 
+def _resolve_invariants(config: pytest.Config) -> list:
+    """Import `flight_invariants` and collect the claims declared there. Accepts a module
+    (every `@invariant` in it) or 'module:ATTR' (a list, or a single Invariant)."""
+    spec = str(config.getini("flight_invariants")).strip()
+    if not spec:
+        return []
+    mod_name, sep, attr = spec.partition(":")
+    try:
+        source = importlib.import_module(mod_name)
+        if sep:
+            source = getattr(source, attr)
+    except (ImportError, AttributeError) as e:
+        raise pytest.UsageError(f"flight_invariants {spec!r} is not importable: {e}") from e
+    found = collect(source)
+    if not found:
+        raise pytest.UsageError(f"flight_invariants {spec!r} declares no @invariant")
+    return found
+
+
 def pytest_configure(config: pytest.Config) -> None:
-    """Resolve the adapter once, at startup. A missing, malformed, or unimportable
-    `flight_adapter` is a usage error before collection — not the same error repeated once
-    per recorded call."""
+    """Resolve the adapter and the invariants once, at startup. A missing, malformed, or
+    unimportable `flight_adapter` is a usage error before collection — not the same error
+    repeated once per recorded call."""
     if _ini_path(config, "flight_recordings") is not None:
         _resolve_adapter(config)
+        _resolve_invariants(config)
 
 
 def _load_adapter(config: pytest.Config) -> ReplayAdapter:
@@ -158,13 +190,33 @@ class FlightCallItem(pytest.Item):
         if trace_dir is not None:
             trace_dir.mkdir(parents=True, exist_ok=True)
             trace_path = trace_dir / f"{session.stem}.call{self.index}.trace.jsonl"
-        report = replay_call(session, self.index, _load_adapter(self.config), trace_path)
-        if not report.ok:
-            raise FlightDivergence(format_report(self.index, report))
+        adapter = _load_adapter(self.config)
+        invariants = _resolve_invariants(self.config)
+
+        if not invariants:
+            report = replay_call(session, self.index, adapter, trace_path)
+            if not report.ok:
+                raise FlightDivergence(format_report(self.index, report))
+            return
+
+        # With invariants declared, the recording answers two questions: does the code still
+        # do what it did (replay), and is what it does right (invariants)?
+        result = check_invariants(session, self.index, adapter, invariants, trace_path)
+        if not result.replay.ok:  # divergence, result/error mismatch, or leftover events
+            raise FlightDivergence(format_report(self.index, result.replay))
+        if result.violations:
+            exc = FlightViolation(format_invariant_report(result))
+            exc.all_broke = all(v.broke for v in result.violations)
+            raise exc
 
     def repr_failure(self, excinfo, style=None):
         if isinstance(excinfo.value, FlightDivergence):
             return f"{self.path.name} no longer reproduces:\n\n{excinfo.value}"
+        if isinstance(excinfo.value, FlightViolation):
+            # Blame accurately: a claim that itself raised impeaches the claim, not the code.
+            blame = ("an invariant is broken" if getattr(excinfo.value, "all_broke", False)
+                     else "the code is wrong")
+            return f"{self.path.name} reproduces, but {blame}:\n\n{excinfo.value}"
         return super().repr_failure(excinfo, style=style)
 
     def reportinfo(self):

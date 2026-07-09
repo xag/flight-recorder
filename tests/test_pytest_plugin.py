@@ -37,7 +37,8 @@ def _lay_out(pytester, recording: str, ini: str = INI) -> Path:
     rec_dir.mkdir()
     path = rec_dir / "pinned.jsonl"
     path.write_text(recording, encoding="utf-8")
-    pytester.syspathinsert(REPO_ROOT)
+    pytester.syspathinsert(REPO_ROOT)  # so tests.test_roundtrip:ToyAdapter imports
+    pytester.syspathinsert()           # so a generated invariants module imports
     return path
 
 
@@ -146,6 +147,68 @@ def test_an_unimportable_adapter_fails_once_at_startup(pytester, pinned):
     result = pytester.runpytest()
     result.stderr.fnmatch_lines(["*not importable*"])
     assert result.ret == pytest.ExitCode.USAGE_ERROR
+
+
+INVARIANT_MODULE = '''
+import flight_recorder as fr
+
+@fr.invariant("greet always returns the caller's own address")
+def _addressed(t: fr.Trajectory):
+    assert t.kwargs["email"] in t.result
+
+@fr.invariant("greet never names more than it was asked for")
+def _count(t: fr.Trajectory):
+    assert len(t.trace.final("names").value) <= t.kwargs["count"]
+'''
+
+FALSE_INVARIANT = '''
+import flight_recorder as fr
+
+@fr.invariant("greet always names exactly one person")
+def _one(t: fr.Trajectory):
+    got = t.trace.final("names").value
+    assert len(got) == 1, f"named {len(got)}: {got}"
+'''
+
+
+def test_invariants_run_against_each_pinned_recording(pytester, pinned):
+    # Each generated module gets its own name: pytester runs in-process, so a shared
+    # `claims` would stay cached in sys.modules and leak one test's claims into the next.
+    pytester.makepyfile(claims_ok=INVARIANT_MODULE)
+    _lay_out(pytester, pinned, INI + "\nflight_invariants = claims_ok\n")
+
+    result = pytester.runpytest("-v")
+    result.assert_outcomes(passed=1)
+
+
+def test_a_violated_invariant_fails_the_recording_that_reproduces(pytester, pinned):
+    # The recording is perfect; the claim about the code is false. The failure must say so.
+    pytester.makepyfile(claims_false=FALSE_INVARIANT)
+    _lay_out(pytester, pinned, INI + "\nflight_invariants = claims_false\n")
+
+    result = pytester.runpytest()
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines([
+        "*reproduces, but the code is wrong*",
+        "*greet always names exactly one person*",
+    ])
+
+
+def test_a_module_with_no_invariants_is_a_usage_error(pytester, pinned):
+    pytester.makepyfile(claims_empty="x = 1")
+    _lay_out(pytester, pinned, INI + "\nflight_invariants = claims_empty\n")
+
+    result = pytester.runpytest()
+    result.stderr.fnmatch_lines(["*declares no @invariant*"])
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+
+
+def test_invariants_can_be_pointed_at_a_named_list(pytester, pinned):
+    pytester.makepyfile(claims_list=INVARIANT_MODULE + "\nCLAIMS = [_addressed]\n")
+    _lay_out(pytester, pinned, INI + "\nflight_invariants = claims_list:CLAIMS\n")
+
+    result = pytester.runpytest()
+    result.assert_outcomes(passed=1)
 
 
 def test_a_corrupt_recording_is_named_rather_than_crashing_collection(pytester, pinned):
