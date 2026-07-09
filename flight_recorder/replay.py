@@ -361,6 +361,18 @@ def _print_call_list(path: Path) -> None:
               f"{c.get('ms', '?')} ms){err}")
         print(f"           kwargs: {json.dumps(c['kwargs'], ensure_ascii=False)[:90]}")
         print(f"           result: {json.dumps(c['result'], ensure_ascii=False)[:70]}")
+    # Orphaned sidecars are calls that never finished — the process died mid-call
+    # (crash, OOM, kill). Their events up to the point of death are all we have.
+    stem = path.name[:-len(path.suffix)] if path.suffix else path.name
+    for sidecar in sorted(path.parent.glob(f"{stem}.call*.inflight")):
+        try:
+            lines = sidecar.read_text(encoding="utf-8").splitlines()
+            hdr = json.loads(lines[0]) if lines else {}
+            print(f"  INCOMPLETE (crashed mid-call): {sidecar.name} — "
+                  f"{hdr.get('fn', '?')}, {max(len(lines) - 1, 0)} event(s) "
+                  f"recorded before death, started {hdr.get('started', '?')}")
+        except Exception as e:
+            print(f"  INCOMPLETE (unreadable sidecar): {sidecar.name} ({e})")
 
 
 def _print_watch(trace_path: Path, names: list) -> None:

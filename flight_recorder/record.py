@@ -237,6 +237,41 @@ class RandomShim:
 
 # --- session file -------------------------------------------------------------------
 
+class _CallSink(list):
+    """The active call's event buffer, mirrored line-by-line to an `.inflight` sidecar so
+    a hard-killed call (SIGKILL, OOM) still leaves its events on disk. A normal call end
+    folds the events into the session record and removes the sidecar; an orphaned sidecar
+    IS the crashed call's partial record (the CLI lists them as INCOMPLETE). Mirroring
+    failures never break the call — the sidecar is best-effort by design."""
+
+    def __init__(self, path: Path, header: dict):
+        super().__init__()
+        self._path = path
+        try:
+            self._f = path.open("w", encoding="utf-8")
+            self._f.write(json.dumps(header, ensure_ascii=False, default=repr) + "\n")
+            self._f.flush()
+        except Exception:
+            self._f = None
+
+    def append(self, ev: dict) -> None:
+        super().append(ev)
+        if self._f is not None:
+            try:
+                self._f.write(json.dumps(ev, ensure_ascii=False, default=repr) + "\n")
+                self._f.flush()
+            except Exception:
+                pass
+
+    def finalize(self) -> None:
+        try:
+            if self._f is not None:
+                self._f.close()
+            self._path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 class Recorder:
     def __init__(self, directory: str, boundary: Boundary):
         self.dir = Path(directory)
@@ -245,6 +280,7 @@ class Recorder:
         self.path = self.dir / f"flight-{stamp}-{os.getpid()}.jsonl"
         self._lock = threading.Lock()
         self._seq = 0
+        self._inflight = 0
         header = {
             "ev": "session", "version": FORMAT_VERSION,
             "started": datetime.now().astimezone().isoformat(),
@@ -261,6 +297,16 @@ class Recorder:
         with self._lock:
             with self.path.open("a", encoding="utf-8") as f:
                 f.write(line + "\n")
+
+    def start_call(self, fn: str, kwargs: dict) -> _CallSink:
+        """Open the call's sidecar-mirrored event buffer (crash capture starts here)."""
+        with self._lock:
+            self._inflight += 1
+            n = self._inflight
+        return _CallSink(
+            self.dir / f"{self.path.stem}.call{n}.inflight",
+            {"ev": "inflight", "fn": fn, "kwargs": to_jsonable(kwargs),
+             "started": datetime.now().astimezone().isoformat()})
 
     def write_call(self, fn: str, kwargs: dict, events: list, result: Any,
                    error: Optional[str], ms: float) -> None:
@@ -282,24 +328,30 @@ _patches: list[tuple[Any, str, Any]] = []  # (module_or_obj, attr, original)
 def _finish_call(fn_name: str, call_kwargs: dict, buf: list, result: Any,
                  error: Optional[str], t0: float) -> None:
     if _recorder is not None:
-        _recorder.write_call(fn_name, call_kwargs, buf, result, error,
+        _recorder.write_call(fn_name, call_kwargs, list(buf), result, error,
                              (time.perf_counter() - t0) * 1000)
+    if isinstance(buf, _CallSink):
+        buf.finalize()
 
 
 def _wrap_tool(fn: Callable, skip_params: tuple = ("svc",)) -> Callable:
     sig = inspect.signature(fn)
 
     def _bind(args: tuple, kwargs: dict) -> dict:
-        bound = sig.bind(*args, **kwargs)
-        bound.apply_defaults()
-        return {k: v for k, v in bound.arguments.items() if k not in skip_params}
+        try:
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+            return {k: v for k, v in bound.arguments.items() if k not in skip_params}
+        except TypeError:  # the call itself will raise the real error
+            return {}
 
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def awrapper(*args: Any, **kwargs: Any) -> Any:
             if _recorder is None or _active.get() is not None:
                 return await fn(*args, **kwargs)
-            buf: list = []
+            call_kwargs = _bind(args, kwargs)
+            buf = _recorder.start_call(fn.__name__, call_kwargs)
             token = _active.set(buf)
             t0 = time.perf_counter()
             result, error = None, None
@@ -311,7 +363,7 @@ def _wrap_tool(fn: Callable, skip_params: tuple = ("svc",)) -> Callable:
                 raise
             finally:
                 _active.reset(token)
-                _finish_call(fn.__name__, _bind(args, kwargs), buf, result, error, t0)
+                _finish_call(fn.__name__, call_kwargs, buf, result, error, t0)
         awrapper.__flight_wrapped__ = fn  # type: ignore[attr-defined]
         return awrapper
 
@@ -319,7 +371,8 @@ def _wrap_tool(fn: Callable, skip_params: tuple = ("svc",)) -> Callable:
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         if _recorder is None or _active.get() is not None:
             return fn(*args, **kwargs)
-        buf: list = []
+        call_kwargs = _bind(args, kwargs)
+        buf = _recorder.start_call(fn.__name__, call_kwargs)
         token = _active.set(buf)
         t0 = time.perf_counter()
         result, error = None, None
@@ -331,7 +384,7 @@ def _wrap_tool(fn: Callable, skip_params: tuple = ("svc",)) -> Callable:
             raise
         finally:
             _active.reset(token)
-            _finish_call(fn.__name__, _bind(args, kwargs), buf, result, error, t0)
+            _finish_call(fn.__name__, call_kwargs, buf, result, error, t0)
     wrapper.__flight_wrapped__ = fn  # type: ignore[attr-defined]
     return wrapper
 
