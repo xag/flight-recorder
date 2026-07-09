@@ -4,15 +4,28 @@ Everything that crosses the recorded boundary is encoded as JSON with revivable 
 datetimes/dates; anything exotic degrades to an opaque repr (which then can't be revived —
 acceptable, because well-factored apps read plain JSON-ish data plus datetimes back from
 their stores).
+
+Traced *internal* values are a different problem, handled by trace_jsonable: they are not
+inputs to be revived faithfully but claims to be asserted against, they are captured on
+every executed line, and they include whatever objects the code happens to hold. So they
+are recorded as data (not reprs — you cannot do arithmetic on `'2'`, and `<Snap object at
+0x7f…>` is both opaque and different on every run), document snapshots are unwrapped, and
+anything long is cut to a prefix that still knows its true length.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime
 from typing import Any
 
 _MAX_DEPTH = 16
+
+# Caps for traced values. A local can be a 10k-row list, and the tracer snapshots it on
+# every line that touches its frame.
+TRACE_MAX_ITEMS = 100
+TRACE_MAX_CHARS = 512
 
 
 def to_jsonable(v: Any, depth: int = 0) -> Any:
@@ -69,3 +82,145 @@ def safe_repr(v: Any, limit: int = 160) -> str:
     except Exception:
         return "<unreprable>"
     return r if len(r) <= limit else r[: limit - 1] + "…"
+
+
+# --- traced internal values -----------------------------------------------------------
+
+class Truncated(list):
+    """A traced sequence cut to a prefix. `len()` is the TRUE length; the contents are the
+    first TRACE_MAX_ITEMS elements. So `len(docs) > 0` is trustworthy while `docs[500]` is
+    not there to be read."""
+
+    def __init__(self, head: list, total: int):
+        super().__init__(head)
+        self.total = total
+
+    def __len__(self) -> int:
+        return self.total
+
+    def __repr__(self) -> str:
+        return f"<{self.total} items, first {list.__len__(self)} traced: {list.__repr__(self)}>"
+
+
+class TruncatedText(str):
+    """A traced string cut to a prefix. `len()` is the TRUE length; the value is the head."""
+
+    def __new__(cls, head: str, total: int):
+        s = super().__new__(cls, head)
+        s.total = total
+        return s
+
+    def __len__(self) -> int:
+        return self.total
+
+
+_ADDR = re.compile(r" at 0x[0-9A-Fa-f]+")
+
+# Every single-key marker the trace encoding uses. A user dict that happens to have exactly
+# this shape must be escaped on encode, or revival would mistake it for a marker.
+_MARKERS = frozenset({"__dt__", "__date__", "__opaque__", "__snap__", "__seq__",
+                      "__str__", "__esc__"})
+
+
+def _opaque(v: Any) -> dict:
+    """An untraceable value's marker. The memory address is scrubbed from the repr: it is
+    noise to a reader and nondeterminism to a trace — two replays of the same execution
+    must produce byte-identical traces, and `<list_iterator at 0x7f…>` never would."""
+    return {"__opaque__": _ADDR.sub("", safe_repr(v))}
+
+
+def _snapshottable(v: Any) -> bool:
+    # getattr-with-default only swallows AttributeError; a proxy whose __getattr__ raises
+    # something else must not detonate a probe that runs on every local of every line.
+    try:
+        return callable(getattr(v, "to_dict", None)) and hasattr(v, "exists")
+    except Exception:
+        return False
+
+
+def trace_jsonable(v: Any, depth: int = 0) -> Any:
+    """Encode one traced internal value. Unlike to_jsonable this unwraps document snapshots
+    and caps long values, because it runs on every local of every executed line.
+
+    It must NEVER raise: it is called from inside a sys.settrace callback, and an exception
+    there is injected into the frame being traced — corrupting the very replay the trace is
+    meant to observe. Anything hostile degrades to an opaque marker instead."""
+    try:
+        return _trace_encode(v, depth)
+    except Exception:
+        return _opaque(v)
+
+
+def _trace_encode(v: Any, depth: int) -> Any:
+    if depth > _MAX_DEPTH:
+        return _opaque(v)
+    if v is None or isinstance(v, (int, float, bool)):
+        return v
+    if isinstance(v, str):
+        if len(v) <= TRACE_MAX_CHARS:
+            return v
+        return {"__str__": {"len": len(v), "head": v[:TRACE_MAX_CHARS]}}
+    if isinstance(v, datetime):
+        return {"__dt__": v.isoformat()}
+    if isinstance(v, date):
+        return {"__date__": v.isoformat()}
+    if _snapshottable(v):  # a document snapshot: the surface a consumer actually reads
+        try:
+            return {"__snap__": snapshot_jsonable(v)}
+        except Exception:
+            return _opaque(v)
+    if isinstance(v, dict):
+        if len(v) == 1 and next(iter(v), None) in _MARKERS:
+            # a user dict shaped exactly like a marker: escape it so it revives as itself
+            k = next(iter(v))
+            return {"__esc__": {str(k): trace_jsonable(v[k], depth + 1)}}
+        return {str(k): trace_jsonable(x, depth + 1) for k, x in v.items()}
+    if isinstance(v, (list, tuple, set, frozenset)):
+        if isinstance(v, (set, frozenset)):
+            # hash order varies per process (PYTHONHASHSEED); a trace must not
+            try:
+                items = sorted(v, key=safe_repr)
+            except Exception:
+                items = list(v)
+        else:
+            items = list(v)
+        if len(items) <= TRACE_MAX_ITEMS:
+            return [trace_jsonable(x, depth + 1) for x in items]
+        head = [trace_jsonable(x, depth + 1) for x in items[:TRACE_MAX_ITEMS]]
+        return {"__seq__": {"len": len(items), "head": head}}
+    return _opaque(v)
+
+
+def from_trace_jsonable(v: Any) -> Any:
+    """Revive a traced value into something an invariant can assert on."""
+    if isinstance(v, dict):
+        if len(v) == 1:
+            if "__dt__" in v:
+                return datetime.fromisoformat(v["__dt__"])
+            if "__date__" in v:
+                return date.fromisoformat(v["__date__"])
+            if "__opaque__" in v:
+                return v["__opaque__"]
+            if "__snap__" in v:
+                return from_trace_jsonable(v["__snap__"])
+            if "__seq__" in v:
+                spec = v["__seq__"]
+                return Truncated([from_trace_jsonable(x) for x in spec["head"]], spec["len"])
+            if "__str__" in v:
+                spec = v["__str__"]
+                return TruncatedText(spec["head"], spec["len"])
+            if "__esc__" in v:  # a user dict that merely looked like a marker
+                return {k: from_trace_jsonable(x) for k, x in v["__esc__"].items()}
+        return {k: from_trace_jsonable(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [from_trace_jsonable(x) for x in v]
+    return v
+
+
+def render(v: Any, limit: int = 90) -> str:
+    """One-line display of a traced value, for --watch."""
+    try:
+        s = json.dumps(v, ensure_ascii=False, default=repr)
+    except Exception:
+        s = safe_repr(v)
+    return s if len(s) <= limit else s[: limit - 1] + "…"

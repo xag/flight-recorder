@@ -28,7 +28,9 @@ from typing import Any, Callable, Optional
 
 from flight_recorder.boundary import Boundary, ChainTarget
 from flight_recorder.record import hook, patch_boundary, unpatch_all, _patch
-from flight_recorder.serial import from_jsonable, safe_repr, short, to_jsonable
+from flight_recorder.serial import (
+    from_jsonable, render, safe_repr, short, to_jsonable, trace_jsonable,
+)
 
 
 class ReplayDivergence(Exception):
@@ -141,10 +143,18 @@ class PlaybackChain:
 
 # --- the tracer ------------------------------------------------------------------------
 
+TRACE_VERSION = 2  # 1: values were reprs. 2: values are data (see serial.trace_jsonable).
+
+
 class Tracer:
     """sys.settrace-based recorder of the replayed execution's internal state: one JSONL
     event per function call ('C', with args), per line whose execution changed a local
-    ('L', with the delta), per return ('R') and per raised exception ('X')."""
+    ('L', with the delta), per return ('R') and per raised exception ('X'), behind a header
+    ('H') naming the format version.
+
+    Values are recorded as data, not reprs, so an invariant can do arithmetic on them and
+    look inside a document — and so two traces of the same execution are equal, which reprs
+    carrying memory addresses never were."""
 
     def __init__(self, out_path: Path, root: str, skip_files: Optional[set] = None,
                  skip_locals: tuple = ("self", "svc")):
@@ -156,6 +166,7 @@ class Tracer:
         self._prev: dict[int, dict] = {}
         self._line: dict[int, int] = {}
         self.transitions = 0
+        self._f.write(json.dumps({"e": "H", "trace_version": TRACE_VERSION}) + "\n")
 
     def start(self) -> None:
         sys.settrace(self._global)
@@ -165,11 +176,11 @@ class Tracer:
         self._f.close()
 
     def _write(self, obj: dict) -> None:
-        self._f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        self._f.write(json.dumps(obj, ensure_ascii=False, default=repr) + "\n")
         self.transitions += 1
 
     def _locals(self, frame: Any) -> dict:
-        return {k: safe_repr(v) for k, v in frame.f_locals.items()
+        return {k: trace_jsonable(v) for k, v in frame.f_locals.items()
                 if not k.startswith("__") and k not in self.skip_locals}
 
     @staticmethod
@@ -187,12 +198,24 @@ class Tracer:
         self._line[id(frame)] = frame.f_lineno
         return self._local
 
+    @staticmethod
+    def _same(a: Any, b: Any) -> bool:
+        """Change detection over encoded values. Plain != would miss type-changing
+        transitions Python calls equal (True == 1 == 1.0); the serialized forms differ."""
+        if a == b and type(a) is type(b):
+            return True
+        try:
+            return json.dumps(a, default=repr) == json.dumps(b, default=repr)
+        except Exception:
+            return False
+
     def _local(self, frame: Any, event: str, arg: Any) -> Callable:
         fid = id(frame)
         if event == "line":
             cur = self._locals(frame)
             prev = self._prev.get(fid, {})
-            delta = {k: v for k, v in cur.items() if prev.get(k) != v}
+            delta = {k: v for k, v in cur.items()
+                     if k not in prev or not self._same(prev[k], v)}
             if delta:
                 self._write({"e": "L", "fn": frame.f_code.co_qualname,
                              "at": self._where(frame, self._line.get(fid)), "d": delta})
@@ -200,12 +223,14 @@ class Tracer:
             self._line[fid] = frame.f_lineno
         elif event == "return":
             self._write({"e": "R", "fn": frame.f_code.co_qualname,
-                         "at": self._where(frame), "v": safe_repr(arg)})
+                         "at": self._where(frame), "v": trace_jsonable(arg)})
             self._prev.pop(fid, None)
             self._line.pop(fid, None)
         elif event == "exception":
+            exc = arg[1]
             self._write({"e": "X", "fn": frame.f_code.co_qualname,
-                         "at": self._where(frame), "v": safe_repr(arg[1])})
+                         "at": self._where(frame), "type": type(exc).__name__,
+                         "v": safe_repr(exc)})
         return self._local
 
 
@@ -273,6 +298,11 @@ class ReplayReport:
     trace_path: Optional[Path] = None
     transitions: int = 0
     warnings: list = field(default_factory=list)
+    # What the replayed code actually produced, jsonable. An invariant asserts on this —
+    # not on the recorded result, which is the thing being questioned.
+    replayed_result: Any = None
+    replayed_error: Optional[str] = None
+    call_kwargs: Any = None  # the recorded call's kwargs, revived
 
     @property
     def ok(self) -> bool:
@@ -309,6 +339,7 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
 
     fn = adapter.resolve(rec["fn"], feed)
     kwargs = from_jsonable(rec["kwargs"])
+    report.call_kwargs = kwargs
 
     tracer = Tracer(trace_path, adapter.trace_root, set(adapter.skip_files)) \
         if trace_path else None
@@ -334,12 +365,14 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
 
     report.events_consumed = feed.pos
     report.write_divergences = feed.write_divergences
+    report.replayed_error = error
     report.error_match = error == rec.get("error")
     if not report.error_match:
         report.result_diff = [f"recorded error: {rec.get('error')}",
                               f"replayed error: {error}"]
     if report.divergence is None:
         replayed = to_jsonable(result)
+        report.replayed_result = replayed
         report.result_match = replayed == rec["result"]
         if not report.result_match and report.error_match:
             a = json.dumps(rec["result"], ensure_ascii=False, indent=1).splitlines()
@@ -380,10 +413,12 @@ def _print_watch(trace_path: Path, names: list) -> None:
     with trace_path.open(encoding="utf-8") as f:
         for line in f:
             ev = json.loads(line)
+            if ev.get("e") == "H":
+                continue
             vals = ev.get("d") or ev.get("args") or {}
             for name in names:
                 if name in vals:
-                    print(f"  {ev['at']:<34} {ev['fn']:<30} {name} = {vals[name]}")
+                    print(f"  {ev['at']:<34} {ev['fn']:<30} {name} = {render(vals[name])}")
 
 
 def format_report(rec_index: int, report: ReplayReport) -> str:
