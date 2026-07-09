@@ -54,6 +54,11 @@ def greet(email: str, count: int = 2) -> str:
     return f"{email} at {datetime.now().isoformat()}: " + ", ".join(names)
 
 
+def outer(email: str) -> str:
+    """A tool that calls another tool: the recorder must treat the pair as one call."""
+    return greet(email, count=1)
+
+
 async def remote_sum(email: str, a: str, b: str) -> dict:
     x = await fx.fetch_remote(a)
     y = await fx.fetch_remote(b)

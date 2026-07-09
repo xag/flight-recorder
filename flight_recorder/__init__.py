@@ -17,20 +17,20 @@ from flight_recorder.boundary import (
     Boundary, ChainTarget, DEFAULT_TERMINAL_READS, DEFAULT_TERMINAL_WRITES,
 )
 from flight_recorder.record import (
-    ChainNode, DatetimeShim, RandomShim, FORMAT_VERSION,
+    ChainNode, DatetimeShim, Gate, RandomShim, SessionSink, FORMAT_VERSION,
     hook, install, install_mcp, session_path, uninstall,
 )
 from flight_recorder.replay import (
     Feed, PlaybackChain, ReplayAdapter, ReplayDivergence, ReplayedEffectError,
-    ReplayReport, Snap, Tracer, load_session, replay_call, run_cli,
+    ReplayReport, Snap, Tracer, format_report, load_session, replay_call, run_cli,
 )
 from flight_recorder.serial import from_jsonable, snapshot_jsonable, to_jsonable
 
 __all__ = [
     "Boundary", "ChainTarget", "DEFAULT_TERMINAL_READS", "DEFAULT_TERMINAL_WRITES",
-    "ChainNode", "DatetimeShim", "RandomShim", "FORMAT_VERSION",
+    "ChainNode", "DatetimeShim", "Gate", "RandomShim", "SessionSink", "FORMAT_VERSION",
     "hook", "install", "install_mcp", "session_path", "uninstall",
     "Feed", "PlaybackChain", "ReplayAdapter", "ReplayDivergence", "ReplayedEffectError",
-    "ReplayReport", "Snap", "Tracer", "load_session", "replay_call", "run_cli",
-    "from_jsonable", "snapshot_jsonable", "to_jsonable",
+    "ReplayReport", "Snap", "Tracer", "format_report", "load_session", "replay_call",
+    "run_cli", "from_jsonable", "snapshot_jsonable", "to_jsonable",
 ]
