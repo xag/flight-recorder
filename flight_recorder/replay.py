@@ -21,6 +21,7 @@ import importlib
 import inspect
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,40 +39,106 @@ class ReplayDivergence(Exception):
     holds at this position — the code path itself has diverged."""
 
 
+class ProbeUnanswerable(BaseException):
+    """Under probe replay, the code asked a boundary question the recording holds no
+    further answer for — the mutation redirected execution onto a path the tape cannot
+    serve. Not a code bug and not a divergence: a limit of this particular recording.
+
+    BaseException on purpose: it is raised inside the replayed application's own frames,
+    and probe mode exists precisely for hostile paths — where defensive `except Exception`
+    handlers are likeliest. Application code must not be able to swallow it and let a
+    trajectory the tape never answered masquerade as a verdict."""
+
+
 class ReplayedEffectError(Exception):
     """A recorded effect exception whose original type has no registered reviver."""
 
 
 # --- the feed --------------------------------------------------------------------
 
+_CHAIN_ARGS = re.compile(r"\([^()]*\)")
+
+
+def _skeleton(sig: Optional[str]) -> str:
+    """A chain signature with its argument content erased: `collection(users).where(x,>,0)`
+    → `collection.where`. Under mutation the CONTENT of a query legitimately changes (it
+    flows from mutated data) but its SHAPE — which methods on which path — does not; probe
+    matching compares shapes so one collection's rows can never answer another's query.
+    Heuristic: parenthesized argument renderings that themselves contain parentheses may
+    survive the erasure; a false mismatch is reported, never a silent crossed wire."""
+    return _CHAIN_ARGS.sub("", sig or "")
+
+
 class Feed:
-    def __init__(self, events: list):
+    """The recording as the world. Strict mode is a contract: each question must be the
+    recorded one, in order, exactly. Probe mode (mutated recordings) is only an answering
+    service: questions are matched by kind and shape (effect name, chain skeleton),
+    order-monotonic, skipping recorded events the mutated execution no longer asks —
+    because a mutation legitimately changes which questions get asked, but the tape still
+    only holds the answers it holds."""
+
+    def __init__(self, events: list, probe: bool = False):
         self.events = events
         self.pos = 0
+        self.probe = probe
+        self.skipped = 0
+        self.consumed = 0
+        self.skip_log: list[str] = []
         self.write_divergences: list[str] = []
+        self.writes: list[dict] = []  # every write the REPLAYED code performed
+
+    @staticmethod
+    def _want(kind: str, sig: Optional[str], op: Optional[str], fn: Optional[str]) -> str:
+        return kind + (f" {op} {sig}" if sig is not None else f" {fn}" if fn is not None
+                       else "")
+
+    def _matches(self, ev: dict, kind: str, sig: Optional[str], op: Optional[str],
+                 fn: Optional[str]) -> bool:
+        if ev["k"] != kind:
+            return False
+        if kind == "db" and sig is not None:
+            if ev.get("op") != op:
+                return False
+            if self.probe:
+                return _skeleton(ev.get("sig")) == _skeleton(sig)
+            return ev.get("sig") == sig
+        if kind == "fx" and fn is not None:
+            return ev.get("fn") == fn
+        return True
 
     def pop_expect(self, kind: str, sig: Optional[str] = None, op: Optional[str] = None,
                    fn: Optional[str] = None) -> dict:
+        if self.probe:
+            j = self.pos
+            while j < len(self.events):
+                if self._matches(self.events[j], kind, sig, op, fn):
+                    if j > self.pos:
+                        self.skipped += j - self.pos
+                        self.skip_log.append(
+                            f"'{self._want(kind, sig, op, fn)}' answered by event {j}, "
+                            f"skipping {j - self.pos} recorded event(s)")
+                    self.pos = j + 1
+                    self.consumed += 1
+                    return self.events[j]
+                j += 1
+            raise ProbeUnanswerable(
+                f"the replayed code asked for '{self._want(kind, sig, op, fn)}' but the "
+                f"recording holds no further such event — the mutation sent execution "
+                f"down a path this recording cannot answer")
         if self.pos >= len(self.events):
             raise ReplayDivergence(
                 f"replay asked for a '{kind}' event at position {self.pos} but the "
                 "recording is exhausted — the replayed code takes a longer path than "
                 "the recorded one")
         ev = self.events[self.pos]
-        ok = ev["k"] == kind
-        if ok and kind == "db" and sig is not None:
-            ok = ev.get("sig") == sig and ev.get("op") == op
-        if ok and kind == "fx" and fn is not None:
-            ok = ev.get("fn") == fn
-        if not ok:
+        if not self._matches(ev, kind, sig, op, fn):
             got = ev["k"] + (f" {ev.get('op')} {ev.get('sig')}" if ev["k"] == "db"
                              else f" {ev.get('fn')}" if ev["k"] == "fx" else "")
-            want = kind + (f" {op} {sig}" if sig is not None
-                           else f" {fn}" if fn is not None else "")
             raise ReplayDivergence(
                 f"boundary divergence at event {self.pos}:\n"
-                f"  recorded: {got}\n  replayed: {want}")
+                f"  recorded: {got}\n  replayed: {self._want(kind, sig, op, fn)}")
         self.pos += 1
+        self.consumed += 1
         return ev
 
     @property
@@ -127,8 +194,16 @@ class PlaybackChain:
                     return [Snap(r) for r in res]
                 return Snap(res)
             if name in target.terminal_writes:
-                ev = feed.pop_expect("db", sig=sig, op=name)
                 replayed = [_arg_jsonable(a) for a in args]
+                # Every write the replayed code performs is captured for the Trajectory —
+                # writes are never executed, but invariants must be able to judge them
+                # ("never writes when the corpus is empty").
+                feed.writes.append({"op": name, "sig": sig, "args": replayed})
+                if feed.probe:
+                    # No answer needed from the tape, and comparing against a pre-mutation
+                    # recording is meaningless: the capture above is the whole story.
+                    return None
+                ev = feed.pop_expect("db", sig=sig, op=name)
                 if replayed != ev.get("args"):
                     feed.write_divergences.append(
                         f"{name} on {sig or 'client'}:\n"
@@ -302,7 +377,12 @@ class ReplayReport:
     # not on the recorded result, which is the thing being questioned.
     replayed_result: Any = None
     replayed_error: Optional[str] = None
+    replayed_writes: list = field(default_factory=list)  # every write the code performed
     call_kwargs: Any = None  # the recorded call's kwargs, revived
+    probe: bool = False
+    # Set when a probe replay hit a question the tape can't answer. Distinct from
+    # divergence: it impeaches neither code nor recording, only their pairing.
+    unanswerable: Optional[str] = None
 
     @property
     def ok(self) -> bool:
@@ -311,16 +391,22 @@ class ReplayReport:
 
 
 def replay_call(path: Path, index: int, adapter: ReplayAdapter,
-                trace_path: Optional[Path] = None) -> ReplayReport:
+                trace_path: Optional[Path] = None, probe: bool = False) -> ReplayReport:
+    """Re-execute one recorded call. `probe=True` replays a MUTATED recording: boundary
+    answers come from the (edited) tape matched by name rather than exactly, writes and
+    result/error matching don't gate anything, and the verdict belongs to invariants.
+    A recording whose call carries `"probe": true` (saved by the mutation API) enables
+    probe mode by itself, so a pinned mutated fixture can't be mistaken for a strict one."""
     header, calls = load_session(path)
     if not 0 <= index < len(calls):
         raise ValueError(f"--call {index} out of range: {len(calls)} calls in {path.name}")
     rec = calls[index]
+    probe = probe or bool(rec.get("probe"))
     report = ReplayReport(fn=rec["fn"], result_match=False, error_match=False,
-                          events_total=len(rec["events"]))
+                          events_total=len(rec["events"]), probe=probe)
 
     adapter.prewarm()
-    feed = Feed(rec["events"])
+    feed = Feed(rec["events"], probe=probe)
 
     boundary = Boundary(effects=adapter.boundary.effects,
                         clock_modules=adapter.boundary.clock_modules,
@@ -337,12 +423,20 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
         _patch(module, attr, value)
     hook.mode, hook.feed = "replay", feed
 
-    fn = adapter.resolve(rec["fn"], feed)
-    kwargs = from_jsonable(rec["kwargs"])
-    report.call_kwargs = kwargs
+    # From here to the main try, a failure (an adapter that can't resolve, a trace path in
+    # a missing directory) must not leave the process armed: hook in replay mode with this
+    # feed and the boundary still patched would poison everything that runs next.
+    try:
+        fn = adapter.resolve(rec["fn"], feed)
+        kwargs = from_jsonable(rec["kwargs"])
+        report.call_kwargs = kwargs
+        tracer = Tracer(trace_path, adapter.trace_root, set(adapter.skip_files)) \
+            if trace_path else None
+    except BaseException:
+        hook.mode, hook.feed = "off", None
+        unpatch_all()
+        raise
 
-    tracer = Tracer(trace_path, adapter.trace_root, set(adapter.skip_files)) \
-        if trace_path else None
     result, error = None, None
     try:
         if tracer:
@@ -354,6 +448,8 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
             result = fn(**kwargs)
     except ReplayDivergence as e:
         report.divergence = str(e)
+    except ProbeUnanswerable as e:
+        report.unanswerable = str(e)
     except Exception as e:
         error = repr(e)
     finally:
@@ -363,10 +459,16 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
         hook.mode, hook.feed = "off", None
         unpatch_all()
 
-    report.events_consumed = feed.pos
+    report.events_consumed = feed.consumed
     report.write_divergences = feed.write_divergences
+    report.replayed_writes = feed.writes
     report.replayed_error = error
     report.error_match = error == rec.get("error")
+    if probe:
+        report.warnings.append(
+            f"probe replay: {feed.consumed} event(s) answered, {feed.skipped} skipped, "
+            f"{feed.remaining} left over")
+        report.warnings.extend(feed.skip_log)
     if not report.error_match:
         report.result_diff = [f"recorded error: {rec.get('error')}",
                               f"replayed error: {error}"]
@@ -390,8 +492,9 @@ def _print_call_list(path: Path) -> None:
           f"python {header.get('python', '?')}, {len(calls)} call(s)\n")
     for i, c in enumerate(calls):
         err = f"  ERROR {c['error']}" if c.get("error") else ""
+        tag = "  PROBE (mutated)" if c.get("probe") else ""
         print(f"  --call {i}: {c['fn']}  ({len(c['events'])} events, "
-              f"{c.get('ms', '?')} ms){err}")
+              f"{c.get('ms', '?')} ms){err}{tag}")
         print(f"           kwargs: {json.dumps(c['kwargs'], ensure_ascii=False)[:90]}")
         print(f"           result: {json.dumps(c['result'], ensure_ascii=False)[:70]}")
     # Orphaned sidecars are calls that never finished — the process died mid-call
@@ -426,11 +529,16 @@ def format_report(rec_index: int, report: ReplayReport) -> str:
     by the CLI and the pytest plugin, so a failing pinned recording reads the same in CI as
     it does under `--call`."""
     out: list[str] = [f"  warning: {w}" for w in report.warnings]
-    verdict = "MATCH — replay reproduced the recording bit-for-bit" if report.ok \
-        else "DIVERGED"
+    if report.probe:
+        verdict = "PROBE — a mutated recording is judged by invariants, not by match"
+        if report.unanswerable:
+            verdict = f"UNANSWERABLE\n  {report.unanswerable}"
+    else:
+        verdict = "MATCH — replay reproduced the recording bit-for-bit" if report.ok \
+            else "DIVERGED"
     out.append(f"Replayed {report.fn} (call {rec_index}): {verdict}")
     out.append(f"  boundary events: {report.events_consumed}/{report.events_total} consumed"
-               + ("" if report.events_consumed == report.events_total
+               + ("" if report.events_consumed == report.events_total or report.probe
                   else "  <-- replayed code took a SHORTER path than recorded"))
     if report.divergence:
         out.append(f"  {report.divergence}")
@@ -479,4 +587,8 @@ def run_cli(adapter: ReplayAdapter, argv: Optional[list] = None,
     _print_report(args.call, report)
     if trace_path and args.watch:
         _print_watch(trace_path, [w.strip() for w in args.watch.split(",") if w.strip()])
+    if report.probe:
+        # A probe fixture has no match to exit on; the CLI's verdict is only whether the
+        # tape could answer the path at all. Invariants judge content, elsewhere.
+        return 0 if report.divergence is None and report.unanswerable is None else 2
     return 0 if report.ok else 2

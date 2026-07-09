@@ -63,12 +63,18 @@ def study_status(email: str, level: int = 1) -> dict:
     """The shape of the production bug that motivated invariants: `level` gates the deck,
     and at level 0 it excludes the whole corpus — so the status claims the corpus is
     finished while every item in it remains unstudied. The output is self-consistent; only
-    a claim about every execution can call it wrong."""
+    a claim about every execution can call it wrong.
+
+    The `coverage` division is the mutation-replay demo (issue #8): ToyDB always answers
+    three rows, so no real recording can ever produce an empty corpus — the ZeroDivision
+    is unreachable by recording and replaying, and reachable the moment the recorded rows
+    are edited to []."""
     rows = list(DB.collection("users").document(email).collection("items")
                 .where("x", ">", 0).stream())
     corpus = [r.to_dict() for r in rows]
     deck = [c for c in corpus if c["x"] <= level]
-    return {"corpus": len(corpus), "deck": len(deck), "done": len(deck) == 0}
+    return {"corpus": len(corpus), "deck": len(deck), "done": len(deck) == 0,
+            "coverage": len(deck) / len(corpus)}
 
 
 async def remote_sum(email: str, a: str, b: str) -> dict:

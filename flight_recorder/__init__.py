@@ -21,10 +21,11 @@ from flight_recorder.record import (
     hook, install, install_mcp, session_path, uninstall,
 )
 from flight_recorder.replay import (
-    Feed, PlaybackChain, ReplayAdapter, ReplayDivergence, ReplayedEffectError,
-    ReplayReport, Snap, TRACE_VERSION, Tracer, format_report, load_session, replay_call,
-    run_cli,
+    Feed, PlaybackChain, ProbeUnanswerable, ReplayAdapter, ReplayDivergence,
+    ReplayedEffectError, ReplayReport, Snap, TRACE_VERSION, Tracer, format_report,
+    load_session, replay_call, run_cli,
 )
+from flight_recorder.mutate import Recording
 from flight_recorder.invariants import (
     Call, InvariantReport, Invariant, Obs, Raise, Return, Trace, Trajectory, Violation,
     check_invariants, collect, format_invariant_report, invariant,
@@ -38,9 +39,9 @@ __all__ = [
     "Boundary", "ChainTarget", "DEFAULT_TERMINAL_READS", "DEFAULT_TERMINAL_WRITES",
     "ChainNode", "DatetimeShim", "Gate", "RandomShim", "SessionSink", "FORMAT_VERSION",
     "hook", "install", "install_mcp", "session_path", "uninstall",
-    "Feed", "PlaybackChain", "ReplayAdapter", "ReplayDivergence", "ReplayedEffectError",
-    "ReplayReport", "Snap", "TRACE_VERSION", "Tracer", "format_report", "load_session",
-    "replay_call", "run_cli",
+    "Feed", "PlaybackChain", "ProbeUnanswerable", "Recording", "ReplayAdapter",
+    "ReplayDivergence", "ReplayedEffectError", "ReplayReport", "Snap", "TRACE_VERSION",
+    "Tracer", "format_report", "load_session", "replay_call", "run_cli",
     "Call", "Invariant", "InvariantReport", "Obs", "Raise", "Return", "Trace", "Trajectory",
     "Violation", "check_invariants", "collect", "format_invariant_report", "invariant",
     "Truncated", "TruncatedText", "from_jsonable", "from_trace_jsonable",

@@ -111,7 +111,9 @@ def _replay_effect(boundary: Boundary, name: str, args: tuple, kwargs: dict,
     from flight_recorder.replay import ReplayDivergence
     ev = hook.feed.pop_expect("fx", fn=name)
     asked = _effect_event(name, args, kwargs, opts)
-    if not opts.get("loose_args") and (
+    # Probe replay never compares args: a mutated upstream answer legitimately changes
+    # every downstream question. The event name and order still gate.
+    if not opts.get("loose_args") and not hook.feed.probe and (
             asked["args"] != ev.get("args") or asked["kwargs"] != ev.get("kwargs")):
         raise ReplayDivergence(
             f"effect {name} called with different arguments than recorded:\n"
@@ -262,6 +264,12 @@ class RandomShim:
         population = list(population)
         if hook.mode == "replay":
             ev = hook.feed.pop_expect("rand")
+            if hook.feed.probe and any(not 0 <= i < len(population) for i in ev["idx"]):
+                from flight_recorder.replay import ProbeUnanswerable
+                raise ProbeUnanswerable(
+                    f"the recorded random draw {ev['idx']} does not fit the mutated "
+                    f"population of {len(population)} — set the rand event's idx too "
+                    f"(call.rand().idx = [...])")
             return [population[i] for i in ev["idx"]]
         idx = _random.sample(range(len(population)), k)
         if hook.mode == "record":

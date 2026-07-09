@@ -211,6 +211,39 @@ def test_invariants_can_be_pointed_at_a_named_list(pytester, pinned):
     result.assert_outcomes(passed=1)
 
 
+def _mutate(recording: str) -> str:
+    """Pin-worthy mutation of the greet recording: one row, matching draw."""
+    import flight_recorder as fr
+    lines = recording.splitlines()
+    header, call = json.loads(lines[0]), json.loads(lines[1])
+    rec = fr.Recording(header, [call])
+    rec.call(0).read(op="stream").result = [{"name": "only", "x": 1}]
+    rec.call(0).rand().idx = [0]
+    return "\n".join(json.dumps(o, ensure_ascii=False) for o in [header, call]) + "\n"
+
+
+def test_a_pinned_mutation_is_checked_in_probe_mode(pytester, pinned):
+    pytester.makepyfile(claims_probe=INVARIANT_MODULE)
+    _lay_out(pytester, pinned, INI + "\nflight_invariants = claims_probe\n")
+    (pytester.path / "recordings" / "hostile.jsonl").write_text(
+        _mutate(pinned), encoding="utf-8")
+
+    result = pytester.runpytest("-v")
+    # the strict pin runs strictly, the mutated pin runs as a probe — both pass
+    result.assert_outcomes(passed=2)
+    result.stdout.fnmatch_lines(["*hostile.jsonl::call0::greet::probe*PASSED*"])
+
+
+def test_a_pinned_mutation_without_invariants_fails_with_guidance(pytester, pinned):
+    _lay_out(pytester, pinned)  # flight_adapter set, no flight_invariants
+    (pytester.path / "recordings" / "hostile.jsonl").write_text(
+        _mutate(pinned), encoding="utf-8")
+
+    result = pytester.runpytest()
+    result.assert_outcomes(passed=1, failed=1)  # strict pin passes; probe pin needs claims
+    result.stdout.fnmatch_lines(["*flight_invariants*"])
+
+
 def test_a_corrupt_recording_is_named_rather_than_crashing_collection(pytester, pinned):
     _lay_out(pytester, pinned)
     (pytester.path / "recordings" / "truncated.jsonl").write_text(

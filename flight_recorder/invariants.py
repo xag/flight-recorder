@@ -155,13 +155,18 @@ class Trajectory:
 
     `result` is what the REPLAYED code produced, not what was recorded — and it is None
     when the call raised. A tool that legitimately raises will hand result-reading
-    invariants a None; guard those with `t.raised` (or early-return on it)."""
+    invariants a None; guard those with `t.raised` (or early-return on it).
+
+    `writes` is every write the replayed code performed — op, chain signature, args.
+    Writes are never executed on replay, but they are first-class trajectory: "never
+    writes when the corpus is empty" is an assertable claim."""
     fn: str
     kwargs: dict
     result: Any
     error: Optional[str]
     trace: Trace
     replay: ReplayReport
+    writes: list = field(default_factory=list)
 
     @property
     def raised(self) -> bool:
@@ -174,16 +179,26 @@ class Trajectory:
 class Invariant:
     description: str
     check: Callable[[Trajectory], None]
+    # This claim consciously judges the raise/no-raise question (it asserts on t.raised /
+    # t.error). Its presence tells probe checking that a crash has a designated judge, so
+    # the safety-net `raised` outcome stands down. See check_invariants.
+    judges_raise: bool = False
 
     def __call__(self, t: Trajectory) -> None:
         self.check(t)
 
 
-def invariant(description: str) -> Callable[[Callable[[Trajectory], None]], Invariant]:
+def invariant(description: str, judges_raise: bool = False
+              ) -> Callable[[Callable[[Trajectory], None]], Invariant]:
     """Declare a claim about every execution. The body asserts; the description is what a
-    failure is reported as, so write it as the property, not as the check."""
+    failure is reported as, so write it as the property, not as the check.
+
+    Set `judges_raise=True` on the claim that decides whether raising is correct (e.g.
+    "rejects a hostile input with ValueError", or "never crashes"). Without one, a probe
+    replay whose call raised is reported as the outcome `raised` rather than silently
+    held — a crash must never pass because every claim politely looked away."""
     def wrap(fn: Callable[[Trajectory], None]) -> Invariant:
-        return Invariant(description=description, check=fn)
+        return Invariant(description=description, check=fn, judges_raise=judges_raise)
     return wrap
 
 
@@ -217,10 +232,14 @@ class Violation:
 @dataclass
 class InvariantReport:
     fn: str
-    outcome: str                 # held | violated | diverged
+    outcome: str                 # held | violated | diverged | unanswerable | raised
     replay: ReplayReport
     violations: list = field(default_factory=list)
     checked: int = 0
+
+    @property
+    def probe(self) -> bool:
+        return self.replay.probe
 
     @property
     def reproduced(self) -> bool:
@@ -231,14 +250,18 @@ class InvariantReport:
 
     @property
     def ok(self) -> bool:
-        """Everything is fine: the recording reproduced AND every invariant held. The two
-        verdicts stay separately readable (`reproduced`, `outcome`) because they impeach
-        different things — the recording and the code."""
+        """Everything is fine. Strict: the recording reproduced AND every invariant held —
+        the two verdicts stay separately readable (`reproduced`, `outcome`) because they
+        impeach different things. Probe (mutated recording): reproduction is meaningless
+        by construction, so `held` alone decides."""
+        if self.probe:
+            return self.outcome == "held"
         return self.outcome == "held" and self.replay.ok
 
 
 def check_invariants(session: Path, index: int, adapter: ReplayAdapter,
-                     invariants: Any, trace_path: Optional[Path] = None) -> InvariantReport:
+                     invariants: Any, trace_path: Optional[Path] = None,
+                     probe: bool = False) -> InvariantReport:
     """Replay one recorded call under tracing, then assert every invariant against it.
 
     A replay that diverged (the code asked the boundary a different question than the
@@ -249,15 +272,22 @@ def check_invariants(session: Path, index: int, adapter: ReplayAdapter,
     A replay that ran to completion but no longer matches the recording is different: the
     trajectory is real (it is what the current code does on those boundary inputs), so the
     invariants ARE checked — but `ok` stays False via `reproduced`.
+
+    `probe=True` (or a call pinned with `"probe": true` by the mutation API) checks a
+    MUTATED recording: reproduction is meaningless, the invariants alone judge, and a
+    boundary question the edited tape cannot answer is the outcome `unanswerable` —
+    impeaching neither the code nor the claim, only this recording's reach.
     """
     checks = collect(invariants)
     with tempfile.TemporaryDirectory() as tmp:
         path = trace_path or (Path(tmp) / f"{Path(session).stem}.call{index}.trace.jsonl")
-        report = replay_call(Path(session), index, adapter, path)
+        report = replay_call(Path(session), index, adapter, path, probe=probe)
         if trace_path is None:
             report.trace_path = None  # it lives in tmp and dies with this block
         if report.divergence:
             return InvariantReport(fn=report.fn, outcome="diverged", replay=report)
+        if report.unanswerable:
+            return InvariantReport(fn=report.fn, outcome="unanswerable", replay=report)
 
         trajectory = Trajectory(
             fn=report.fn,
@@ -266,6 +296,7 @@ def check_invariants(session: Path, index: int, adapter: ReplayAdapter,
             error=report.replayed_error,
             trace=Trace.load(path),
             replay=report,
+            writes=report.replayed_writes,
         )
 
     violations = []
@@ -281,7 +312,16 @@ def check_invariants(session: Path, index: int, adapter: ReplayAdapter,
                            "guard this invariant with t.raised)")
             violations.append(Violation(inv.description, detail, broke=True))
 
-    return InvariantReport(fn=report.fn, outcome="violated" if violations else "held",
+    outcome = "violated" if violations else "held"
+    if (report.probe and trajectory.raised and not violations
+            and not any(c.judges_raise for c in checks)):
+        # Under mutation a crash can slip every claim: the recommended strict-mode guard
+        # is `if t.raised: return`, and a suite of guarded claims would wave a crash
+        # through as `held`. Unless some claim owns the raise question (judges_raise),
+        # an unjudged crash is its own outcome — never a silent pass.
+        outcome = "raised"
+
+    return InvariantReport(fn=report.fn, outcome=outcome,
                            replay=report, violations=violations, checked=len(checks))
 
 
@@ -289,8 +329,18 @@ def format_invariant_report(report: InvariantReport) -> str:
     if report.outcome == "diverged":
         return (f"{report.fn}: replay DIVERGED, so no invariant was checked — the recording "
                 f"no longer describes this code.\n  {report.replay.divergence}")
+    if report.outcome == "unanswerable":
+        return (f"{report.fn}: UNANSWERABLE — the mutation sent the code down a path this "
+                f"recording cannot answer; no invariant was checked.\n"
+                f"  {report.replay.unanswerable}")
+    if report.outcome == "raised":
+        return (f"{report.fn}: RAISED under mutation — {report.replay.replayed_error} — "
+                f"and no declared invariant judges the raise. If crashing here is a bug, "
+                f"assert `not t.raised`; if raising is the correct hostile-input "
+                f"behavior, declare that claim with @invariant(..., judges_raise=True).")
     if report.ok:
-        return f"{report.fn}: {report.checked} invariant(s) held"
+        kind = "probe: " if report.probe else ""
+        return f"{report.fn}: {kind}{report.checked} invariant(s) held"
     if report.outcome == "held":  # invariants fine; the replay itself didn't reproduce
         return (f"{report.fn}: {report.checked} invariant(s) held, but the replay did NOT "
                 f"reproduce the recording — the code's answer changed")

@@ -207,6 +207,55 @@ from a divergence, because it is one: a divergence impeaches the recording, a vi
 impeaches the code. A replay that diverged checks nothing (its trajectory is fiction), and
 an invariant that itself raises is reported as a broken invariant, not as a bug in the code.
 
+## Mutation replay
+
+Recordings make impossible states cheap to construct — they're data, not database setup.
+Edit a recording's boundary answers and replay the real code against the hostile world:
+
+```python
+rec = fr.Recording.load(path)
+call = rec.call(0)
+call.read(op="stream").result = []                 # empty corpus
+call.effect("fetch_remote").result = {"v": 10**9}  # absurd remote answer
+call.clock.reverse()                               # time runs backwards
+call.set_kwargs(level=0)                           # hostile input
+
+report = call.check(Adapter(), INVARIANTS)
+assert report.ok, fr.format_invariant_report(report)
+
+rec.save(recordings_dir / "empty-corpus.jsonl")    # pin it — now it's a suite member
+```
+
+A mutated call replays in **probe mode**: the tape answers the code's boundary questions
+(matched by name, in order, skipping events the new path no longer asks) but stops policing
+arguments, writes, and outputs — under mutation those comparisons are meaningless, so the
+verdict belongs entirely to the invariants. A mutated recording plus a declared claim is a
+property test over the boundary. Saved mutations carry `"probe": true` and the pytest
+plugin checks them in probe mode automatically (they require `flight_invariants`).
+
+Semantics to hold on to:
+
+- **Mutation edits answers; it never re-executes effects.** Emptying a corpus changes what
+  the code *asks* downstream, but each downstream effect still answers from the tape. To
+  make an effect fail, inject its failure: `call.effect("x").error = ("ApiError", [...])`.
+  Same-name effects are answered in recorded order — if a mutation drops one of several
+  calls to the same effect, the remaining calls receive the earliest answers; mutate those
+  events too (each skip is named in `report.replay.warnings`).
+- **Writes are trajectory.** Never executed, always captured: `t.writes` holds every write
+  the replayed code performed (op, chain signature, args), so "never writes when the
+  corpus is empty" is an assertable claim.
+- **A crash cannot pass silently.** The strict-mode guard style (`if t.raised: return`)
+  would let a suite of polite claims wave a crash through. Under probe, a raise that no
+  claim judges is its own outcome, `raised` — never ok. If raising is the *correct*
+  hostile-input behavior, say so: `@invariant("rejects an empty corpus", judges_raise=True)`
+  with `assert t.raised and "ValueError" in t.error`.
+- **The tape only reaches so far.** A mutation that redirects the code onto a path asking a
+  question the recording holds no answer for is the outcome `unanswerable` — impeaching
+  neither the code nor the claim, only this recording's reach. Edit the events the new path
+  needs (e.g. `call.rand().idx = [0]` after shrinking a sampled collection), or record a
+  closer execution. Chain reads are matched by *shape* (`collection.where.stream`), so one
+  collection's recorded rows can never answer a different collection's query.
+
 ## What it can and cannot see
 
 Replay finds logic bugs as lookups instead of inferences: replay a production recording
