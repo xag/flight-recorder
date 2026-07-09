@@ -20,6 +20,45 @@ The cardinal rule — for this lib and for every boundary declaration it consume
 knows what any value means. Recording is a transparent proxy; replay feeds recorded answers
 back and verifies the questions match. The only structural knowledge anywhere is *names*.
 
+## The approach, in plain words
+
+Your program is deterministic except where the world leaks in: what the database answered,
+what the API returned, what time it was, what the dice rolled. Everything else follows
+mechanically from those. So:
+
+1. **Name the doors.** Declare, once per app, the handful of places where the outside world
+   enters — that declaration is the *boundary*, and it is the only app-specific artifact.
+   Nothing behind the doors is ever imitated or mocked; real code runs everywhere.
+
+2. **Record what came through.** With recording on, each tool call writes one line: its
+   inputs, every answer the world gave it, in order, and its result. That line is cheap to
+   capture in production — and it is *complete*: since the code is deterministic given
+   those answers, the line IS the execution, compressed.
+
+3. **Replay is resurrection, not re-enactment.** Feed the recorded answers back and the
+   real code re-runs the original execution exactly — no network, no database, no waiting
+   for the bug to happen again. A tracer watches every variable of the resurrected run, so
+   "what was `level` when it went wrong?" is a lookup, not an inference. If the replay asks
+   the world a different question than the recording holds, you're told precisely where
+   the code's behavior changed.
+
+4. **Recordings answer "same?", invariants answer "right?".** A pinned recording is a
+   regression test: the code still does what it did — but a bug records as faithfully as a
+   fix, so no recording can call the first observation of a bug wrong. For that you write
+   an *invariant*: a claim that must hold on every execution ("never claims the corpus is
+   finished while words remain"). Claims are checked against any recording — output,
+   internal variables, and writes alike — and they condemn a bug the first time it is ever
+   seen.
+
+5. **Edit the tape to visit worlds that never happened.** A recording is data, so hostile
+   states are one edit away: empty the query result, run the clock backwards, hand back an
+   absurd number. Replay the real code against the edited tape and let the invariants
+   judge. That finds the bugs no real traffic has triggered yet — cheaply, and without a
+   test database that can produce impossible states on demand.
+
+The sections below are the reference for each step: boundary, record (with per-call gating
+and off-box sinks), replay, the pinned-recording pytest suite, invariants, and mutation.
+
 ## Declare the boundary (the one app-specific artifact)
 
 ```python
