@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Flight Recorder — Testing as Simulation</title>
+<style>
+  :root {
+    --ground: #101519;
+    --panel: #161d23;
+    --panel-2: #1c242c;
+    --ink: #e9edf0;
+    --muted: #8b959e;
+    --line: #2a333c;
+    --accent: #f2551e;        /* international orange — the color of real flight recorders */
+    --accent-dim: #f2551e33;
+    --match: #43b581;
+    --code-bg: #0c1013;
+    --shadow: 0 18px 50px rgba(0,0,0,.45);
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --ground: #eef0f1; --panel: #ffffff; --panel-2: #f6f7f8;
+      --ink: #1a2127; --muted: #5c6770; --line: #d8dde1;
+      --accent: #d9440f; --accent-dim: #d9440f22;
+      --match: #1d8a5c; --code-bg: #14181c;
+      --shadow: 0 14px 40px rgba(20,30,40,.14);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #101519; --panel: #161d23; --panel-2: #1c242c;
+    --ink: #e9edf0; --muted: #8b959e; --line: #2a333c;
+    --accent: #f2551e; --accent-dim: #f2551e33;
+    --match: #43b581; --code-bg: #0c1013;
+    --shadow: 0 18px 50px rgba(0,0,0,.45);
+  }
+  :root[data-theme="light"] {
+    --ground: #eef0f1; --panel: #ffffff; --panel-2: #f6f7f8;
+    --ink: #1a2127; --muted: #5c6770; --line: #d8dde1;
+    --accent: #d9440f; --accent-dim: #d9440f22;
+    --match: #1d8a5c; --code-bg: #14181c;
+    --shadow: 0 14px 40px rgba(20,30,40,.14);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--ground); color: var(--ink);
+    font: 17px/1.55 "Segoe UI", system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+  }
+  .mono { font-family: "Cascadia Code", Consolas, ui-monospace, monospace; }
+
+  .deck { position: relative; height: 100dvh; width: 100%; }
+  .slide {
+    position: absolute; inset: 0; display: none;
+    padding: clamp(1.2rem, 4vw, 4rem) clamp(1.2rem, 7vw, 7rem) 5.5rem;
+    overflow-y: auto;
+  }
+  .slide.active { display: flex; flex-direction: column; justify-content: center; }
+  @media (prefers-reduced-motion: no-preference) {
+    .slide.active { animation: rise .35s ease-out; }
+    @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  }
+
+  .eyebrow {
+    font-family: "Cascadia Code", Consolas, ui-monospace, monospace;
+    font-size: .78rem; letter-spacing: .22em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 1.1rem;
+  }
+  h1, h2 {
+    font-family: "Cascadia Code", Consolas, ui-monospace, monospace;
+    font-weight: 650; line-height: 1.14; text-wrap: balance; margin: 0 0 1.4rem;
+    letter-spacing: -.015em;
+  }
+  h1 { font-size: clamp(1.9rem, 5.2vw, 3.6rem); }
+  h2 { font-size: clamp(1.5rem, 3.6vw, 2.5rem); }
+  p, li { max-width: 62ch; }
+  p.lead { font-size: clamp(1.02rem, 1.7vw, 1.25rem); color: var(--ink); }
+  p.note { color: var(--muted); font-size: .95rem; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.1rem; margin-top: .4rem; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 1.1rem 1.25rem; box-shadow: var(--shadow);
+  }
+  .card h3 {
+    margin: 0 0 .5rem; font-size: .82rem; letter-spacing: .14em; text-transform: uppercase;
+    font-family: "Cascadia Code", Consolas, ui-monospace, monospace; color: var(--muted); font-weight: 600;
+  }
+  .card p { margin: 0; font-size: .97rem; color: var(--ink); }
+  .card .big { font-size: 1.35rem; font-weight: 650; font-family: "Cascadia Code", Consolas, ui-monospace, monospace; }
+  .accent { color: var(--accent); }
+  .match { color: var(--match); }
+
+  pre {
+    background: var(--code-bg); color: #dfe6ea; border: 1px solid #2a333c;
+    border-left: 3px solid var(--accent);
+    border-radius: 8px; padding: 1rem 1.2rem; overflow-x: auto;
+    font: .84rem/1.6 "Cascadia Code", Consolas, ui-monospace, monospace;
+    max-width: 100%; margin: 1rem 0 0;
+  }
+  pre .c { color: #6d7a85; } pre .o { color: #ff8a5c; } pre .g { color: #6fd3a3; }
+  code.inline {
+    font: .88em "Cascadia Code", Consolas, ui-monospace, monospace;
+    background: var(--panel-2); border: 1px solid var(--line);
+    padding: .08em .35em; border-radius: 5px;
+  }
+  ul.tight { margin: .4rem 0 0; padding-left: 1.2rem; }
+  ul.tight li { margin: .45rem 0; }
+  ul.tight li::marker { color: var(--accent); }
+
+  table { border-collapse: collapse; margin-top: 1rem; font-size: .93rem; }
+  th, td { text-align: left; padding: .55rem .9rem; border-bottom: 1px solid var(--line); }
+  th {
+    font-family: "Cascadia Code", Consolas, ui-monospace, monospace; font-size: .75rem;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 600;
+  }
+  td:first-child { font-family: "Cascadia Code", Consolas, ui-monospace, monospace; }
+  .table-wrap { overflow-x: auto; }
+
+  .verdict {
+    display: inline-block; font-family: "Cascadia Code", Consolas, ui-monospace, monospace;
+    font-size: .8rem; font-weight: 700; letter-spacing: .1em;
+    padding: .18em .6em; border-radius: 5px; vertical-align: middle;
+  }
+  .verdict.ok { color: var(--match); border: 1px solid var(--match); }
+  .verdict.div { color: var(--accent); border: 1px solid var(--accent); }
+
+  /* trace-strip progress + controls */
+  .strip {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 3.4rem;
+    display: flex; align-items: center; gap: 1rem;
+    padding: 0 1.2rem; background: linear-gradient(transparent, var(--ground) 35%);
+  }
+  .segs { flex: 1; display: flex; gap: 4px; height: 4px; }
+  .segs span { flex: 1; background: var(--line); border-radius: 2px; cursor: pointer; }
+  .segs span.done { background: var(--accent); }
+  .counter {
+    font: .8rem "Cascadia Code", Consolas, ui-monospace, monospace;
+    color: var(--muted); font-variant-numeric: tabular-nums; letter-spacing: .1em;
+  }
+  .navbtn {
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 7px; width: 2.2rem; height: 2.2rem; cursor: pointer;
+    font-size: 1rem; line-height: 1;
+  }
+  .navbtn:hover { border-color: var(--accent); color: var(--accent); }
+  .navbtn:focus-visible, .segs span:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .hint { color: var(--muted); font-size: .74rem; }
+  @media (max-width: 640px) { .hint { display: none; } }
+
+  .title-mark {
+    display: inline-block; background: var(--accent); color: #fff;
+    font-family: "Cascadia Code", Consolas, ui-monospace, monospace; font-weight: 700;
+    font-size: .8rem; letter-spacing: .18em; padding: .3em .8em; border-radius: 4px;
+    margin-bottom: 1.6rem;
+  }
+  .kicker { color: var(--muted); font-size: 1.05rem; max-width: 58ch; }
+  blockquote {
+    margin: 1.4rem 0 0; padding: .2rem 0 .2rem 1.2rem; border-left: 3px solid var(--accent);
+    font-size: clamp(1.05rem, 2vw, 1.4rem); font-style: italic; max-width: 55ch;
+  }
+</style>
+</head>
+<body>
+
+<div class="deck" id="deck">
+
+  <!-- 1 · title -->
+  <section class="slide">
+    <span class="title-mark">FLIGHT RECORDER</span>
+    <h1>Testing as simulation</h1>
+    <p class="kicker lead">Record every tool call at its <strong>nondeterminism boundary</strong>.
+    Replay it later, deterministically, with <strong>every internal variable observable</strong>.
+    A testing approach — and the philosophy it fell out of.</p>
+    <p class="note mono" style="margin-top:2rem">poietic.studio · july 2026 · github.com/xag/flight-recorder</p>
+  </section>
+
+  <!-- 2 · the problem -->
+  <section class="slide">
+    <p class="eyebrow">01 · Why</p>
+    <h2>Testing from outside is guessing</h2>
+    <p class="lead">An app's surface shows results, never reasons. Probe it from outside —
+    even carefully — and every "bug" you report is an <em>inference</em> about invisible internals.</p>
+    <div class="cols">
+      <div class="card"><h3>The experiment that failed</h3>
+        <p>A black-box "exercise session" against a production app reported <span class="big">4 bugs</span> —
+        and <span class="big accent">2 were artifacts</span> of the probe itself: the wrong client,
+        the wrong assumptions, a story invented around surfaces.</p></div>
+      <div class="card"><h3>The lesson</h3>
+        <p>Discipline doesn't fix this. The question "why did it answer that?" has to become
+        <em>answerable</em> — a lookup, not an abduction.</p></div>
+    </div>
+  </section>
+
+  <!-- 3 · physics -->
+  <section class="slide">
+    <p class="eyebrow">02 · The idea</p>
+    <h2>What is code's physics?</h2>
+    <p class="lead">Physical systems can be simulated without being built because they run on physics:
+    <strong>laws + state + boundary conditions ⇒ the whole trajectory is derivable.</strong>
+    You never store the field at every point — you recompute it.</p>
+    <p>Software has the same structure. The laws are the runtime's transition function.
+    The boundary conditions are the <strong>nondeterministic inputs</strong> — everything the code
+    cannot derive by itself:</p>
+    <ul class="tight">
+      <li>storage results <span class="note">(what the database answered)</span></li>
+      <li>network responses <span class="note">(what the API returned)</span></li>
+      <li>the clock, the dice <span class="note">(what time it was, what fell)</span></li>
+      <li>caller identity <span class="note">(who asked)</span></li>
+    </ul>
+    <blockquote>Record only the boundary — the entire execution becomes reconstructible on demand.</blockquote>
+  </section>
+
+  <!-- 4 · anatomy -->
+  <section class="slide">
+    <p class="eyebrow">03 · The mechanism</p>
+    <h2>One JSONL line per call</h2>
+    <p class="lead">Recording is cheap enough to leave on in production: bound arguments,
+    the ordered boundary events, the result.</p>
+<pre>{"ev":"call", "fn":"get_status", "kwargs":{"email":"…","max_words":10},
+ "events":[
+   {"k":"db",  "op":"get",    "sig":"collection(\"users\")…profile…", "res":{…}},
+   {"k":"db",  "op":"stream", "sig":"…words.select([\"norm\"])…",     "res":[ 5468 docs ]},
+   {"k":"now", "v":"2026-07-08T23:25:44+00:00"},
+   …
+ ],
+ "result":"=== KOREAN COACH — USER STATUS ===\n…"}</pre>
+    <p class="note" style="margin-top:1rem">Replay re-executes the call on the real code, feeding these answers
+    back in order — under a tracer. One recorded production call yielded
+    <strong class="accent mono">14,157 state transitions</strong>, every variable change queryable after the fact.</p>
+  </section>
+
+  <!-- 5 · cardinal rule -->
+  <section class="slide">
+    <p class="eyebrow">04 · The cardinal rule</p>
+    <h2>Instrument, never duplicate</h2>
+    <p class="lead">Nothing in the recorder evaluates a query, computes a date, or knows what any
+    value means. The only structural knowledge anywhere is <strong>names</strong>.</p>
+    <div class="cols">
+      <div class="card"><h3>Recording</h3>
+        <p>A transparent proxy: forwards every call to the real client unchanged, logs what crossed.</p></div>
+      <div class="card"><h3>Replay</h3>
+        <p>Feeds recorded answers back and verifies the code asks the <em>same questions in the same
+        order</em>. Anything else is a named divergence.</p></div>
+      <div class="card"><h3>Test stubs</h3>
+        <p>Deliberately semantics-free: canned answers, no query logic. Round-trip fidelity never
+        depends on a fake being faithful — so there's no fake to drift.</p></div>
+    </div>
+    <p class="note" style="margin-top:1.2rem">Corollary: the boundary declaration is the whole maintenance
+    contract. The recorder can't know about an input it was never told crosses it.</p>
+  </section>
+
+  <!-- 6 · case study -->
+  <section class="slide">
+    <p class="eyebrow">05 · Case study</p>
+    <h2>Diagnosis becomes lookup</h2>
+    <p class="lead">A production status message claimed the learner had
+    <em>"reached the end of the frequency corpus"</em> — on an account that was never placed. Guessing
+    produced theories. One replay produced the answer:</p>
+<pre>$ python -m app.replay flight/prod.jsonl --call 0 --watch level,deck_size,to_introduce
+
+  tools_core.py:138   get_status              <span class="o">level = 0</span>
+  tools_core.py:141   get_status              <span class="o">deck_size = 5468</span>
+  service.py:1227     corpus_to_introduce     known_rank = 0
+  tools_core.py:146   get_status              <span class="o">to_introduce = []</span></pre>
+    <p style="margin-top:1rem">The deck held <strong>exactly the full 5,467-word corpus plus one extra word:
+    <span class="mono accent">테스트디버그</span> — "test-debug"</strong>. A seeding script had filled a real
+    account and signed its work. Root cause read straight out of the trace, then confirmed against the
+    repo's own scripts.</p>
+  </section>
+
+  <!-- 7 · workflow -->
+  <section class="slide">
+    <p class="eyebrow">06 · The workflow</p>
+    <h2>Record → Pin → Fix → Replay-diff</h2>
+    <p class="lead">Every confirmed bug gets its recording pinned <em>before</em> the fix.
+    The fix is then proven twice:</p>
+    <div class="cols">
+      <div class="card"><h3>The corrupt recording <span class="verdict div">DIVERGED</span></h3>
+        <p>14/14 boundary events consumed — same code path — and the diff contains
+        <strong>exactly the intended change and nothing else</strong>. The bug's world no longer
+        exists in production; the recording keeps it testable forever.</p></div>
+      <div class="card"><h3>The healthy recording <span class="verdict ok">MATCH</span></h3>
+        <p>Bit-for-bit identical. No behavioral drift anywhere the fix didn't intend to reach.</p></div>
+    </div>
+    <blockquote>A fix proven against captured reality, not against a hand-written test's imagination.</blockquote>
+  </section>
+
+  <!-- 8 · three membranes -->
+  <section class="slide">
+    <p class="eyebrow">07 · Honesty</p>
+    <h2>Three membranes, three instruments</h2>
+    <p class="lead">The replay layer is real physics — but its laws stop at the process boundary.
+    Know which instrument sees what.</p>
+    <div class="table-wrap"><table>
+      <tr><th>Layer</th><th>What lives there</th><th>Instrument</th></tr>
+      <tr><td>client</td><td>widgets, OAuth flows, device quirks, the feel under a thumb</td>
+          <td>real clients, occasionally — the sim-to-real calibration</td></tr>
+      <tr><td>logic</td><td>your code between the membranes</td>
+          <td><strong class="accent">the flight recorder</strong> — record, replay, trace</td></tr>
+      <tr><td>machine</td><td>memory, latency, concurrency, the kernel</td>
+          <td>logs and measurement</td></tr>
+    </table></div>
+    <p class="note" style="margin-top:1.2rem">Proven the hard way: an OOM-killed call was invisible to replay —
+    the kernel log and an RSS measurement (38&nbsp;MB → 543&nbsp;MB on a 512&nbsp;MB VM) caught what the recorder
+    structurally could not. Since then, <code class="inline">.inflight</code> sidecars stream events during the
+    call, so even a killed process leaves its last words.</p>
+  </section>
+
+  <!-- 9 · discipline -->
+  <section class="slide">
+    <p class="eyebrow">08 · The discipline, per repo</p>
+    <h2>Five habits</h2>
+    <ul class="tight" style="font-size:1.05rem">
+      <li><strong>Shape the membrane first.</strong> A pure tool-logic core behind an injected service —
+        a refactor the codebase is owed anyway. Instrumentation is its payoff.</li>
+      <li><strong>Declare the boundary — names only.</strong> ~40 lines: effect functions, chained clients,
+        clock modules, constants. New input → new line. That's the entire contract.</li>
+      <li><strong>Off by default, one env var on.</strong> Recording costs one proxy hop and one JSONL
+        append; leave it available everywhere, enable it when hunting.</li>
+      <li><strong>Pin before fixing.</strong> The recording is the repro; the replay-diff is the proof.
+        Pull recordings off ephemeral disks before every deploy.</li>
+      <li><strong>Semantics-free stubs only.</strong> The moment a test fake evaluates a query,
+        you're testing the fake.</li>
+    </ul>
+  </section>
+
+  <!-- 10 · fleet -->
+  <section class="slide">
+    <p class="eyebrow">09 · Proof of generality</p>
+    <h2>One lib, four very different apps</h2>
+    <p class="lead">The engine (<span class="mono">flight-recorder</span>, zero dependencies, zero consumer
+    knowledge) was extracted at its second consumer and hardened by each next one.</p>
+    <div class="table-wrap"><table>
+      <tr><th>App</th><th>Its boundary</th><th>What the port forced</th></tr>
+      <tr><td>korean-coach</td><td>Firestore chains · clock · random</td><td>the chain proxy, the shims</td></tr>
+      <tr><td>dev-tools</td><td>GitHub + feedback stores (async HTTP)</td><td>async effects, exception revival</td></tr>
+      <tr><td>invest</td><td>JSONL journal · market feeds · paper broker</td><td>method effects, secret-free seams</td></tr>
+      <tr><td>home</td><td>multi-user files · identity · pandas clock</td><td>registry-level wrapping, loose args</td></tr>
+    </table></div>
+    <p class="note" style="margin-top:1rem">Each port: one boundary declaration plus whatever membrane
+    shaping the code was owed. Recording runs in production where it matters.</p>
+  </section>
+
+  <!-- 11 · beyond regression -->
+  <section class="slide">
+    <p class="eyebrow">10 · What it opens</p>
+    <h2>States become data you author</h2>
+    <p class="lead">Because replay feeds the code <em>any</em> boundary answers, hostile states are edited
+    recordings — not databases you have to construct.</p>
+    <ul class="tight">
+      <li>A 100,000-word deck, a clock running backwards, a half-corrupted document: <strong>one JSON edit</strong>, replayed against the real logic.</li>
+      <li>Assert <em>invariants</em> over trajectories, not just outputs — "status never claims
+        <em>finished</em> while corpus − deck &gt; 0" is checkable against every recording ever pinned.</li>
+      <li>Every real production session is a free integration test: replay it against every candidate build; exit code 0 or a named divergence.</li>
+    </ul>
+    <p class="note" style="margin-top:1rem">Property-based testing over the boundary — reaching states honest
+    use would never produce.</p>
+  </section>
+
+  <!-- 12 · closing -->
+  <section class="slide">
+    <p class="eyebrow">11 · The meta-rule</p>
+    <h2 style="max-width:22ch">No claim about behavior without a place to look it up</h2>
+    <p class="lead">The instruments exist so that a claim is a trace line, a log line, or a measurement —
+    never a plausible story. That rule, applied in every repo, is worth more than any of the code.</p>
+    <p class="note mono" style="margin-top:2.2rem">github.com/xag/flight-recorder ·
+    record → pin → fix → replay-diff · <span class="verdict ok">MATCH</span></p>
+  </section>
+
+</div>
+
+<div class="strip">
+  <button class="navbtn" id="prev" aria-label="Previous slide">←</button>
+  <div class="segs" id="segs" role="tablist" aria-label="Slides"></div>
+  <span class="counter" id="counter">01 / 12</span>
+  <button class="navbtn" id="next" aria-label="Next slide">→</button>
+  <span class="hint">← → or click the strip</span>
+</div>
+
+<script>
+  const slides = [...document.querySelectorAll('.slide')];
+  const segs = document.getElementById('segs');
+  const counter = document.getElementById('counter');
+  let cur = 0;
+  slides.forEach((_, i) => {
+    const s = document.createElement('span');
+    s.tabIndex = 0; s.setAttribute('role', 'tab'); s.setAttribute('aria-label', 'Slide ' + (i + 1));
+    s.addEventListener('click', () => go(i));
+    s.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') go(i); });
+    segs.appendChild(s);
+  });
+  function go(i) {
+    cur = Math.max(0, Math.min(slides.length - 1, i));
+    slides.forEach((s, j) => s.classList.toggle('active', j === cur));
+    [...segs.children].forEach((s, j) => s.classList.toggle('done', j <= cur));
+    counter.textContent = String(cur + 1).padStart(2, '0') + ' / ' + String(slides.length).padStart(2, '0');
+    slides[cur].scrollTop = 0;
+  }
+  document.getElementById('prev').addEventListener('click', () => go(cur - 1));
+  document.getElementById('next').addEventListener('click', () => go(cur + 1));
+  addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); go(cur + 1); }
+    if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); go(cur - 1); }
+    if (e.key === 'Home') go(0);
+    if (e.key === 'End') go(slides.length - 1);
+  });
+  go(0);
+</script>
+</body>
+</html>

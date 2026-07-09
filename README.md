@@ -1,7 +1,13 @@
 # flight-recorder
 
+[![tests](https://github.com/xag/flight-recorder/actions/workflows/test.yml/badge.svg)](https://github.com/xag/flight-recorder/actions/workflows/test.yml)
+
 Record an app's tool calls at their **nondeterminism boundary**; replay them
 deterministically with **every internal variable observable**.
+
+**[The slides — Testing as Simulation](https://xag.github.io/flight-recorder/slides.html)**
+([source](docs/slides.html)): the approach and the philosophy in twelve slides, with the
+production case study that shaped it.
 
 A program's execution is fully determined by its code plus its nondeterministic inputs —
 storage results, HTTP responses, the clock, random draws. Record just those, per call
@@ -70,5 +76,38 @@ never executed). Pin recordings as fixtures: record once, replay against every b
 
 Replay finds logic bugs as lookups instead of inferences: replay a production recording
 locally, `--watch` the suspicious variable, read the answer. It cannot see below the
-process: memory, latency, concurrency interleavings, and hard crashes (a SIGKILLed call
-never finishes its record) belong to logs and measurement, not to this instrument.
+process: memory, latency, and concurrency interleavings belong to logs and measurement,
+not to this instrument. Hard crashes leave their last words — each call's events stream
+to an `.inflight` sidecar, so a SIGKILLed call's partial record survives and the CLI
+lists it as `INCOMPLETE` — but the crash's *cause* still lives in the machine layer.
+
+## Lineage and positioning
+
+None of the underlying ideas are new, and this library stands on a long one:
+
+- **Record nondeterminism, reconstruct everything by re-execution** is how
+  [rr](https://rr-project.org/) and [Pernosco](https://pernos.co/) work — at the syscall
+  level, for compiled programs, on Linux.
+- **Time-travel / omniscient debugging**: WinDbg TTD, [Undo](https://undo.io/),
+  [Replay.io](https://replay.io/).
+- **Record/replay HTTP cassettes in tests**: [vcrpy](https://github.com/kevin1024/vcrpy)
+  and friends; **clock shims**: [freezegun](https://github.com/spulec/freezegun).
+- **Replay captured traffic against two builds and diff**: Twitter's
+  [Diffy](https://github.com/opendiffy/diffy).
+- **Deterministic simulation testing**: FoundationDB's simulator,
+  [Antithesis](https://antithesis.com/), TigerBeetle's VOPR.
+- **Functional core, imperative shell** (Gary Bernhardt) is the shape that makes any of
+  this cheap to adopt.
+
+What this library tries to occupy is the **middle altitude** those tools leave open: an
+application-level, language-level, *declaration-driven* recorder — one small object names
+the app's entire boundary (effect functions, chained clients, clock, random, constants) —
+with tool-call granularity, bit-for-bit replay verification, a divergence taxonomy
+(path / result / writes), and a full `sys.settrace` state trace on replay. It was built
+for and proven on MCP tool servers, whose small pure cores and narrow boundaries fit this
+shape unusually well — and whose operators are often AI agents, for whom a queryable
+trace turns diagnosis from inference into lookup.
+
+## License
+
+MIT.
