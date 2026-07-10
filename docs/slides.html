@@ -98,6 +98,7 @@
     border-radius: 8px; padding: 1rem 1.2rem; overflow-x: auto;
     font: .84rem/1.6 "Cascadia Code", Consolas, ui-monospace, monospace;
     max-width: 100%; margin: 1rem 0 0;
+    flex-shrink: 0;   /* the slide is a flex column: never crush the code, let the slide scroll */
   }
   pre .c { color: #6d7a85; } pre .o { color: #ff8a5c; } pre .g { color: #6fd3a3; }
   code.inline {
@@ -125,6 +126,33 @@
   }
   .verdict.ok { color: var(--match); border: 1px solid var(--match); }
   .verdict.div { color: var(--accent); border: 1px solid var(--accent); }
+
+  /* sequence diagrams (human / ai / code) */
+  .seq { width: 100%; max-width: 920px; height: auto; display: block; margin: .9rem auto 0; color: var(--ink); }
+  .seq .lane { stroke: var(--line); stroke-width: 1.5; stroke-dasharray: 4 5; }
+  .seq .head rect { fill: var(--panel); stroke: var(--line); }
+  .seq .head text {
+    font: 600 14px "Cascadia Code", Consolas, ui-monospace, monospace;
+    fill: var(--ink); text-anchor: middle; letter-spacing: .14em;
+  }
+  .seq .cap { font: 600 11.5px "Cascadia Code", Consolas, ui-monospace, monospace; text-anchor: middle; letter-spacing: .08em; }
+  .seq .cap.hot { fill: var(--accent); }
+  .seq .cap.cool { fill: var(--match); }
+  .seq .msg { stroke: var(--ink); stroke-width: 1.6; fill: none; }
+  .seq .ret { stroke: var(--muted); stroke-width: 1.3; stroke-dasharray: 5 4; }
+  .seq .lbl { font: 12.5px "Segoe UI", system-ui, sans-serif; fill: var(--ink); text-anchor: middle; }
+  .seq .sub { font: 11px "Segoe UI", system-ui, sans-serif; fill: var(--muted); text-anchor: middle; }
+  .seq .lbl-l { text-anchor: start; }
+  .seq .act-h { fill: var(--accent-dim); stroke: var(--accent); stroke-width: 1.2; }
+  .seq .act-ok { fill: var(--match); fill-opacity: .14; stroke: var(--match); stroke-width: 1.2; }
+  .seq .frame { fill: none; stroke: var(--line); stroke-dasharray: 6 5; }
+  .seq .frame-lbl {
+    font: 600 11px "Cascadia Code", Consolas, ui-monospace, monospace;
+    letter-spacing: .1em; text-anchor: start;
+  }
+  .seq .frame-lbl.hot { fill: var(--accent); }
+  .seq .frame-lbl.cool { fill: var(--match); }
+  .seq .match-t { fill: var(--match); font-weight: 700; font-family: "Cascadia Code", Consolas, ui-monospace, monospace; }
 
   /* trace-strip progress + controls */
   .strip {
@@ -193,9 +221,119 @@
     </div>
   </section>
 
-  <!-- 3 · physics -->
+  <!-- 3 · without the recorder -->
   <section class="slide">
-    <p class="eyebrow">02 · The idea</p>
+    <p class="eyebrow">02 · Without the recorder</p>
+    <h2>The human is the test harness</h2>
+    <svg class="seq" viewBox="0 0 960 486" role="img"
+         aria-label="Sequence diagram without the flight recorder: the human runs every scenario by hand, reproduces bugs painstakingly, and re-runs everything after every fix — every cycle passes through the human lane.">
+      <defs>
+        <marker id="arrW" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" style="fill:var(--ink)"/>
+        </marker>
+        <marker id="arrWm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" style="fill:var(--muted)"/>
+        </marker>
+      </defs>
+      <!-- lifelines + heads -->
+      <line class="lane" x1="140" y1="56" x2="140" y2="446"/>
+      <line class="lane" x1="480" y1="56" x2="480" y2="446"/>
+      <line class="lane" x1="820" y1="56" x2="820" y2="446"/>
+      <g class="head">
+        <rect x="65" y="18" width="150" height="34" rx="7"/><text x="140" y="40">HUMAN</text>
+        <rect x="405" y="18" width="150" height="34" rx="7"/><text x="480" y="40">AI</text>
+        <rect x="745" y="18" width="150" height="34" rx="7"/><text x="820" y="40">CODE</text>
+      </g>
+      <!-- the loop frame: every bug, every release -->
+      <rect class="frame" x="28" y="160" width="904" height="260"/>
+      <text class="frame-lbl hot" x="38" y="176">↺ PER BUG · PER RELEASE</text>
+      <!-- the bottleneck: the human activation -->
+      <rect class="act-h" x="133" y="182" width="14" height="224" rx="3"/>
+      <!-- messages -->
+      <line class="msg" x1="146" y1="96" x2="472" y2="96" marker-end="url(#arrW)"/>
+      <text class="lbl" x="310" y="88">describe the feature — or the bug</text>
+      <line class="msg" x1="486" y1="134" x2="812" y2="134" marker-end="url(#arrW)"/>
+      <text class="lbl" x="650" y="126">write / change the code</text>
+      <line class="msg" x1="147" y1="196" x2="812" y2="196" marker-end="url(#arrW)"/>
+      <text class="lbl" x="480" y="188">run the app by hand — scenario by scenario</text>
+      <line class="ret" x1="814" y1="228" x2="152" y2="228" marker-end="url(#arrWm)"/>
+      <text class="sub" x="480" y="220">surfaced behavior: results, never reasons</text>
+      <path class="msg" d="M147 252 H210 V276 H155" marker-end="url(#arrW)"/>
+      <text class="lbl lbl-l" x="222" y="260">reproduce · step through · guess</text>
+      <text class="sub lbl-l" x="222" y="276">the "why" is a story, not a lookup</text>
+      <line class="msg" x1="147" y1="308" x2="472" y2="308" marker-end="url(#arrW)"/>
+      <text class="lbl" x="310" y="300">or commission an investigation</text>
+      <text class="sub" x="310" y="322">theories from reading code — costly, still inference</text>
+      <line class="msg" x1="486" y1="350" x2="812" y2="350" marker-end="url(#arrW)"/>
+      <text class="lbl" x="650" y="342">attempt a fix</text>
+      <line class="msg" x1="147" y1="392" x2="812" y2="392" marker-end="url(#arrW)"/>
+      <text class="lbl" x="480" y="384">re-run every scenario — again, by hand</text>
+      <text class="cap hot" x="140" y="472">the bottleneck</text>
+    </svg>
+    <p class="note" style="margin-top:1rem">Two ways to answer "why did it do that?" — a person painstakingly
+    reproducing it at the controls, or an AI reading the code and building theories. Either way, nothing
+    ships until a human has re-run everything by hand.</p>
+  </section>
+
+  <!-- 4 · with the recorder -->
+  <section class="slide">
+    <p class="eyebrow">03 · With the recorder</p>
+    <h2>Push the process to the right</h2>
+    <svg class="seq" viewBox="0 0 960 486" role="img"
+         aria-label="Sequence diagram with the flight recorder: the human contributes an idea and occasional judgement; the AI writes code and scenarios, runs them recorded, debugs by replay, proves the fix, and pins the recordings as a regression suite.">
+      <defs>
+        <marker id="arrF" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" style="fill:var(--ink)"/>
+        </marker>
+        <marker id="arrFm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" style="fill:var(--muted)"/>
+        </marker>
+      </defs>
+      <line class="lane" x1="140" y1="56" x2="140" y2="446"/>
+      <line class="lane" x1="480" y1="56" x2="480" y2="446"/>
+      <line class="lane" x1="820" y1="56" x2="820" y2="446"/>
+      <g class="head">
+        <rect x="65" y="18" width="150" height="34" rx="7"/><text x="140" y="40">HUMAN</text>
+        <rect x="405" y="18" width="150" height="34" rx="7"/><text x="480" y="40">AI</text>
+        <rect x="745" y="18" width="150" height="34" rx="7"/><text x="820" y="40">CODE</text>
+      </g>
+      <!-- the loop that runs itself, on the right -->
+      <rect class="frame" x="436" y="192" width="498" height="200"/>
+      <text class="frame-lbl cool" x="446" y="208">↺ RUNS ITSELF</text>
+      <!-- activations: the work lives on the right -->
+      <rect class="act-ok" x="473" y="162" width="14" height="262" rx="3"/>
+      <rect class="act-ok" x="813" y="196" width="14" height="180" rx="3"/>
+      <!-- messages -->
+      <line class="msg" x1="146" y1="96" x2="466" y2="96" marker-end="url(#arrF)"/>
+      <text class="lbl" x="310" y="88">an idea — one line</text>
+      <line class="ret" x1="152" y1="128" x2="466" y2="128" marker-start="url(#arrFm)" marker-end="url(#arrFm)"/>
+      <text class="lbl" x="310" y="120">sparse questions ⇄ judgement calls</text>
+      <text class="sub" x="310" y="142">only when the right behavior is a product call</text>
+      <line class="msg" x1="490" y1="172" x2="806" y2="172" marker-end="url(#arrF)"/>
+      <text class="lbl" x="650" y="164">write the code — and the scenarios</text>
+      <line class="msg" x1="490" y1="216" x2="806" y2="216" marker-end="url(#arrF)"/>
+      <text class="lbl" x="650" y="230">run them on test accounts — recorder on</text>
+      <line class="ret" x1="806" y1="252" x2="496" y2="252" marker-end="url(#arrFm)"/>
+      <text class="sub" x="650" y="266">recordings — every internal observable</text>
+      <path class="msg" d="M490 282 H553 V306 H498" marker-end="url(#arrF)"/>
+      <text class="lbl lbl-l" x="565" y="290">replay · trace · debug</text>
+      <text class="sub lbl-l" x="565" y="306">lookup, not guessing</text>
+      <line class="msg" x1="490" y1="336" x2="806" y2="336" marker-end="url(#arrF)"/>
+      <text class="lbl" x="650" y="328">fix — proven by replay-diff <tspan class="match-t">MATCH</tspan></text>
+      <line class="msg" x1="490" y1="374" x2="806" y2="374" marker-end="url(#arrF)"/>
+      <text class="lbl" x="650" y="366">recordings become the regression suite</text>
+      <line class="ret" x1="466" y1="414" x2="152" y2="414" marker-end="url(#arrFm)"/>
+      <text class="lbl" x="310" y="406">report: fixes proven, bugs filed, open questions</text>
+      <text class="cap cool" x="140" y="472">ideas in · judgement out</text>
+    </svg>
+    <p class="note" style="margin-top:1rem">The human contributes the two things only humans have — ideas and
+    product judgement. The AI does the rest: the code <em>and</em> the scenarios, the runs, the debugging by
+    lookup, the proof, the regression suite. Questions flow left only when they deserve a human.</p>
+  </section>
+
+  <!-- 5 · physics -->
+  <section class="slide">
+    <p class="eyebrow">04 · The idea</p>
     <h2>What is code's physics?</h2>
     <p class="lead">Physical systems can be simulated without being built because they run on physics:
     <strong>laws + state + boundary conditions ⇒ the whole trajectory is derivable.</strong>
@@ -212,9 +350,9 @@
     <blockquote>Record only the boundary — the entire execution becomes reconstructible on demand.</blockquote>
   </section>
 
-  <!-- 4 · anatomy -->
+  <!-- 6 · anatomy -->
   <section class="slide">
-    <p class="eyebrow">03 · The mechanism</p>
+    <p class="eyebrow">05 · The mechanism</p>
     <h2>One JSONL line per call</h2>
     <p class="lead">Recording is cheap enough to leave on in production: bound arguments,
     the ordered boundary events, the result.</p>
@@ -231,9 +369,9 @@
     <strong class="accent mono">14,157 state transitions</strong>, every variable change queryable after the fact.</p>
   </section>
 
-  <!-- 5 · cardinal rule -->
+  <!-- 7 · cardinal rule -->
   <section class="slide">
-    <p class="eyebrow">04 · The cardinal rule</p>
+    <p class="eyebrow">06 · The cardinal rule</p>
     <h2>Instrument, never duplicate</h2>
     <p class="lead">Nothing in the recorder evaluates a query, computes a date, or knows what any
     value means. The only structural knowledge anywhere is <strong>names</strong>.</p>
@@ -251,9 +389,9 @@
     contract. The recorder can't know about an input it was never told crosses it.</p>
   </section>
 
-  <!-- 6 · case study -->
+  <!-- 8 · case study -->
   <section class="slide">
-    <p class="eyebrow">05 · Case study</p>
+    <p class="eyebrow">07 · Case study</p>
     <h2>Diagnosis becomes lookup</h2>
     <p class="lead">A production status message claimed the learner had
     <em>"reached the end of the frequency corpus"</em> — on an account that was never placed. Guessing
@@ -270,9 +408,9 @@
     repo's own scripts.</p>
   </section>
 
-  <!-- 7 · workflow -->
+  <!-- 9 · workflow -->
   <section class="slide">
-    <p class="eyebrow">06 · The workflow</p>
+    <p class="eyebrow">08 · The workflow</p>
     <h2>Record → Pin → Fix → Replay-diff</h2>
     <p class="lead">Every confirmed bug gets its recording pinned <em>before</em> the fix.
     The fix is then proven twice:</p>
@@ -287,9 +425,9 @@
     <blockquote>A fix proven against captured reality, not against a hand-written test's imagination.</blockquote>
   </section>
 
-  <!-- 8 · three membranes -->
+  <!-- 10 · three membranes -->
   <section class="slide">
-    <p class="eyebrow">07 · Honesty</p>
+    <p class="eyebrow">09 · Honesty</p>
     <h2>Three membranes, three instruments</h2>
     <p class="lead">The replay layer is real physics — but its laws stop at the process boundary.
     Know which instrument sees what.</p>
@@ -313,16 +451,17 @@
     server's side of the conversation, not the clicks between.</p>
   </section>
 
-  <!-- 9 · redaction -->
+  <!-- 11 · redaction -->
   <section class="slide">
-    <p class="eyebrow">08 · Production safety</p>
+    <p class="eyebrow">10 · Production safety</p>
     <h2>Redact before anything leaves the process</h2>
     <p class="lead">A recording holds what crossed the boundary — verbatim. For boundaries that carry
     credentials or PII, <code class="inline">redact</code> names the fields that must never reach
     disk or a sink.</p>
 <pre>BOUNDARY = fr.Boundary(
     effects=[...],
-    redact={"password", "ssn"},   <span class="c"># masked wherever these keys appear</span>
+    <span class="c"># masked wherever these keys appear</span>
+    redact={"password", "ssn"},
 )</pre>
     <div class="cols" style="margin-top:1.1rem">
       <div class="card"><h3>Masked at the source</h3>
@@ -338,9 +477,9 @@
     And what names cannot reach — positional values, chain signatures — is documented, never silent.</p>
   </section>
 
-  <!-- 9 · discipline -->
+  <!-- 12 · discipline -->
   <section class="slide">
-    <p class="eyebrow">09 · The discipline, per repo</p>
+    <p class="eyebrow">11 · The discipline, per repo</p>
     <h2>Five habits</h2>
     <ul class="tight" style="font-size:1.05rem">
       <li><strong>Shape the membrane first.</strong> A pure tool-logic core behind an injected service —
@@ -356,9 +495,9 @@
     </ul>
   </section>
 
-  <!-- 10 · fleet -->
+  <!-- 13 · fleet -->
   <section class="slide">
-    <p class="eyebrow">10 · Proof of generality</p>
+    <p class="eyebrow">12 · Proof of generality</p>
     <h2>One lib, four very different apps</h2>
     <p class="lead">The engine (<span class="mono">flight-recorder</span>, zero dependencies, zero consumer
     knowledge) was extracted at its second consumer and hardened by each next one.</p>
@@ -373,9 +512,9 @@
     shaping the code was owed. Recording runs in production where it matters.</p>
   </section>
 
-  <!-- 11 · beyond regression -->
+  <!-- 14 · beyond regression -->
   <section class="slide">
-    <p class="eyebrow">11 · What it opens</p>
+    <p class="eyebrow">13 · What it opens</p>
     <h2>States become data you author</h2>
     <p class="lead">Because replay feeds the code <em>any</em> boundary answers, hostile states are edited
     recordings — not databases you have to construct.</p>
@@ -389,9 +528,9 @@
     use would never produce.</p>
   </section>
 
-  <!-- 12 · closing -->
+  <!-- 15 · closing -->
   <section class="slide">
-    <p class="eyebrow">12 · The meta-rule</p>
+    <p class="eyebrow">14 · The meta-rule</p>
     <h2 style="max-width:22ch">No claim about behavior without a place to look it up</h2>
     <p class="lead">The instruments exist so that a claim is a trace line, a log line, or a measurement —
     never a plausible story. That rule, applied in every repo, is worth more than any of the code.</p>
@@ -404,7 +543,7 @@
 <div class="strip">
   <button class="navbtn" id="prev" aria-label="Previous slide">←</button>
   <div class="segs" id="segs" role="tablist" aria-label="Slides"></div>
-  <span class="counter" id="counter">01 / 13</span>
+  <span class="counter" id="counter">01 / 15</span>
   <button class="navbtn" id="next" aria-label="Next slide">→</button>
   <span class="hint">← → or click the strip</span>
 </div>
