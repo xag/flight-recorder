@@ -22,6 +22,9 @@ from typing import Any
 
 _MAX_DEPTH = 16
 
+# What a redacted field's value becomes under a bare (None) rule.
+REDACTED = "[REDACTED]"
+
 # Caps for traced values. A local can be a 10k-row list, and the tracer snapshots it on
 # every line that touches its frame.
 TRACE_MAX_ITEMS = 100
@@ -42,6 +45,34 @@ def to_jsonable(v: Any, depth: int = 0) -> Any:
     if isinstance(v, (list, tuple, set)):
         return [to_jsonable(x, depth + 1) for x in v]
     return {"__opaque__": repr(v)[:200]}
+
+
+def redact_jsonable(v: Any, rules: dict) -> Any:
+    """Apply field-name redaction rules (see Boundary.redact) to a jsonable tree. A dict
+    entry whose key is named in `rules` has its value replaced — by REDACTED when the rule
+    is None, else by the rule applied to the (jsonable) value; everything else recurses.
+    A rule that raises degrades to REDACTED: the failure direction is 'masked', never
+    'leaked' and never 'broke the recorded call'."""
+    if not rules:
+        return v
+    if isinstance(v, dict):
+        out = {}
+        for k, x in v.items():
+            if k in rules:
+                rule = rules[k]
+                if rule is None:
+                    out[k] = REDACTED
+                else:
+                    try:
+                        out[k] = rule(x)
+                    except Exception:
+                        out[k] = REDACTED
+            else:
+                out[k] = redact_jsonable(x, rules)
+        return out
+    if isinstance(v, list):
+        return [redact_jsonable(x, rules) for x in v]
+    return v
 
 
 def from_jsonable(v: Any) -> Any:

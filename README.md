@@ -145,6 +145,48 @@ best-effort and will not break the call. Only *completed* calls are published; a
 dies mid-flight leaves its last words in a local `.inflight` sidecar, readable only on the
 box.
 
+### Redact before anything leaves the process
+
+Recordings hold what crossed the boundary — verbatim, which for boundaries that carry PII
+or credentials is the problem. `redact` names the fields that must never reach disk or a
+sink:
+
+```python
+BOUNDARY = fr.Boundary(
+    effects=[...],
+    redact={"password", "ssn"},     # masked as fr.REDACTED wherever these keys appear
+)
+
+# or map a field to a deterministic tokenizer, keeping distinctness without the value:
+redact={"email": lambda v: v if str(v).startswith("tok:") else "tok:" + hmac_hex(v)}
+```
+
+Rules are field-name driven and applied to every recorded payload — tool kwargs and
+results, effect args/kwargs/results/errors, chain reads and writes — *before* the value is
+serialized into an event, so neither the session file, the `.inflight` sidecars, nor a
+sink ever holds the raw value. The gate still sees raw kwargs: you can admit a call by the
+very field the recording then masks.
+
+**Replay re-applies the same rules to its side of every comparison** (effect arguments,
+writes, the result), so a redacted recording still verifies bit-for-bit. Two consequences:
+
+- A transform must be deterministic and **idempotent** — on replay it runs again over
+  values that are already transformed. A transform that raises degrades to the mask: the
+  failure direction is "masked", never "leaked" and never "broke the recorded call".
+- A redacted field replays *as its mask*. Code that merely carries the value through is
+  fine; code that computes with it — branches on it, folds it into a string — will
+  legitimately diverge on replay, because the recording holds no answer for what the value
+  was. Redact identifiers and payloads that pass through unchanged; what feeds control
+  flow or output has to stay recorded (tokenize it instead of masking if it must not
+  appear raw).
+
+What redaction cannot reach, because the lib knows only names: a sensitive value passed
+*positionally* to an effect (pass it as a keyword), values rendered into a chain's
+signature (`document(x@y.z)` — the signature is the matching key), the verbatim `repr` in
+a recorded effect error (add `"repr"` to the rules to mask all of them) and in a failed
+call's `error` field, and header `constants` (they are restored on replay; don't declare
+secrets as constants).
+
 ## Replay
 
 ```python
@@ -303,6 +345,18 @@ process: memory, latency, and concurrency interleavings belong to logs and measu
 not to this instrument. Hard crashes leave their last words — each call's events stream
 to an `.inflight` sidecar, so a SIGKILLed call's partial record survives and the CLI
 lists it as `INCOMPLETE` — but the crash's *cause* still lives in the machine layer.
+
+The boundary is also bounded by the *process*: an input is recordable exactly when it
+enters the server as a Python-level call. That draws a clean line through MCP Apps'
+client-side UI round-trips. A round-trip the tool **awaits** — elicitation, sampling, a
+`ui/*` response surfaced as a method on the session/context object — is an effect like any
+other; declare that method and it records and replays like an HTTP call
+(`effects=[(Context, ["elicit"], {"method": True})]` — the `method` opt skips `self` in
+matching). But UI state that lives and dies in the client — rendering, interaction that
+never re-enters the tool's execution — never crosses into the process, so it is invisible
+here, like any remote peer's internals. A session driven by such interaction is
+reproducible only from the server's side of the conversation: every tool call it caused,
+bit-for-bit; the clicks between them, not at all.
 
 ## Lineage and positioning
 

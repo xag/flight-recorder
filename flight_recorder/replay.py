@@ -30,7 +30,7 @@ from typing import Any, Callable, Optional
 from flight_recorder.boundary import Boundary, ChainTarget
 from flight_recorder.record import hook, patch_boundary, unpatch_all, _patch
 from flight_recorder.serial import (
-    from_jsonable, render, safe_repr, short, to_jsonable, trace_jsonable,
+    from_jsonable, redact_jsonable, render, safe_repr, short, to_jsonable, trace_jsonable,
 )
 
 
@@ -194,7 +194,9 @@ class PlaybackChain:
                     return [Snap(r) for r in res]
                 return Snap(res)
             if name in target.terminal_writes:
-                replayed = [_arg_jsonable(a) for a in args]
+                # Scrubbed like the recording was, so a redacted write still compares —
+                # and so t.writes never carries a value the tape was forbidden to hold.
+                replayed = redact_jsonable([_arg_jsonable(a) for a in args], hook.redact)
                 # Every write the replayed code performs is captured for the Trajectory —
                 # writes are never executed, but invariants must be able to judge them
                 # ("never writes when the corpus is empty").
@@ -411,7 +413,8 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
     boundary = Boundary(effects=adapter.boundary.effects,
                         clock_modules=adapter.boundary.clock_modules,
                         random_modules=adapter.boundary.random_modules,
-                        error_revivers=adapter.boundary.error_revivers)
+                        error_revivers=adapter.boundary.error_revivers,
+                        redact=adapter.boundary.redact)
     patch_boundary(boundary)
     # Declared chains whose holder exists now are swapped for playback; chains living on
     # objects the adapter constructs (a fresh service) are its resolve()'s business.
@@ -433,7 +436,7 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
         tracer = Tracer(trace_path, adapter.trace_root, set(adapter.skip_files)) \
             if trace_path else None
     except BaseException:
-        hook.mode, hook.feed = "off", None
+        hook.mode, hook.feed, hook.redact = "off", None, {}
         unpatch_all()
         raise
 
@@ -456,7 +459,7 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
         if tracer:
             tracer.stop()
             report.trace_path, report.transitions = tracer.path, tracer.transitions
-        hook.mode, hook.feed = "off", None
+        hook.mode, hook.feed, hook.redact = "off", None, {}
         unpatch_all()
 
     report.events_consumed = feed.consumed
@@ -473,7 +476,9 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
         report.result_diff = [f"recorded error: {rec.get('error')}",
                               f"replayed error: {error}"]
     if report.divergence is None:
-        replayed = to_jsonable(result)
+        # Scrubbed like the recorded result was, so a redacted recording still matches.
+        # Invariants therefore judge the redacted result — the only one that exists.
+        replayed = redact_jsonable(to_jsonable(result), adapter.boundary.redact_rules())
         report.replayed_result = replayed
         report.result_match = replayed == rec["result"]
         if not report.result_match and report.error_match:

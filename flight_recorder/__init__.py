@@ -31,8 +31,8 @@ from flight_recorder.invariants import (
     check_invariants, collect, format_invariant_report, invariant,
 )
 from flight_recorder.serial import (
-    Truncated, TruncatedText, from_jsonable, from_trace_jsonable, snapshot_jsonable,
-    to_jsonable, trace_jsonable,
+    REDACTED, Truncated, TruncatedText, from_jsonable, from_trace_jsonable,
+    redact_jsonable, snapshot_jsonable, to_jsonable, trace_jsonable,
 )
 
 __all__ = [
@@ -44,6 +44,6 @@ __all__ = [
     "Tracer", "format_report", "load_session", "replay_call", "run_cli",
     "Call", "Invariant", "InvariantReport", "Obs", "Raise", "Return", "Trace", "Trajectory",
     "Violation", "check_invariants", "collect", "format_invariant_report", "invariant",
-    "Truncated", "TruncatedText", "from_jsonable", "from_trace_jsonable",
-    "snapshot_jsonable", "to_jsonable", "trace_jsonable",
+    "REDACTED", "Truncated", "TruncatedText", "from_jsonable", "from_trace_jsonable",
+    "redact_jsonable", "snapshot_jsonable", "to_jsonable", "trace_jsonable",
 ]

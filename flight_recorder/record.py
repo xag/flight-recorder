@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Protocol, Union
 
 from flight_recorder.boundary import Boundary, ChainTarget
-from flight_recorder.serial import short, snapshot_jsonable, to_jsonable
+from flight_recorder.serial import redact_jsonable, short, snapshot_jsonable, to_jsonable
 
 FORMAT_VERSION = 1
 
@@ -70,6 +70,7 @@ Gate = Union[bool, Callable[[str, dict], bool]]
 class _Hook:
     mode: str = "off"   # off | record | replay
     feed: Any = None    # flight_recorder.replay.Feed during replay
+    redact: dict = {}   # the active boundary's normalized redact rules
 
 
 hook = _Hook()
@@ -81,10 +82,26 @@ _active: ContextVar[Optional[list]] = ContextVar("flight_active", default=None)
 _in_call: ContextVar[bool] = ContextVar("flight_in_call", default=False)
 
 
+# Redaction rewrites event payloads only, never the envelope (k/fn/op/sig/v/idx), so a
+# rule named like an envelope key cannot corrupt the event structure. `err` is scrubbed
+# whole: its `args` carry the exception's values, and a `"repr"` rule lets an app mask
+# the recorded repr too.
+_PAYLOAD_KEYS = ("args", "kwargs", "res", "err")
+
+
+def _scrub_event(ev: dict) -> dict:
+    rules = hook.redact
+    if rules:
+        for key in _PAYLOAD_KEYS:
+            if key in ev:
+                ev[key] = redact_jsonable(ev[key], rules)
+    return ev
+
+
 def _emit(ev: dict) -> None:
     buf = _active.get()
     if buf is not None:
-        buf.append(ev)
+        buf.append(_scrub_event(ev))
 
 
 # --- effect wrapping (module-level functions, sync or async) ---------------------
@@ -110,7 +127,10 @@ def _replay_effect(boundary: Boundary, name: str, args: tuple, kwargs: dict,
                    opts: dict) -> Any:
     from flight_recorder.replay import ReplayDivergence
     ev = hook.feed.pop_expect("fx", fn=name)
-    asked = _effect_event(name, args, kwargs, opts)
+    # Scrubbed like the recording was, so a redacted recording still compares: a replayed
+    # value that is already a mask (it came off the tape) passes through unchanged —
+    # which is why redact transforms must be idempotent.
+    asked = _scrub_event(_effect_event(name, args, kwargs, opts))
     # Probe replay never compares args: a mutated upstream answer legitimately changes
     # every downstream question. The event name and order still gate.
     if not opts.get("loose_args") and not hook.feed.probe and (
@@ -325,6 +345,7 @@ class Recorder:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.path = self.dir / f"flight-{stamp}-{os.getpid()}.jsonl"
         self.sink = sink
+        self._redact = boundary.redact_rules()
         self._lock = threading.Lock()
         self._bytes = bytearray()  # mirror of the file, kept only to feed a sink
         self._seq = 0
@@ -368,7 +389,8 @@ class Recorder:
             n = self._inflight
         return _CallSink(
             self.dir / f"{self.path.stem}.call{n}.inflight",
-            {"ev": "inflight", "fn": fn, "kwargs": to_jsonable(kwargs),
+            {"ev": "inflight", "fn": fn,
+             "kwargs": redact_jsonable(to_jsonable(kwargs), self._redact),
              "started": datetime.now().astimezone().isoformat()})
 
     def write_call(self, fn: str, kwargs: dict, events: list, result: Any,
@@ -376,8 +398,9 @@ class Recorder:
         self._seq += 1
         self._write({
             "ev": "call", "seq": self._seq, "fn": fn,
-            "kwargs": to_jsonable(kwargs), "events": events,
-            "result": to_jsonable(result), "error": error,
+            "kwargs": redact_jsonable(to_jsonable(kwargs), self._redact),
+            "events": events,
+            "result": redact_jsonable(to_jsonable(result), self._redact), "error": error,
             "ts": datetime.now().astimezone().isoformat(), "ms": round(ms, 2),
         })
 
@@ -511,6 +534,7 @@ def _patch(target: Any, attr: str, value: Any) -> None:
 def patch_boundary(boundary: Boundary) -> None:
     """Wrap the boundary's effects, chains, and shims in place (used by both record and
     replay; behavior switches on hook.mode). Idempotence is the caller's business."""
+    hook.redact = boundary.redact_rules()
     for entry in boundary.effects:
         module, names = entry[0], entry[1]
         opts = entry[2] if len(entry) > 2 else None
@@ -559,6 +583,7 @@ def _arm(directory: str, boundary: Boundary, enabled: Gate,
         patch_boundary(boundary)
     except BaseException:
         unpatch_all()
+        hook.redact = {}
         _recorder = _pending = _gate = None
         raise
     return True
@@ -610,6 +635,7 @@ def uninstall() -> None:
     unpatch_all()
     hook.mode = "off"
     hook.feed = None
+    hook.redact = {}
     _recorder = None
     _pending = None
     _gate = None
