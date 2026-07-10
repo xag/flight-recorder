@@ -19,3 +19,19 @@ async def maybe_fail(n: int) -> str:
 
 def read_config(name: str) -> str:
     return f"cfg:{name}"
+
+
+async def create_account(email: str, password: str = "") -> dict:
+    return {"id": f"acct-{len(email)}", "email": email, "password": password}
+
+
+class ToySession:
+    """Stands in for an MCP session/context object: a client round-trip the tool awaits
+    (elicitation, sampling, a ui/* response). Declared as a method effect, the round-trip
+    is an input like any other; `self` is identity, not input."""
+
+    async def elicit(self, prompt: str) -> dict:
+        return {"action": "accept", "value": len(prompt)}
+
+
+SESSION = ToySession()

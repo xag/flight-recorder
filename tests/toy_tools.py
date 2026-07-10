@@ -77,6 +77,25 @@ def study_status(email: str, level: int = 1) -> dict:
             "coverage": len(deck) / len(corpus)}
 
 
+async def signup(email: str, password: str) -> dict:
+    """Sensitive data on every surface redaction must cover: a tool kwarg, an effect
+    kwarg, an effect result field, and a tool result field."""
+    account = await fx.create_account(email, password=password)
+    return {"email": email, "password": password, "account": account}
+
+
+async def call_home(email: str) -> dict:
+    """A literal secret born INSIDE the code, not carried from the kwargs: on replay it is
+    reconstructed raw, so the comparison only matches if replay re-applies the rules."""
+    return await fx.create_account(email, password="hunter2-literal")
+
+
+async def confirm_wipe(email: str) -> dict:
+    """A tool whose execution depends on a client-side round-trip it awaits."""
+    ans = await fx.SESSION.elicit(f"really wipe {email}?")
+    return {"email": email, "confirmed": ans["action"] == "accept", "n": ans["value"]}
+
+
 async def remote_sum(email: str, a: str, b: str) -> dict:
     x = await fx.fetch_remote(a)
     y = await fx.fetch_remote(b)

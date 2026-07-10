@@ -49,6 +49,21 @@ class Boundary:
     error_revivers: dict = field(default_factory=dict)
     # extra key/values for the session header (digests, versions...): name -> () -> value
     header_extras: dict = field(default_factory=dict)
+    # field-name redaction, applied to every recorded payload (tool kwargs/results, effect
+    # args/kwargs/results/errors, chain reads/writes) before it is written or published,
+    # and re-applied to the replayed side of every comparison so a redacted recording
+    # still verifies. A set/list of names masks them as serial.REDACTED; a dict maps
+    # name -> transform (None = mask), where a transform receives the jsonable value and
+    # must be deterministic AND idempotent — replay re-applies it to already-transformed
+    # values. Field-name driven: it cannot reach positional values with no name (pass
+    # sensitive values as keywords) or chain signatures (which render arguments).
+    redact: Any = field(default_factory=dict)
+
+    def redact_rules(self) -> dict:
+        """The redact declaration normalized to {field_name: transform_or_None}."""
+        if isinstance(self.redact, (set, frozenset, list, tuple)):
+            return {name: None for name in self.redact}
+        return dict(self.redact or {})
 
     def revive_error(self, err: dict) -> BaseException:
         reviver: Optional[Callable] = self.error_revivers.get(err.get("type", ""))
