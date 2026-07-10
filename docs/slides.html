@@ -140,7 +140,7 @@
     font: 650 15px "Cascadia Code", Consolas, ui-monospace, monospace;
     fill: var(--ink); text-anchor: middle; letter-spacing: .18em;
   }
-  .seq .cap { font: 650 12px "Cascadia Code", Consolas, ui-monospace, monospace; text-anchor: middle; letter-spacing: .1em; }
+  .seq .cap { font: 650 12px "Cascadia Code", Consolas, ui-monospace, monospace; fill: var(--muted); text-anchor: middle; letter-spacing: .1em; }
   .seq .cap.hot { fill: var(--accent); }
   .seq .cap.cool { fill: var(--match); }
   .seq .msg { stroke: var(--ink); stroke-width: 2; fill: none; }
@@ -152,6 +152,7 @@
   .seq .lbl.hot { fill: var(--accent); }
   .seq .sub { font: 11px "Cascadia Code", Consolas, ui-monospace, monospace; fill: var(--muted); text-anchor: middle; }
   .seq .lbl-l { text-anchor: start; }
+  .seq .lbl-r { text-anchor: end; }
   .seq .act-h { fill: var(--accent-dim); stroke: var(--accent); stroke-width: 1.5; }
   .seq .act-ok { fill: var(--match); fill-opacity: .15; stroke: var(--match); stroke-width: 1.5; }
   .seq .frame { fill: none; stroke: var(--line); stroke-width: 1.5; stroke-dasharray: 7 6; }
@@ -328,9 +329,9 @@
   <section class="slide">
     <p class="eyebrow">07 · Without the recorder</p>
     <h2>The human is the test harness</h2>
-    <p class="lead">Every claim about behavior needs a person at the controls — run it, reproduce it,
-    re-run it all after every fix. An AI can help by reading the code and theorizing:
-    costly, and still inference.</p>
+    <p class="lead">The code can’t testify to what happened inside it — so every claim about
+    behavior needs a person at the controls: run it, reproduce it, re-run it all after every
+    fix. An AI can help by reading the source and theorizing: costly, and still inference.</p>
     <svg class="seq" viewBox="0 0 960 486" role="img"
          aria-label="Sequence diagram without the flight recorder: the human runs every scenario by hand, reproduces bugs painstakingly, and re-runs everything after every fix — every cycle passes through the human lane.">
       <defs>
@@ -375,6 +376,8 @@
       <line class="msg" x1="147" y1="392" x2="812" y2="392" marker-end="url(#arrW)"/>
       <text class="lbl hot" x="480" y="384">re-run every scenario — again, by hand</text>
       <text class="cap hot" x="140" y="472">the bottleneck</text>
+      <text class="cap" x="480" y="472">theories, not verdicts</text>
+      <text class="cap" x="820" y="472">mute — can’t testify</text>
     </svg>
   </section>
 
@@ -382,11 +385,12 @@
   <section class="slide">
     <p class="eyebrow">08 · With the recorder</p>
     <h2>Push the process to the right</h2>
-    <p class="lead">Record → pin → fix → replay-diff, run end to end by the AI — code <em>and</em>
-    scenarios, the runs, the debugging by lookup, the proof, the regression suite. The human
-    contributes ideas, and judgement where behavior is a product call.</p>
+    <p class="lead">Code joins the crew instead of standing trial: the recorder captures every
+    boundary crossing, replay answers with verdicts instead of theories, and every pinned session
+    re-verifies each build — no human, no tokens. The AI authors and diagnoses; the human
+    contributes ideas and judgement.</p>
     <svg class="seq" viewBox="0 0 960 486" role="img"
-         aria-label="Sequence diagram with the flight recorder: the human contributes an idea and occasional judgement; the AI writes code and scenarios, runs them recorded, debugs by replay, proves the fix, and pins the recordings as a regression suite.">
+         aria-label="Sequence diagram with the flight recorder: the human contributes an idea and occasional judgement; the AI writes code and scenarios and diagnoses from recordings; the code itself records every boundary crossing, replays with bit-for-bit verdicts, and re-verifies every build from the pinned sessions.">
       <defs>
         <marker id="arrF" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0 0 L10 5 L0 10 z" style="fill:var(--ink)"/>
@@ -403,37 +407,40 @@
         <rect x="405" y="18" width="150" height="34" rx="7"/><text x="480" y="40">AI</text>
         <rect x="745" y="18" width="150" height="34" rx="7"/><text x="820" y="40">CODE</text>
       </g>
-      <!-- the loop that runs itself, on the right -->
-      <rect class="frame" x="436" y="192" width="498" height="200"/>
-      <text class="frame-lbl cool" x="446" y="208">↺ RUNS ITSELF</text>
       <!-- activations: the work lives on the right -->
-      <rect class="act-ok" x="473" y="162" width="14" height="262" rx="3"/>
-      <rect class="act-ok" x="813" y="196" width="14" height="180" rx="3"/>
+      <rect class="act-ok" x="473" y="160" width="14" height="272" rx="3"/>
+      <rect class="act-ok" x="813" y="192" width="14" height="214" rx="3"/>
       <!-- messages -->
       <line class="msg" x1="146" y1="96" x2="466" y2="96" marker-end="url(#arrF)"/>
       <text class="lbl" x="310" y="88">an idea — one line</text>
-      <line class="ret" x1="152" y1="128" x2="466" y2="128" marker-start="url(#arrFm)" marker-end="url(#arrFm)"/>
-      <text class="lbl" x="310" y="120">sparse questions ⇄ judgement calls</text>
-      <text class="sub" x="310" y="142">only when the right behavior is a product call</text>
-      <line class="msg" x1="490" y1="172" x2="806" y2="172" marker-end="url(#arrF)"/>
-      <text class="lbl" x="650" y="164">write the code — and the scenarios</text>
-      <line class="msg" x1="490" y1="216" x2="806" y2="216" marker-end="url(#arrF)"/>
-      <text class="lbl" x="650" y="230">run them on test accounts — recorder on</text>
-      <line class="ret" x1="806" y1="252" x2="496" y2="252" marker-end="url(#arrFm)"/>
-      <text class="sub" x="650" y="266">recordings — every internal observable</text>
-      <path class="msg" d="M490 282 H553 V306 H498" marker-end="url(#arrF)"/>
-      <text class="lbl lbl-l" x="565" y="290">replay · trace · debug</text>
-      <text class="sub lbl-l" x="565" y="306">lookup, not guessing</text>
-      <line class="msg" x1="490" y1="336" x2="806" y2="336" marker-end="url(#arrF)"/>
-      <text class="lbl" x="650" y="328">fix — proven by replay-diff <tspan class="match-t">MATCH</tspan></text>
-      <line class="msg" x1="490" y1="374" x2="806" y2="374" marker-end="url(#arrF)"/>
-      <text class="lbl" x="650" y="366">recordings become the regression suite</text>
-      <line class="ret" x1="466" y1="414" x2="152" y2="414" marker-end="url(#arrFm)"/>
-      <text class="lbl" x="310" y="406">report: fixes, proofs, open questions</text>
+      <line class="ret" x1="152" y1="126" x2="466" y2="126" marker-start="url(#arrFm)" marker-end="url(#arrFm)"/>
+      <text class="lbl" x="310" y="118">sparse questions ⇄ judgement calls</text>
+      <text class="sub" x="310" y="140">only when the right behavior is a product call</text>
+      <line class="msg" x1="490" y1="168" x2="806" y2="168" marker-end="url(#arrF)"/>
+      <text class="lbl" x="650" y="160">write the code — and the scenarios</text>
+      <line class="msg" x1="490" y1="200" x2="806" y2="200" marker-end="url(#arrF)"/>
+      <text class="lbl" x="650" y="192">run the scenarios</text>
+      <path class="msg" d="M833 224 H893 V248 H841" marker-end="url(#arrF)"/>
+      <text class="lbl lbl-r" x="802" y="232">the recorder captures</text>
+      <text class="sub lbl-r" x="802" y="248">every boundary crossing</text>
+      <line class="ret" x1="806" y1="274" x2="496" y2="274" marker-end="url(#arrFm)"/>
+      <text class="lbl" x="650" y="266">recordings — every internal observable</text>
+      <line class="msg" x1="490" y1="304" x2="806" y2="304" marker-end="url(#arrF)"/>
+      <text class="lbl" x="650" y="296">fix — then replay the pinned session</text>
+      <line class="ret" x1="806" y1="334" x2="496" y2="334" marker-end="url(#arrFm)"/>
+      <text class="lbl" x="650" y="326">verdict: <tspan class="match-t">MATCH</tspan> — or the first divergence</text>
+      <!-- the loop pushed furthest right: code re-verifying every build on its own -->
+      <rect class="frame" x="500" y="352" width="436" height="54"/>
+      <text class="frame-lbl cool" x="508" y="346">↺ EVERY BUILD · NO HUMAN, NO TOKENS</text>
+      <path class="msg" d="M833 364 H893 V388 H841" marker-end="url(#arrF)"/>
+      <text class="lbl lbl-r" x="802" y="380">replay every pinned session</text>
+      <line class="ret" x1="466" y1="424" x2="152" y2="424" marker-end="url(#arrFm)"/>
+      <text class="lbl" x="310" y="416">report: fixes, proofs, open questions</text>
       <text class="cap cool" x="140" y="472">ideas in · judgement out</text>
+      <text class="cap cool" x="480" y="472">authors · diagnoses</text>
+      <text class="cap cool" x="820" y="472">records · replays · verifies</text>
     </svg>
   </section>
-
   <!-- 10 · three membranes -->
   <section class="slide">
     <p class="eyebrow">09 · Honesty</p>
