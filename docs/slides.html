@@ -306,11 +306,41 @@
     the kernel log and an RSS measurement (38&nbsp;MB → 543&nbsp;MB on a 512&nbsp;MB VM) caught what the recorder
     structurally could not. Since then, <code class="inline">.inflight</code> sidecars stream events during the
     call, so even a killed process leaves its last words.</p>
+    <p class="note">The client layer has one recordable sliver: a round-trip the tool <em>awaits</em> —
+    an elicitation, a sampled answer, a UI response surfaced as a session method — enters the process
+    as a call, so declaring that method records it like any other input. Interaction that never
+    re-enters the tool's execution stays invisible by construction: a session replays from the
+    server's side of the conversation, not the clicks between.</p>
+  </section>
+
+  <!-- 9 · redaction -->
+  <section class="slide">
+    <p class="eyebrow">08 · Production safety</p>
+    <h2>Redact before anything leaves the process</h2>
+    <p class="lead">A recording holds what crossed the boundary — verbatim. For boundaries that carry
+    credentials or PII, <code class="inline">redact</code> names the fields that must never reach
+    disk or a sink.</p>
+<pre>BOUNDARY = fr.Boundary(
+    effects=[...],
+    redact={"password", "ssn"},   <span class="c"># masked wherever these keys appear</span>
+)</pre>
+    <div class="cols" style="margin-top:1.1rem">
+      <div class="card"><h3>Masked at the source</h3>
+        <p>Rules apply before a value is serialized into an event: the session file, the crash
+        sidecars, and anything a sink publishes never hold the raw value. The per-call gate still
+        sees raw kwargs — you can admit a call <em>by</em> the very field the recording then masks.</p></div>
+      <div class="card"><h3>Replay still verifies <span class="verdict ok">MATCH</span></h3>
+        <p>The same rules are re-applied to the replayed side of every comparison, so a redacted
+        recording still matches bit-for-bit — even a secret born as a literal inside the code.</p></div>
+    </div>
+    <p class="note" style="margin-top:1.2rem">A redacted field replays <em>as its mask</em>: redact what
+    flows through unchanged; give what must stay distinct a deterministic, idempotent tokenizer instead.
+    And what names cannot reach — positional values, chain signatures — is documented, never silent.</p>
   </section>
 
   <!-- 9 · discipline -->
   <section class="slide">
-    <p class="eyebrow">08 · The discipline, per repo</p>
+    <p class="eyebrow">09 · The discipline, per repo</p>
     <h2>Five habits</h2>
     <ul class="tight" style="font-size:1.05rem">
       <li><strong>Shape the membrane first.</strong> A pure tool-logic core behind an injected service —
@@ -328,7 +358,7 @@
 
   <!-- 10 · fleet -->
   <section class="slide">
-    <p class="eyebrow">09 · Proof of generality</p>
+    <p class="eyebrow">10 · Proof of generality</p>
     <h2>One lib, four very different apps</h2>
     <p class="lead">The engine (<span class="mono">flight-recorder</span>, zero dependencies, zero consumer
     knowledge) was extracted at its second consumer and hardened by each next one.</p>
@@ -345,7 +375,7 @@
 
   <!-- 11 · beyond regression -->
   <section class="slide">
-    <p class="eyebrow">10 · What it opens</p>
+    <p class="eyebrow">11 · What it opens</p>
     <h2>States become data you author</h2>
     <p class="lead">Because replay feeds the code <em>any</em> boundary answers, hostile states are edited
     recordings — not databases you have to construct.</p>
@@ -361,7 +391,7 @@
 
   <!-- 12 · closing -->
   <section class="slide">
-    <p class="eyebrow">11 · The meta-rule</p>
+    <p class="eyebrow">12 · The meta-rule</p>
     <h2 style="max-width:22ch">No claim about behavior without a place to look it up</h2>
     <p class="lead">The instruments exist so that a claim is a trace line, a log line, or a measurement —
     never a plausible story. That rule, applied in every repo, is worth more than any of the code.</p>
@@ -374,7 +404,7 @@
 <div class="strip">
   <button class="navbtn" id="prev" aria-label="Previous slide">←</button>
   <div class="segs" id="segs" role="tablist" aria-label="Slides"></div>
-  <span class="counter" id="counter">01 / 12</span>
+  <span class="counter" id="counter">01 / 13</span>
   <button class="navbtn" id="next" aria-label="Next slide">→</button>
   <span class="hint">← → or click the strip</span>
 </div>
