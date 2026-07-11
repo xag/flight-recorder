@@ -163,9 +163,10 @@ class Recorder {
    * goes out immediately and the tape still lands. Given none, awaiting is the only honest
    * fallback — a slower response beats a lost recording.
    *
-   * Either way there is a TIMEOUT. A sink that throws was always swallowed; a sink that HANGS
-   * used to hold the request open until the platform killed the function. A recorder that can
-   * take the site down with it has failed at its first duty, which is to be ignorable.
+   * Either way there is a TIMEOUT. A sink that throws is swallowed; a sink that HANGS would
+   * otherwise hold the request open until the platform killed the function, turning a slow store
+   * into a slow site. A recorder that can take the app down with it has failed at its first duty,
+   * which is to be ignorable.
    */
   flush() {
     if (!this.sink) return null;
@@ -475,8 +476,8 @@ export function installRandom() {
       return buf;
     }
 
-    // The callback form is a door like any other. It used to pass straight through, which
-    // meant an app using it recorded nothing and re-rolled on replay.
+    // The callback form is a door like any other: an app that reaches for it must be recorded
+    // too, or it re-rolls on replay and the divergence points at a value rather than at the door.
     if (hook.mode === 'replay') {
       let buf;
       try {
@@ -636,11 +637,11 @@ export function uninstall() {
 /**
  * Where the patch stack currently is, and how to unwind back to it.
  *
- * replayCall() shims the clock and the RNG for the duration of a replay, and used to clean up
- * by calling uninstall() — which also tore down the RECORDER. So replaying a tape silently
- * switched off recording for the rest of the process, and the next call went unrecorded with
- * no complaint from anybody. Marking and unwinding restores exactly what replay added and
- * leaves an active recording session alone.
+ * replayCall() shims the clock and the RNG for the duration of a replay, and must unwind exactly
+ * what it added. Calling uninstall() instead would also tear down the RECORDER — so a replay would
+ * silently switch off recording for the rest of the process, and every call after it would go
+ * unrecorded without a word. Mark, then unwind to the mark: an active recording session is left
+ * alone.
  */
 export function patchMark() {
   return patches.length;

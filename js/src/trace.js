@@ -89,10 +89,9 @@ export async function traced(fn, { include }) {
   const worker = new Worker(WORKER, { workerData: { include: patterns } });
   worker.unref();
 
-  // The main thread's inspector back-end is serviced on the MAIN thread's event loop. While we
-  // wait for the worker to attach, this thread must keep turning — otherwise the attach never
-  // completes and both sides wait for each other. (Learned the hard way: an idle `await` here
-  // deadlocks.)
+  // The main thread's inspector back-end is serviced on the MAIN thread's event loop. While the
+  // worker attaches, this thread must keep turning: an idle `await` here starves the very loop the
+  // attach needs, the attach never completes, and both sides wait for each other forever.
   const keepalive = setInterval(() => {}, 5);
 
   let result;

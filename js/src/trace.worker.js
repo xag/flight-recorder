@@ -43,9 +43,9 @@ function readValue(v) {
 // Which scopes hold "the locals".
 //
 // Not just `local`. In an ASYNC function the body's `const`/`let` do not live in the local
-// scope — they must survive an await, so V8 hoists them into a closure context, and reading
-// only `local` gives you the parameters and nothing else. (A synchronous function hides this:
-// everything is local, and the mistake looks like it works.)
+// scope — they must survive an await, so V8 hoists them into a closure context, and reading only
+// `local` yields the parameters and nothing else. A synchronous function conceals this: there,
+// everything IS local, so reading one scope appears to be enough.
 //
 // `global` and `module` are excluded: they are the world and the imports, not this execution.
 const SCOPES = new Set(['local', 'block', 'closure', 'catch']);
