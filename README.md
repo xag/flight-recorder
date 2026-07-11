@@ -5,14 +5,24 @@
 Record an app's tool calls at their **nondeterminism boundary**; replay them deterministically
 against the real code.
 
-**[Documentation](https://xag.github.io/flight-recorder/)** ·
-[Slides](https://xag.github.io/flight-recorder/slides.html) ·
-[Tape format](spec/tape-v1.md)
+## → [Documentation](https://xag.github.io/flight-recorder/)
+
+[Slides — Testing as Simulation](https://xag.github.io/flight-recorder/slides.html) ·
+[The tape format](spec/tape-v1.md)
+
+## Install
 
 ```bash
 pip install flight-recorder          # Python
 npm install @xag/flight-recorder     # Node
 ```
+
+| Language | Package | Source |
+|---|---|---|
+| Python | `flight-recorder` (PyPI) | [`flight_recorder/`](flight_recorder/) |
+| Node | [`@xag/flight-recorder`](https://www.npmjs.com/package/@xag/flight-recorder) (npm) | [`js/`](js/) |
+
+Both write the same tape — format v1, frozen in [`spec/tape-v1.md`](spec/tape-v1.md).
 
 ## What it does
 
@@ -21,44 +31,12 @@ store answered, what the API returned, what time it was, what the dice rolled. R
 per call: one cheap JSONL line. **That line *is* the execution, compressed.**
 
 Feed the answers back and the real code re-runs the original execution exactly — no network, no
-database, no waiting for the bug to happen again.
+database, no waiting for the bug to happen again. Trace it while it runs and every local, on every
+executed line, is a lookup rather than an inference.
 
 **The cardinal rule: instrument, never duplicate.** Nothing here evaluates a query, reimplements a
 client, or knows what any value means. Recording is a transparent proxy; replay feeds the recorded
-answers back and verifies the *questions* still match. The only structural knowledge anywhere is
-*names*.
-
-1. **Name the doors** — the handful of places the world enters. That declaration is the *boundary*,
-   and it is the only app-specific artifact. Nothing behind it is ever mocked; real code runs
-   everywhere.
-2. **Record what came through** — the inputs, every answer the world gave *in the order it was
-   asked*, and the result.
-3. **Replay is resurrection, not re-enactment** — and if the code asks a *different question* than
-   the recording holds, you are told precisely where behaviour changed.
-4. **Recordings answer "same?", invariants answer "right?"** — a bug records as faithfully as a fix,
-   so only a claim about *every* execution can condemn the first sighting of one.
-5. **Edit the tape to visit worlds that never happened** — a recording is data, so hostile states are
-   one edit away.
-
-## Two implementations, one tape
-
-| Language | Package | Source |
-|---|---|---|
-| Python | `flight-recorder` (PyPI) | [`flight_recorder/`](flight_recorder/) |
-| Node | [`@xag/flight-recorder`](https://www.npmjs.com/package/@xag/flight-recorder) (npm) | [`js/`](js/) |
-
-Both write the same tape — format v1, frozen in [`spec/tape-v1.md`](spec/tape-v1.md). Only *record*
-and *replay* are language-bound: replaying JavaScript means running JavaScript. Everything downstream
-consumes the tape, and a tape is only data.
-
-The format's conformance checker is written **twice, independently** — neither importing any
-recorder, both run against the same fixtures, each language validating the other's. A disagreement
-means the tape has forked, which is the one failure the arrangement exists to prevent.
-
-Both give you the *interior* as well as the boundary: **every local, on every executed line** of the
-code you name. Python takes it from `sys.settrace`; Node drives the V8 Inspector from a worker
-thread, which is slower but sees the same thing — including across an `await`.
-[Where the languages differ, and why each difference is forced.](https://xag.github.io/flight-recorder/#differ)
+answers back and verifies the *questions* still match.
 
 ## License
 
