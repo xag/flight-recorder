@@ -95,13 +95,30 @@ function scrub(ev) {
 // --- the tape ----------------------------------------------------------------------
 
 class Recorder {
-  constructor(directory, b) {
+  /**
+   * @param {string|null} directory  where to append the tape; null = memory only (serverless)
+   * @param {object} b               the boundary
+   * @param {{publish(name: string, text: string): unknown}|null} sink
+   */
+  constructor(directory, b, sink = null) {
     this.dir = directory;
-    fs.mkdirSync(this.dir, { recursive: true });
+    this.sink = sink;
+    this.seq = 0;
 
     const stamp = new RealDate().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
-    this.path = path.join(this.dir, `flight-${stamp}-${process.pid}.jsonl`);
-    this.seq = 0;
+    this.name = `flight-${stamp}-${process.pid}.jsonl`;
+
+    if (this.dir) {
+      fs.mkdirSync(this.dir, { recursive: true });
+      this.path = path.join(this.dir, this.name);
+    } else {
+      this.path = null; // nothing to write to; the sink is the tape
+    }
+
+    // The full session, mirrored in memory. The sink is handed all of it each time, exactly
+    // as the Python recorder does — so a sink that overwrites is enough, and a tape is never
+    // half-published.
+    this.text = '';
 
     this.write({
       ev: 'session',
@@ -115,7 +132,28 @@ class Recorder {
   write(obj) {
     // Append-only, one complete line per write: the only corruption possible is a torn
     // final line, which every reader is required to tolerate.
-    fs.appendFileSync(this.path, JSON.stringify(obj) + '\n', 'utf8');
+    const line = JSON.stringify(obj) + '\n';
+    this.text += line;
+    if (this.path) fs.appendFileSync(this.path, line, 'utf8');
+  }
+
+  /**
+   * Hand the session to the sink. AWAITED, unlike Python's, and that inversion is the whole
+   * point of an off-box sink on serverless: the instant the response is sent the instance is
+   * frozen or destroyed, so a fire-and-forget publish is not slow — it is *lost*. The cost is
+   * that recording adds the sink's latency to the recorded call, which is what `gate` is for.
+   *
+   * Best-effort: a sink that throws must never be the reason a call fails.
+   */
+  async flush() {
+    if (!this.sink) return;
+    try {
+      // Inside the suppression context: the sink's own client asks the clock and the dice
+      // like any other, and none of that is the app asking the world anything.
+      await insideEffect.run(true, () => this.sink.publish(this.name, this.text));
+    } catch (e) {
+      console.warn('flight-recorder: sink publish failed —', e.message);
+    }
   }
 
   writeCall(fn, kwargs, events, result, error, ms) {
@@ -125,7 +163,10 @@ class Recorder {
       seq: this.seq,
       fn,
       kwargs: redactJsonable(toJsonable(kwargs), boundary?.redact, boundary?.scrub),
-      events,
+      // An effect whose slot was reserved but never settled: the app fired it and did not
+      // await it. It gave no answer, so it influenced nothing, and a half-event would be an
+      // invalid one (fx carries exactly one of res/err).
+      events: events.filter((e) => e.k !== 'fx' || 'res' in e || 'err' in e),
       // A call that RAISED has no return value, and that is not the same as one that
       // returned `undefined` — so it records null, as Python's does. Without this, the
       // __undef__ marker would quietly claim every failed call returned undefined, and the
@@ -176,6 +217,10 @@ export function tool(name, fn) {
         // strictly less bad than an app that fell over because we tried.
         try {
           recorder.writeCall(name, args, events, result, error, realPerfNow() - t0);
+          // Awaited inside the call, because on a serverless host the instance is frozen the
+          // moment the response goes out. A publish left in flight is a publish that never
+          // happened.
+          await recorder.flush();
         } catch (e) {
           console.warn('flight-recorder: could not write the call —', e.message);
         }
@@ -224,37 +269,45 @@ export function wrap(target, methods, { prefix = '' } = {}) {
           kwargs: {}, // JS has no kwargs; the spec fixes this at {}
         };
 
+        // RESERVE THE EVENT'S SLOT NOW, in the order the question is ASKED — and fill in the
+        // answer when it comes back.
+        //
+        // Emitting on settlement instead was a real bug, and a quiet one: it records events
+        // in COMPLETION order. Any concurrent fan-out — `Promise.all(ids.map(id => kv.get(id)))`,
+        // which is ordinary code — then produces a tape whose order no replay can reproduce,
+        // because replay asks in issue order. It looked fine on a toy with one call at a time,
+        // and diverged the moment it met a real one.
+        const buf = active.getStore();
+        const slot = recorder && buf ? buf.push(scrub(ev)) - 1 : -1;
+        const settle = (patch) => {
+          if (slot >= 0) buf[slot] = scrub({ ...ev, ...patch });
+        };
+
         let res;
         try {
           // The real client runs INSIDE the suppression context, so its own clock/RNG calls
-          // — and any it makes across an await — do not reach the tape. The `.then` handlers
-          // below are attached outside it, so the effect's own event still gets emitted.
+          // — and any it makes across an await — do not reach the tape. The handlers below
+          // are attached outside it, so the effect's own event is still recorded.
           res = insideEffect.run(true, () => value.apply(t, args));
         } catch (e) {
-          ev.err = errEvent(e);
-          emit(ev);
+          settle({ err: errEvent(e) });
           throw e;
         }
 
-        // A promise is recorded when it settles — the answer is what the world gave, and
-        // it has not given it yet.
         if (res && typeof res.then === 'function') {
           return res.then(
             (r) => {
-              ev.res = toJsonable(r);
-              emit(ev);
+              settle({ res: toJsonable(r) });
               return r;
             },
             (e) => {
-              ev.err = errEvent(e);
-              emit(ev);
+              settle({ err: errEvent(e) });
               throw e;
             },
           );
         }
 
-        ev.res = toJsonable(res);
-        emit(ev);
+        settle({ res: toJsonable(res) });
         return res;
       };
     },
@@ -498,17 +551,22 @@ export function boundaryOf(o = {}) {
  * calls that matter. A gate that never says yes must leave no tape behind at all, which is
  * why the file is opened by the first admitted call rather than here.
  */
-export function install(b, { directory = '.flight', enabled = true, gate: g = null } = {}) {
+export function install(
+  b,
+  { directory = '.flight', enabled = true, gate: g = null, sink = null } = {},
+) {
   if (!enabled) return null;
 
   boundary = b;
   gate = g;
-  recorder = new Recorder(directory, b);
+  // `directory: null` records to memory alone — which is what a serverless host wants, since
+  // its filesystem dies with the invocation. There, the sink IS the tape.
+  recorder = new Recorder(directory, b, sink);
 
   if (b.clock) installClock();
   if (b.random) installRandom();
 
-  return recorder.path;
+  return recorder.path ?? recorder.name;
 }
 
 export function uninstall() {

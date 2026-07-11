@@ -323,3 +323,107 @@ test("a wrapped client's internal clock/RNG calls never reach the tape", async (
   assert.equal(report.divergence, null, report.divergence?.message);
   assert.ok(report.ok);
 });
+
+// --- the off-box sink ---------------------------------------------------------------------
+
+test('a sink receives the whole session, and is AWAITED before the call returns', async () => {
+  // The awaiting is the point. On a serverless host the instance is frozen the moment the
+  // response goes out, so a publish left in flight is a publish that never happened.
+  const published = [];
+  let inFlight = false;
+
+  const sink = {
+    async publish(name, text) {
+      inFlight = true;
+      await new Promise((r) => setTimeout(r, 5)); // a real network hop
+      published.push({ name, text });
+      inFlight = false;
+    },
+  };
+
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flight-'));
+  const boundary = fr.boundaryOf({});
+  fr.install(boundary, { directory: dir, sink });
+
+  await fr.tool('t', async () => ({ ok: 1 }))({});
+
+  assert.equal(inFlight, false, 'the call did not return until the sink had finished');
+  assert.ok(published.length >= 1);
+
+  const last = published.at(-1);
+  assert.match(last.name, /^flight-.*\.jsonl$/);
+  assert.deepEqual(fr.validateTape(last.text), [], 'what the sink got is a conformant tape');
+  assert.equal(fr.loadTape(last.text).calls.length, 1, 'and it contains the call');
+  fr.uninstall();
+});
+
+test('with no directory, the sink IS the tape (serverless: the filesystem dies with you)', async () => {
+  let latest = null;
+  const sink = { publish: (_n, text) => { latest = text; } };
+
+  const boundary = fr.boundaryOf({});
+  fr.install(boundary, { directory: null, sink });
+
+  await fr.tool('t', async () => ({ n: Date.now() }))({});
+  fr.uninstall();
+
+  assert.ok(latest, 'the session reached the sink with nothing written to disk');
+  const tape = fr.loadTape(latest);
+  assert.equal(tape.calls.length, 1);
+  assert.equal(tape.calls[0].events[0].k, 'now');
+  assert.deepEqual(fr.validateTape(latest), []);
+});
+
+test('a sink that throws is never the reason a call fails', async () => {
+  const sink = { publish: () => { throw new Error('the bucket is on fire'); } };
+  fr.install(fr.boundaryOf({}), { directory: null, sink });
+
+  const out = await fr.tool('t', async () => ({ ok: true }))({});
+  fr.uninstall();
+
+  assert.deepEqual(out, { ok: true }, 'the app carried on, which is the only acceptable outcome');
+});
+
+// --- concurrency: events are recorded in ASK order, not answer order ------------------------
+
+test('a concurrent fan-out records in the order the questions were ASKED', async () => {
+  // Found by replaying a PRODUCTION tape. listArticles does
+  // `Promise.all(ids.map(id => kv.hgetall(id)))` — ordinary code. Recording each event when
+  // its promise SETTLED produced a tape in completion order, while replay asks in issue
+  // order, so the two diverged mid-fan-out. It looked perfect on a toy that made one call at
+  // a time.
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flight-'));
+  const boundary = fr.boundaryOf({});
+
+  // Answers come back in the REVERSE of the order they were asked.
+  const slow = {
+    async get(key) {
+      const delay = { a: 30, b: 20, c: 1 }[key];
+      await new Promise((r) => setTimeout(r, delay));
+      return { key };
+    },
+  };
+  const store = fr.wrap(slow, ['get'], { prefix: 'kv' });
+  fr.install(boundary, { directory: dir });
+
+  const impl = async () => ({ rows: await Promise.all(['a', 'b', 'c'].map((k) => store.get(k))) });
+  await fr.tool('t', impl)({});
+
+  const call = fr.pickCall(fr.loadTape(fr.tapePath()), { fn: 't' });
+  fr.uninstall();
+
+  assert.deepEqual(
+    call.events.map((e) => e.args[0]),
+    ['a', 'b', 'c'],
+    'ask order — NOT c, b, a, which is the order the answers arrived in',
+  );
+
+  // …and therefore it replays.
+  const dead = fr.wrap({ get: () => { throw new Error('the world was touched'); } }, ['get'], { prefix: 'kv' });
+  const replayImpl = async () => ({ rows: await Promise.all(['a', 'b', 'c'].map((k) => dead.get(k))) });
+  const report = await fr.replayCall({ call, fn: replayImpl, boundary });
+
+  assert.equal(report.divergence, null, report.divergence?.message);
+  assert.ok(report.ok);
+  assert.deepEqual(report.result.rows.map((r) => r.key), ['a', 'b', 'c']);
+});

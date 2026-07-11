@@ -63,6 +63,36 @@ fr.install(BOUNDARY, {
 > object the app holds. The clock and the RNG are the exception, and *are* patched globally,
 > because there the app holds nothing to wrap.
 
+## Recording production: the off-box sink
+
+A serverless host has no filesystem worth the name — a tape written during an invocation
+dies with it. So hand the recorder a **sink**: anything with `publish(name, text)`.
+
+```js
+fr.install(BOUNDARY, {
+  directory: null,          // nothing to write to; the sink IS the tape
+  enabled: process.env.FLIGHT === '1',
+  gate: (fn) => WRITES.has(fn),   // record what matters, not everything
+  sink: {
+    async publish(name, text) {
+      await store.set(`flight:${name}`, text, { ex: 7 * 24 * 3600 });
+    },
+  },
+});
+```
+
+It is handed the **whole session** each time — after the header, and after every completed
+call — so a sink that overwrites is enough and a tape is never half-published.
+
+**It is awaited before the call returns.** That inversion is the whole point: the instant a
+serverless response goes out, the instance is frozen or destroyed, and a publish left in
+flight is not slow, it is *lost*. The cost is that recording adds the sink's latency to the
+recorded call — which is what `gate` is for.
+
+A sink that throws is swallowed. Recording must never be the reason a call fails.
+
+Use a client the recorder does **not** wrap, or the sink records itself.
+
 ## Replay
 
 ```js
