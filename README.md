@@ -19,41 +19,28 @@ The cardinal rule — for this lib and for every boundary declaration it consume
 knows what any value means. Recording is a transparent proxy; replay feeds recorded answers
 back and verifies the questions match. The only structural knowledge anywhere is *names*.
 
-## Two runtimes, one tape
+## Two implementations, one tape
 
-| | | |
-|---|---|---|
-| **Python** | this package | `pip install flight-recorder` |
-| **Node** | [`js/`](js/) · [`@xag/flight-recorder`](https://www.npmjs.com/package/@xag/flight-recorder) | `npm install @xag/flight-recorder` |
+```bash
+pip install flight-recorder          # Python
+npm install @xag/flight-recorder     # Node  (js/)
+```
 
 Both write **the same tape**: format v1, frozen in [`spec/tape-v1.md`](spec/tape-v1.md).
 
-That is the whole architecture, and it is what makes a port small. Only *record* and *replay*
-must be native — replaying JavaScript means re-running JavaScript. But **invariants and
-mutation consume the tape, and a tape is only data.** Freeze the data and the analysis engine
-is written once, for every runtime.
+That is the architecture, not an accident of history. Only *record* and *replay* are
+language-bound — replaying JavaScript means re-running JavaScript. **Invariants and mutation
+consume the tape, and a tape is only data.** Freeze the data and the analysis is written once,
+for every language.
 
-The format's conformance checker is therefore written **twice, independently**
+So the format's conformance checker is written **twice, independently**
 ([`spec/validate.py`](spec/validate.py), [`js/src/spec/validate.js`](js/src/spec/validate.js)),
-neither importing any recorder, both run against the same fixtures — Python validating tapes
-Node produced and vice versa. A disagreement means the tape has forked, which is the one
-failure this arrangement exists to prevent.
+neither importing any recorder, both run against the same fixtures — each language validating
+the other's tapes. A disagreement means the tape has forked, which is the one failure the
+arrangement exists to prevent.
 
-### What is genuinely different, and why
-
-|  | Python | Node |
-|---|---|---|
-| **Boundary** | name module functions; patch with `setattr` | wrap the objects the app *holds*. An ESM namespace is immutable — there is no way to reach behind an `import` and swap what a caller already bound, so there is nothing to patch |
-| **Clock / RNG** | `datetime`, `random` shims | globals: `Date.now`, `new Date()`, `performance.now`, `Math.random`, `crypto.randomBytes` (sync *and* callback), `randomUUID`, `randomInt`, `randomFillSync`, `getRandomValues` |
-| **Randomness on the tape** | `m:"sample"` — the *positions* drawn, so a mutated population still replays | `m:"bytes"`/`"float"`/`"int"` — the draw **is** the value; there is no population to index into |
-| **Nothing** | one (`None`) | two. `undefined` is not `null` — a key present-and-undefined is not a key that is absent — so it gets a `__undef__` marker. Python revives it as `None` and never emits it |
-| **The sink** | must not block the event loop | **awaited**. On serverless the instance freezes the moment the response goes out, so a publish left in flight is not slow — it is *lost* |
-| **The tracer** | `sys.settrace` gives every local on every line, for free | **not yet ported.** Node has no equivalent; it needs the V8 Inspector or a source transform |
-
-So the Node port is **stage 1**: record, replay, divergence detection, tape mutation. The
-variable-level tracing — the thing that turns *"what was `level` when it went wrong?"* into a
-lookup rather than an inference — is Python-only for now. Everything downstream of the tape
-is not, because it consumes the tape.
+Everything below is shown in both. Where the languages genuinely differ, they differ for a
+reason, and the reason is given.
 
 ## The approach, in plain words
 
@@ -96,6 +83,8 @@ and off-box sinks), replay, the pinned-recording pytest suite, invariants, and m
 
 ## Declare the boundary (the one app-specific artifact)
 
+**Python** — name the module functions; they are patched in place.
+
 ```python
 import flight_recorder as fr
 from app import http_client, storage_client, tools_core
@@ -111,18 +100,54 @@ BOUNDARY = fr.Boundary(
 )
 ```
 
+**Node** — wrap the objects the app *holds*. An ES module's namespace is immutable, so there
+is no way to reach behind an `import` and swap what a caller already bound; the boundary is
+the object, not the module. `wrap()` returns a transparent proxy — everything not named passes
+straight through, untouched and unrecorded.
+
+```js
+import * as fr from '@xag/flight-recorder';
+
+export const BOUNDARY = fr.boundaryOf({
+  constants: { 'config.LIMIT': LIMIT },
+  errorRevivers: { ApiError: ([msg]) => new ApiError(msg) },
+});
+
+export const store = fr.wrap(storageClient, ['read', 'write'], { prefix: 'kv' });
+export const http  = fr.wrap(httpClient,    ['fetch', 'post'], { prefix: 'http' });
+```
+
+The clock and the RNG are the exception, and are shimmed globally in both — there the app
+holds nothing to wrap. Node covers `Date.now`, `new Date()`, `performance.now`, `Math.random`,
+`crypto.randomBytes` (sync *and* callback), `randomUUID`, `randomInt`, `randomFillSync` and
+`getRandomValues`. A half-shimmed door is worse than an open one, because it *looks* shut.
+
 The recorder cannot know about an input it was never told crosses the boundary. When the
 app grows a new one, add it here — that's the whole maintenance contract.
 
 ## Record
+
+**Python** — every public function in the tools module writes one record per call.
 
 ```python
 fr.install(BOUNDARY, tools_core, directory="flight",
            enabled=bool(os.getenv("MYAPP_FLIGHT_RECORDER")))
 ```
 
-Off by default; when enabled, every public function in `tools_core` writes one record per
-call — bound args, ordered boundary events, result — to a session file.
+**Node** — wrap each tool. That is the call boundary.
+
+```js
+export const submit = fr.tool('submit_article', submitImpl);
+
+fr.install(BOUNDARY, {
+  directory: '.flight',
+  enabled: process.env.FLIGHT === '1',
+});
+```
+
+Off by default; when enabled, each call writes one line — bound args, ordered boundary events,
+result. That line **is** the execution, because the code is deterministic given the answers
+the world gave it.
 
 ### Record one call, not one deployment
 
@@ -153,7 +178,12 @@ Python function's.
 
 Pass a `sink` and the session is published as it grows — after the header, then after every
 completed call — so recordings are retrievable from a machine you have no shell on. The
-protocol is one method, and the library stays dependency-free:
+protocol is one method, `publish(name, data)`, and the library stays dependency-free.
+
+**Publishing is telemetry, and telemetry must never sit between a user and their response.**
+That is the whole design constraint, and each runtime meets it with what its host offers.
+
+**Python** — hand the bytes to a queue and return.
 
 ```python
 class S3Sink:
@@ -172,19 +202,49 @@ class S3Sink:
 fr.install(BOUNDARY, tools_core, directory="flight", sink=S3Sink())
 ```
 
-**`publish` runs synchronously, under the recorder's write lock, on the thread that finished
-the call** — in an async server, the event-loop thread. A sink that blocks on network I/O
-therefore stalls every concurrent request, not just the recorded one. Hand the bytes off and
-return, as above. Raising `Exception` is ignored: like the crash sidecars, publication is
-best-effort and will not break the call. Only *completed* calls are published; a call that
-dies mid-flight leaves its last words in a local `.inflight` sidecar, readable only on the
-box.
+`publish` runs synchronously, under the recorder's write lock, on the thread that finished the
+call — in an async server, the event-loop thread. A sink that blocks on network I/O therefore
+stalls every concurrent request, not just the recorded one.
+
+**Node** — hand the promise to the host.
+
+A serverless host freezes the instance the moment the response goes out, so a fire-and-forget
+publish there is not merely late: it is **lost**. But awaiting it would put a storage
+round-trip in front of every user. Neither is acceptable, and the resolution is not to pick
+one — it is `defer`, the host's *keep-this-instance-alive-until-this-settles* hook
+(`waitUntil` on Vercel and Cloudflare; `ctx.waitUntil` in a Worker).
+
+```js
+import { waitUntil } from '@vercel/functions';
+
+fr.install(BOUNDARY, {
+  directory: null,          // a serverless filesystem dies with the invocation; the sink IS the tape
+  sink: { publish: (name, text) => store.set(`flight:${name}`, text, { ex: 7 * 24 * 3600 }) },
+  defer: waitUntil,         // the response leaves now; the tape still lands
+  sinkTimeoutMs: 3000,
+});
+```
+
+Given a `defer`, the call returns immediately. Given none, the publish is awaited — on a host
+that freezes at response time, a slower response beats a lost recording.
+
+**Either way there is a timeout.** A sink that *throws* is swallowed; a sink that *hangs* would
+otherwise hold the request open until the platform killed the function, turning a slow store
+into a slow site. A recorder that can take the app down with it has failed at its first duty,
+which is to be ignorable.
+
+Only *completed* calls are published; in Python a call that dies mid-flight leaves its last
+words in a local `.inflight` sidecar, readable only on the box.
+
+Use a client the recorder does **not** wrap, or the sink records itself.
 
 ### Redact before anything leaves the process
 
 Recordings hold what crossed the boundary — verbatim, which for boundaries that carry PII
 or credentials is the problem. `redact` names the fields that must never reach disk or a
 sink:
+
+**Python**
 
 ```python
 BOUNDARY = fr.Boundary(
@@ -195,6 +255,31 @@ BOUNDARY = fr.Boundary(
 # or map a field to a deterministic tokenizer, keeping distinctness without the value:
 redact={"email": lambda v: v if str(v).startswith("tok:") else "tok:" + hmac_hex(v)}
 ```
+
+**Node** — the same field rules, plus `scrub`, which sweeps *values* wherever they sit.
+
+```js
+fr.boundaryOf({
+  redact: { password: null, ssn: null },     // by field name
+  scrub: (s) => s.replace(ADDRESS, hide),    // by value: every string, anywhere
+});
+```
+
+Field rules assume secrets live in named fields. Often they do not: an address handed to a
+store as a *positional* argument, baked into a *key* (`user:${addr}`), or sitting in the middle
+of a *sentence* has no field name to match — and walks onto the tape untouched while a tidily
+masked copy of itself sits in the next field along.
+
+`scrub` also fixes what a field rule cannot: **redacting an input poisons everything derived
+from it.** Mask the `email` kwarg and the recording holds a key built from the raw address
+while replay, handed the mask, builds one from the mask — a different question, and a spurious
+divergence. A substring sweep is consistent under concatenation, so a pseudonymised recording
+still replays.
+
+It is *not* consistent under **decryption**: if the code recovers an identity by decrypting a
+stored ciphertext, no sweep can reach it, and masking either side makes the replayed code take
+a branch it never took. There, masking does not hide the value — it makes the replay lie. Some
+things have to stay on the tape, and the tape has to be treated accordingly.
 
 Rules are field-name driven and applied to every recorded payload — tool kwargs and
 results, effect args/kwargs/results/errors, chain reads and writes — *before* the value is
@@ -224,6 +309,12 @@ secrets as constants).
 
 ## Replay
 
+The recorded answers are fed back and the **real code** re-runs the original execution: no
+network, no database, no waiting for the bug to happen again. Nothing is mocked — the same
+wrapped clients and the same clock/RNG shims simply source their answers from the tape.
+
+**Python**
+
 ```python
 class Adapter(fr.ReplayAdapter):
     boundary = BOUNDARY
@@ -240,9 +331,31 @@ python -m app.replay flight/<session>.jsonl --call 2     # replay + full state t
 python -m app.replay ... --call 2 --watch level,total    # variable timeline
 ```
 
-Exit 0: the replay reproduced the recording bit-for-bit. Exit 2: divergence — in the code
-path (the first differing boundary question is named), the result, or the writes (compared,
-never executed). Pin recordings as fixtures: record once, replay against every build.
+**Node**
+
+```js
+const tape   = fr.loadTape('.flight/flight-…​.jsonl');
+const call   = fr.pickCall(tape, { fn: 'submit_article' });
+const report = await fr.replayCall({ call, fn: submitImpl, boundary: BOUNDARY });
+
+report.ok           // result and error both reproduce the recording
+report.divergence   // …or the exact point where behaviour changed
+```
+
+Replay does two jobs, and the second matters as much as the first:
+
+1. **Answer** — hand back the recorded answers, in order.
+2. **Refuse to answer the wrong question.** If the code asks a different effect, in a different
+   order, or with different arguments, that is *caught*. A replay that silently answered anyway
+   would look like it worked, which is worse than useless.
+
+Divergence is not a failure of the tool. It **is the finding** — the precise point at which
+behaviour changed. Three kinds are caught, and the third is the one that would otherwise slip
+past: the code asks a **different question**; the code asks in a **different order**; or the
+code **stops asking** — nothing gives a wrong answer, it just quietly does less work than it
+used to, and the unconsumed answers are the only evidence.
+
+Pin recordings as fixtures: record once, replay against every build.
 
 ## Non-regression testing
 
@@ -371,6 +484,26 @@ Semantics to hold on to:
   needs (e.g. `call.rand().idx = [0]` after shrinking a sampled collection), or record a
   closer execution. Chain reads are matched by *shape* (`collection.where.stream`), so one
   collection's recorded rows can never answer a different collection's query.
+
+## Where the languages differ, and why
+
+Not preferences — consequences. Each difference is forced by the language it lives in.
+
+| | Python | Node |
+|---|---|---|
+| **Boundary** | module functions, patched in place | the objects the app *holds*. An ES module namespace is immutable, so there is nothing to patch |
+| **Randomness on the tape** | `sample` — the *positions* drawn, so a mutated population still replays | `bytes` / `float` / `int` — the draw **is** the value; there is no population to index into |
+| **Nothing** | one (`None`) | two. `undefined` is not `null` — a key present-and-undefined is not a key that is absent — so it carries a `__undef__` marker. Python revives it as `None` and never emits it |
+| **The sink** | hand the bytes to a queue; a blocking publish stalls the loop | hand the promise to the host (`waitUntil`). A host that freezes at response time *loses* a fire-and-forget publish |
+| **Variable-level tracing** | `sys.settrace` gives every local on every executed line, for free | **not available.** Node has no equivalent; it would need the V8 Inspector or a source transform |
+
+That last row is the one that matters when choosing: the trace is what turns *"what was
+`level` when it went wrong?"* into a lookup rather than an inference. In Node, a tape gives you
+the boundary — every answer the world gave, replayed against the real code — but not yet the
+interior.
+
+Everything *downstream* of the tape is language-neutral, because it consumes the tape:
+invariants, mutation, and pinned-recording suites work on a recording from either.
 
 ## What it can and cannot see
 

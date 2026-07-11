@@ -1,9 +1,8 @@
-// flight-recorder — Node port.
+// flight-recorder — record at the nondeterminism boundary, replay against the real code.
 //
-// Stage 1: record at the nondeterminism boundary, emitting tape format v1 (spec/tape-v1.md),
-// the same format the Python recorder writes. Replay, invariants and mutation consume the
-// tape; only replay must be native, because replaying JavaScript means re-running
-// JavaScript.
+// Emits tape format v1 (spec/tape-v1.md), the format both implementations share. Invariants
+// and mutation consume the tape; only record and replay are language-bound, because replaying
+// JavaScript means re-running JavaScript.
 //
 //   import * as fr from '@xag/flight-recorder';
 //

@@ -486,3 +486,57 @@ test('naming a tape does not put a rand event on it', async () => {
   assert.deepEqual(call.events, [], 'a call that asks nothing records nothing');
   assert.ok(report.ok);
 });
+
+// --- the sink must never be able to hurt the app -------------------------------------------
+
+test('defer takes publishing off the critical path — the call returns before the sink lands', async () => {
+  // Publishing is telemetry, and telemetry must not sit between a user and their response.
+  // A host that offers waitUntil will keep the instance alive for it; the app should not wait.
+  let landed = false;
+  const sink = {
+    async publish() {
+      await new Promise((r) => setTimeout(r, 60));
+      landed = true;
+    },
+  };
+
+  const pending = [];
+  const defer = (p) => pending.push(p); // stands in for waitUntil
+
+  fr.install(fr.boundaryOf({}), { directory: null, sink, defer });
+  await fr.tool('t', async () => ({ ok: 1 }))({});
+
+  assert.equal(landed, false, 'the call did NOT wait for the sink');
+
+  await Promise.all(pending); // …and the host kept it alive
+  assert.equal(landed, true, 'and the tape still landed');
+  fr.uninstall();
+});
+
+test('without defer the publish is awaited — a lost tape is worse than a slow response', async () => {
+  let landed = false;
+  const sink = { async publish() { await new Promise((r) => setTimeout(r, 20)); landed = true; } };
+
+  fr.install(fr.boundaryOf({}), { directory: null, sink });
+  await fr.tool('t', async () => ({ ok: 1 }))({});
+
+  assert.equal(landed, true, 'on a host that freezes at response time, awaiting is the only honest fallback');
+  fr.uninstall();
+});
+
+test('a sink that HANGS cannot hold the request open', async () => {
+  // The sharp one. A throwing sink was always swallowed; a hanging sink used to block until the
+  // platform killed the function — a slow Redis becoming a slow site. A recorder that can take
+  // the app down with it has failed at its first duty, which is to be ignorable.
+  const sink = { publish: () => new Promise(() => {}) }; // never settles. ever.
+
+  fr.install(fr.boundaryOf({}), { directory: null, sink, sinkTimeoutMs: 50 });
+
+  const t0 = performance.now();
+  const out = await fr.tool('t', async () => ({ ok: true }))({});
+  const elapsed = performance.now() - t0;
+  fr.uninstall();
+
+  assert.deepEqual(out, { ok: true }, 'the app got its answer');
+  assert.ok(elapsed < 1000, `and it did not wait for a sink that never answers (${Math.round(elapsed)}ms)`);
+});

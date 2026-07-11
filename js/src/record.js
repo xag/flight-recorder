@@ -1,20 +1,18 @@
-// Recording — the Node half. Emits tape format v1 (see spec/tape-v1.md).
+// Recording. Emits tape format v1 (see spec/tape-v1.md).
 //
-// HOW THIS DIFFERS FROM THE PYTHON RECORDER, AND WHY
+// WHY THE BOUNDARY IS DECLARED BY WRAPPING
 //
-// Python declares its boundary by naming module functions, and patches them with setattr.
-// That is not available here: an ES module's namespace is immutable, so
-// `import * as fx from './effects.js'; fx.fetch = wrapped` throws. There is no way to
-// reach behind an ESM import and swap what a caller already bound.
+// An ES module's namespace is immutable: `import * as fx from './effects.js'; fx.fetch = w`
+// throws. There is no way to reach behind an import and swap what a caller already bound, so
+// a boundary cannot be declared by naming module functions.
 //
-// So the boundary in JS is declared by *wrapping the objects the app holds*: the app asks
-// for a recorded client and uses that. This is not mocking and not duplication — `wrap()`
-// returns a transparent Proxy that forwards every call to the real thing and records what
-// came back. The cardinal rule survives intact: nothing here evaluates a query,
-// reimplements a client, or knows what any value means. It knows names.
+// It is declared by wrapping the objects the app HOLDS. `wrap()` returns a transparent Proxy
+// that forwards every call to the real thing and records what came back — not a mock, not a
+// duplicate. The cardinal rule holds: nothing here evaluates a query, reimplements a client,
+// or knows what any value means. It knows names.
 //
-// The exception is genuinely global state — the clock and the RNG — which is patched on
-// the global object, because there the app holds nothing to wrap.
+// The exception is genuinely global state — the clock and the RNG — which is patched on the
+// global object, because there the app holds nothing to wrap.
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import crypto from 'node:crypto';
@@ -70,6 +68,7 @@ const insideEffect = new AsyncLocalStorage();
 let recorder = null;
 let boundary = null;
 let gate = null;
+let deferrer = null;
 const patches = []; // [target, key, original]
 
 function emit(ev) {
@@ -101,9 +100,10 @@ class Recorder {
    * @param {object} b               the boundary
    * @param {{publish(name: string, text: string): unknown}|null} sink
    */
-  constructor(directory, b, sink = null) {
+  constructor(directory, b, sink = null, sinkTimeoutMs = 3000) {
     this.dir = directory;
     this.sink = sink;
+    this.sinkTimeoutMs = sinkTimeoutMs;
     this.seq = 0;
 
     // A UNIQUE name, and the entropy is not decoration.
@@ -111,8 +111,7 @@ class Recorder {
     // Timestamp-to-the-second plus pid looks unique and is not: serverless instances are
     // separate containers that happily reuse low pids (4 is common) and start within the same
     // second. Two functions of the same app then choose the SAME name, and a sink that stores
-    // by name has one tape silently overwrite the other. Found in production, where the
-    // moderator's tape was clobbered by the web form's.
+    // by name has one tape silently overwrite the other.
     //
     // realRandomBytes, not the shim: naming a tape is not the app asking the world for dice.
     // A shimmed draw here would write a rand event nobody asked for, and consume one on replay.
@@ -150,22 +149,49 @@ class Recorder {
   }
 
   /**
-   * Hand the session to the sink. AWAITED, unlike Python's, and that inversion is the whole
-   * point of an off-box sink on serverless: the instant the response is sent the instance is
-   * frozen or destroyed, so a fire-and-forget publish is not slow — it is *lost*. The cost is
-   * that recording adds the sink's latency to the recorded call, which is what `gate` is for.
+   * Hand the session to the sink.
    *
-   * Best-effort: a sink that throws must never be the reason a call fails.
+   * OFF THE CRITICAL PATH, WHEREVER THE HOST ALLOWS IT.
+   *
+   * Publishing is telemetry, and telemetry must not sit between the user and their response.
+   * But on a host that freezes an instance the moment the response goes out, a publish left
+   * in flight is not merely late — it is lost.
+   *
+   * Both are true, and the resolution is not to pick one. It is `defer`: a host hook
+   * (`waitUntil` on Vercel and Cloudflare, `ctx.waitUntil` in a Worker, the AWS extension API)
+   * that says *keep this instance alive until this promise settles*. Given one, the response
+   * goes out immediately and the tape still lands. Given none, awaiting is the only honest
+   * fallback — a slower response beats a lost recording.
+   *
+   * Either way there is a TIMEOUT. A sink that throws was always swallowed; a sink that HANGS
+   * used to hold the request open until the platform killed the function. A recorder that can
+   * take the site down with it has failed at its first duty, which is to be ignorable.
    */
-  async flush() {
-    if (!this.sink) return;
-    try {
-      // Inside the suppression context: the sink's own client asks the clock and the dice
-      // like any other, and none of that is the app asking the world anything.
-      await insideEffect.run(true, () => this.sink.publish(this.name, this.text));
-    } catch (e) {
-      console.warn('flight-recorder: sink publish failed —', e.message);
-    }
+  flush() {
+    if (!this.sink) return null;
+
+    // Inside the suppression context: the sink's own client asks the clock and the dice like
+    // any other, and none of that is the app asking the world anything.
+    const published = insideEffect.run(true, async () => {
+      try {
+        await this.sink.publish(this.name, this.text);
+      } catch (e) {
+        console.warn('flight-recorder: sink publish failed —', e.message);
+      }
+    });
+
+    let timer;
+    const bounded = Promise.race([
+      published,
+      new Promise((resolve) => {
+        timer = setTimeout(() => {
+          console.warn(`flight-recorder: sink publish exceeded ${this.sinkTimeoutMs}ms — giving up on it`);
+          resolve();
+        }, this.sinkTimeoutMs);
+      }),
+    ]).finally(() => clearTimeout(timer));
+
+    return bounded;
   }
 
   writeCall(fn, kwargs, events, result, error, ms) {
@@ -229,10 +255,14 @@ export function tool(name, fn) {
         // strictly less bad than an app that fell over because we tried.
         try {
           recorder.writeCall(name, args, events, result, error, realPerfNow() - t0);
-          // Awaited inside the call, because on a serverless host the instance is frozen the
-          // moment the response goes out. A publish left in flight is a publish that never
-          // happened.
-          await recorder.flush();
+
+          // Publishing is telemetry: hand it to the host if the host will hold the instance
+          // open for it (waitUntil), and only block on it if it will not. See Recorder.flush.
+          const published = recorder.flush();
+          if (published) {
+            if (deferrer) deferrer(published);
+            else await published;
+          }
         } catch (e) {
           console.warn('flight-recorder: could not write the call —', e.message);
         }
@@ -284,11 +314,10 @@ export function wrap(target, methods, { prefix = '' } = {}) {
         // RESERVE THE EVENT'S SLOT NOW, in the order the question is ASKED — and fill in the
         // answer when it comes back.
         //
-        // Emitting on settlement instead was a real bug, and a quiet one: it records events
-        // in COMPLETION order. Any concurrent fan-out — `Promise.all(ids.map(id => kv.get(id)))`,
-        // which is ordinary code — then produces a tape whose order no replay can reproduce,
-        // because replay asks in issue order. It looked fine on a toy with one call at a time,
-        // and diverged the moment it met a real one.
+        // Emitting on settlement instead would record events in COMPLETION order. Any
+        // concurrent fan-out — `Promise.all(ids.map(id => kv.get(id)))`, which is ordinary code
+        // — would then produce a tape whose order no replay can reproduce, because replay asks
+        // in issue order.
         const buf = active.getStore();
         const slot = recorder && buf ? buf.push(scrub(ev)) - 1 : -1;
         const settle = (patch) => {
@@ -565,15 +594,30 @@ export function boundaryOf(o = {}) {
  */
 export function install(
   b,
-  { directory = '.flight', enabled = true, gate: g = null, sink = null } = {},
+  {
+    directory = '.flight',
+    enabled = true,
+    gate: g = null,
+    sink = null,
+    /**
+     * The host's "keep me alive until this settles" hook — Vercel's and Cloudflare's
+     * `waitUntil`. Given one, publishing leaves the critical path: the response goes out
+     * immediately and the tape still lands. Without one, the publish is awaited, because on a
+     * host that freezes the instance at response time a fire-and-forget publish is lost.
+     */
+    defer = null,
+    /** A sink that hangs must never hold a request open. */
+    sinkTimeoutMs = 3000,
+  } = {},
 ) {
   if (!enabled) return null;
 
   boundary = b;
   gate = g;
+  deferrer = typeof defer === 'function' ? defer : null;
   // `directory: null` records to memory alone — which is what a serverless host wants, since
   // its filesystem dies with the invocation. There, the sink IS the tape.
-  recorder = new Recorder(directory, b, sink);
+  recorder = new Recorder(directory, b, sink, sinkTimeoutMs);
 
   if (b.clock) installClock();
   if (b.random) installRandom();
@@ -586,6 +630,7 @@ export function uninstall() {
   recorder = null;
   boundary = null;
   gate = null;
+  deferrer = null;
 }
 
 /**

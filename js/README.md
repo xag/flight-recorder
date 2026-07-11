@@ -3,10 +3,10 @@
 Record an app's tool calls at their **nondeterminism boundary**; replay them
 deterministically against the real code.
 
-The Node port of [flight-recorder](https://github.com/xag/flight-recorder). It writes the
-**same tape format** as the Python implementation — see
-[`spec/tape-v1.md`](https://github.com/xag/flight-recorder/blob/main/spec/tape-v1.md) — so
-one analysis engine serves both runtimes.
+The Node implementation of [flight-recorder](https://github.com/xag/flight-recorder). It writes
+tape format v1 — see
+[`spec/tape-v1.md`](https://github.com/xag/flight-recorder/blob/main/spec/tape-v1.md) — the same
+format the Python implementation writes, so one analysis serves both.
 
 ## The idea
 
@@ -168,14 +168,17 @@ and never emits it, so the marker costs that runtime nothing and buys this one e
 A call that **raised** records `result: null`, which is not the same as a call that returned
 `undefined`. Both runtimes agree on that.
 
-## Status
+## What is here, and what is not
 
-**Stage 1**: record, replay, divergence detection, tape mutation.
+Record, replay, divergence detection, tape mutation.
 
-Not yet ported: **variable-level tracing** (`sys.settrace` gives Python every local on every
-executed line for free; Node has no equivalent and needs the V8 Inspector or a source
-transform), and the **invariants** and **pytest** integration — which do not need porting,
-because they consume the *tape*, and the tape is shared.
+**Variable-level tracing is not available in Node.** `sys.settrace` hands Python every local on
+every executed line for free; Node has no equivalent, and it would take the V8 Inspector or a
+source transform. A tape gives you the boundary — every answer the world gave, replayed against
+the real code — but not yet the interior.
+
+Invariants and pinned-recording suites are not duplicated here because they do not need to be:
+they consume the *tape*, and the tape is shared.
 
 ## License
 

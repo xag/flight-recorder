@@ -3,7 +3,7 @@
 This is the wire contract of a flight-recorder recording. It is **frozen**: the Python
 recorder emits it, the Node recorder emits it, and one analysis engine reads both.
 
-The point of freezing it before writing a second implementation is that only *record* and
+The point of freezing the format is that only *record* and
 *replay* must be native to a runtime — replay has to re-run the real code, so JavaScript
 must be replayed by JavaScript. But **invariants and mutation consume the tape, and a tape
 is only data.** Freeze the data and the analysis engine is written once, for every runtime.
@@ -218,9 +218,9 @@ mask must scrub to itself.
 
 `ev: "inflight"` (the crash-capture sidecar) and the trace encoding (`__snap__`, `__seq__`,
 `__str__`, `__esc__`) are **reserved in v1** and out of scope for a recorder. A tape reader
-MUST tolerate them. The trace markers belong to variable-level tracing, which the Node port
-does not implement in stage 1 — but they are reserved here so that when it does, it cannot
-choose a conflicting encoding.
+MUST tolerate them. The trace markers belong to variable-level tracing, which Node does not
+have — but they are reserved here so that an implementation adding it cannot choose a
+conflicting encoding.
 
 ## Changing this
 

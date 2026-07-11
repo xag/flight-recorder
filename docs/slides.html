@@ -571,15 +571,16 @@
     <p class="lead">The engine (<span class="mono">flight-recorder</span>, zero dependencies, zero consumer
     knowledge) was extracted at its second consumer and hardened by each next one.</p>
     <div class="table-wrap"><table>
-      <tr><th>App</th><th>Its boundary</th><th>What the port forced</th></tr>
+      <tr><th>App</th><th>Its boundary</th><th>What its boundary demanded</th></tr>
       <tr><td>korean-coach</td><td>Firestore chains · clock · random</td><td>the chain proxy, the shims</td></tr>
       <tr><td>dev-tools</td><td>GitHub + feedback stores (async HTTP)</td><td>async effects, exception revival</td></tr>
       <tr><td>invest</td><td>JSONL journal · market feeds · paper broker</td><td>method effects, secret-free seams</td></tr>
       <tr><td>home</td><td>multi-user files · identity · pandas clock</td><td>registry-level wrapping, loose args</td></tr>
-      <tr><td>reads <span class="mono">(Node)</span></td><td>Redis · outbound mail · HTTP · serverless</td><td>the whole Node port: proxy-wrapped boundaries, an off-box sink, ask-order events</td></tr>
+      <tr><td>reads <span class="mono">(Node)</span></td><td>Redis · outbound mail · HTTP · serverless</td><td>proxy-wrapped boundaries, an off-box sink, ask-order events</td></tr>
     </table></div>
-    <p class="note" style="margin-top:1rem">Each port: one boundary declaration plus whatever membrane
-    shaping the code was owed. Recording runs in production where it matters.</p>
+    <p class="note" style="margin-top:1rem">Each app: one boundary declaration plus whatever membrane
+    shaping the code was owed. Recording runs in production where it matters — including, in the fifth,
+    a serverless host with no filesystem and no shell.</p>
   </section>
 
 
@@ -587,16 +588,16 @@
   <section class="slide">
     <p class="eyebrow">13 · Two runtimes</p>
     <h2>One tape, two languages</h2>
-    <p class="lead">The Node port (<span class="mono">@xag/flight-recorder</span>) writes the <em>same tape</em> as Python.
-    Only <em>record</em> and <em>replay</em> must be native — replaying JavaScript means running JavaScript. Invariants
-    and mutation consume the <em>tape</em>, and a tape is only data: freeze the data and the analysis engine is written once.</p>
+    <p class="lead">Two implementations, <em>one tape</em>. Only <em>record</em> and <em>replay</em> are language-bound —
+    replaying JavaScript means running JavaScript. Invariants and mutation consume the <em>tape</em>, and a tape is only
+    data: freeze the data and the analysis is written once, for every language.</p>
     <div class="table-wrap"><table>
       <tr><th></th><th>Python</th><th>Node</th></tr>
       <tr><td>Boundary</td><td>name module functions, patch with <span class="mono">setattr</span></td><td>wrap the objects the app <em>holds</em> — an ESM namespace is immutable, so there is nothing to patch</td></tr>
       <tr><td>Randomness</td><td><span class="mono">sample</span> — the <em>positions</em> drawn</td><td><span class="mono">bytes</span> / <span class="mono">float</span> / <span class="mono">int</span> — the draw <em>is</em> the value</td></tr>
       <tr><td>Nothing</td><td>one (<span class="mono">None</span>)</td><td>two — <span class="mono">undefined</span> earns its own marker</td></tr>
-      <tr><td>The sink</td><td>must not block the loop</td><td><strong>awaited</strong> — serverless freezes the instant the response leaves, so a publish in flight is <em>lost</em></td></tr>
-      <tr><td>The tracer</td><td><span class="mono">sys.settrace</span>, for free</td><td>not yet — needs the V8 Inspector or a source transform</td></tr>
+      <tr><td>The sink</td><td>hand the bytes to a queue</td><td>hand the promise to the host (<span class="mono">waitUntil</span>) — a host that freezes at response time <em>loses</em> a fire-and-forget publish</td></tr>
+      <tr><td>The tracer</td><td><span class="mono">sys.settrace</span> — every local, every line, free</td><td>no equivalent exists; would need the V8 Inspector</td></tr>
     </table></div>
     <p class="note" style="margin-top:1rem">The format is frozen (<span class="mono">spec/tape-v1.md</span>) and its conformance
     checker is written <em>twice, independently</em>, both runtimes validating both runtimes' fixtures. A disagreement means the
