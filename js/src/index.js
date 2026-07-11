@@ -24,3 +24,5 @@
 export { boundaryOf, install, uninstall, tool, wrap, tapePath, FORMAT_VERSION } from './record.js';
 export { toJsonable, fromJsonable, redactJsonable, REDACTED } from './serial.js';
 export { validateTape, VERSION } from './spec/validate.js';
+export { loadTape, pickCall, replayCall } from './replay.js';
+export { ReplayDivergence, ProbeUnanswerable } from './errors.js';

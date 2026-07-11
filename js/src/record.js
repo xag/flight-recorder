@@ -22,12 +22,24 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { toJsonable, redactJsonable, short } from './serial.js';
+import { ReplayDivergence } from './errors.js';
 
 export const FORMAT_VERSION = 1;
 
 // The per-call event buffer. AsyncLocalStorage is the contextvar equivalent: it follows
 // the call across every await, so concurrent tool calls never interleave their events.
 const active = new AsyncLocalStorage();
+
+/**
+ * The one piece of shared state between recording and replay.
+ *
+ * The SAME wrapped client and the SAME clock/RNG shims serve both modes — that is what
+ * makes replay a resurrection of the original execution rather than a re-enactment of it.
+ * In `record` they ask the world and write down the answer; in `replay` they answer from
+ * the tape and never touch the world at all. The app cannot tell the difference, which is
+ * exactly the point.
+ */
+export const hook = { mode: null, feed: null };
 
 let recorder = null;
 let boundary = null;
@@ -38,6 +50,8 @@ function emit(ev) {
   const buf = active.getStore();
   if (buf) buf.push(scrub(ev));
 }
+
+export { scrub, active, patch };
 
 const PAYLOAD_KEYS = ['args', 'kwargs', 'res', 'result'];
 
@@ -164,6 +178,12 @@ export function wrap(target, methods, { prefix = '' } = {}) {
       }
 
       return function (...args) {
+        // REPLAY: answer from the tape. The real client is never touched — no network, no
+        // database, no waiting for the bug to happen again.
+        if (hook.mode === 'replay') {
+          return hook.feed.answerEffect(tag(propKey), args.map((a) => toJsonable(a)));
+        }
+
         if (!recorder || !active.getStore()) return value.apply(t, args);
 
         const ev = {
@@ -223,19 +243,34 @@ function patch(target, key, replacement) {
   target[key] = replacement;
 }
 
-function installClock() {
+export function installClock() {
   const realNow = Date.now.bind(Date);
   patch(Date, 'now', () => {
+    if (hook.mode === 'replay') return Date.parse(hook.feed.popExpect('now').v);
     const ms = realNow();
     emit({ k: 'now', v: new Date(ms).toISOString() });
     return ms;
   });
 }
 
-function installRandom() {
+export function installRandom() {
   const realBytes = crypto.randomBytes.bind(crypto);
   patch(crypto, 'randomBytes', (n, cb) => {
     if (cb) return realBytes(n, cb); // async form: out of scope, passed straight through
+    if (hook.mode === 'replay') {
+      const ev = hook.feed.popExpect('rand');
+      // The recorded draw must still fit what the code now asks for. Under a MUTATED tape
+      // it may not — and saying so plainly beats handing back a buffer of the wrong length
+      // and letting the divergence surface a thousand lines later as nonsense.
+      const buf = Buffer.from(ev.hex, 'hex');
+      if (buf.length !== n) {
+        throw new ReplayDivergence(
+          `the code asked for ${n} random bytes but the tape holds ${buf.length} ` +
+            `(edit the rand event's n/hex to match)`,
+        );
+      }
+      return buf;
+    }
     const buf = realBytes(n);
     emit({ k: 'rand', m: 'bytes', n, hex: buf.toString('hex') });
     return buf;
@@ -243,6 +278,10 @@ function installRandom() {
 
   const realUuid = crypto.randomUUID.bind(crypto);
   patch(crypto, 'randomUUID', (opts) => {
+    if (hook.mode === 'replay') {
+      const h = hook.feed.popExpect('rand').hex;
+      return [h.slice(0, 8), h.slice(8, 12), h.slice(12, 16), h.slice(16, 20), h.slice(20, 32)].join('-');
+    }
     const uuid = realUuid(opts);
     emit({ k: 'rand', m: 'bytes', n: 16, hex: uuid.replace(/-/g, '') });
     return uuid;
@@ -266,6 +305,10 @@ export function boundaryOf(o = {}) {
     redact: o.redact ?? {},
     clock: o.clock ?? true,
     random: o.random ?? true,
+    // type name -> (args) => Error. Replay must rebuild a recorded error with its real
+    // TYPE, because the code very likely branches on it (catch + instanceof); a generic
+    // Error would take a different branch and quietly stop being the execution on the tape.
+    errorRevivers: o.errorRevivers ?? {},
   };
 }
 
