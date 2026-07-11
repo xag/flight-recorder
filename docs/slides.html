@@ -163,6 +163,11 @@
   .seq .frame-lbl.hot { fill: var(--accent); }
   .seq .frame-lbl.cool { fill: var(--match); }
   .seq .match-t { fill: var(--match); font-weight: 700; }
+  .seq .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+  .seq .box.ghost { stroke-dasharray: 5 4; }
+  .seq .eq { font: 650 17px "Cascadia Code", Consolas, ui-monospace, monospace; fill: var(--muted); text-anchor: middle; }
+  .seq .sub.hot { fill: var(--accent); }
+  .seq .sub.cool { fill: var(--match); }
 
   /* trace-strip progress + controls */
   .strip {
@@ -238,15 +243,45 @@
     <p class="lead">Physical systems can be simulated without being built because they run on physics:
     <strong>laws + state + boundary conditions ⇒ the whole trajectory is derivable.</strong>
     You never store the field at every point — you recompute it.</p>
-    <p>Software has the same structure. The laws are the runtime's transition function.
-    The boundary conditions are the <strong>nondeterministic inputs</strong> — everything the code
-    cannot derive by itself:</p>
-    <ul class="tight">
-      <li>storage results <span class="note">(what the database answered)</span></li>
-      <li>network responses <span class="note">(what the API returned)</span></li>
-      <li>the clock, the dice <span class="note">(what time it was, what fell)</span></li>
-      <li>caller identity <span class="note">(who asked)</span></li>
-    </ul>
+    <p>Software has the same structure, term for term:</p>
+    <svg class="seq" viewBox="0 0 960 310" role="img"
+         aria-label="Term-for-term mapping between physics and code: the laws correspond to the code plus the runtime, already in git; the initial state to the call's arguments, recorded; the boundary conditions to storage, network, clock, dice and caller, recorded; the trajectory to every variable at every step, recomputed on demand and never stored.">
+      <g class="head">
+        <rect x="150" y="18" width="150" height="34" rx="7"/><text x="225" y="40">PHYSICS</text>
+        <rect x="640" y="18" width="150" height="34" rx="7"/><text x="715" y="40">CODE</text>
+      </g>
+      <rect class="box" x="70" y="74" width="310" height="46" rx="8"/>
+      <text class="lbl" x="225" y="93">the laws</text>
+      <text class="sub" x="225" y="110">how any state evolves</text>
+      <text class="eq" x="460" y="103">≡</text>
+      <rect class="box" x="540" y="74" width="350" height="46" rx="8"/>
+      <text class="lbl" x="715" y="93">the code + the runtime</text>
+      <text class="sub" x="715" y="110">in git — already yours</text>
+
+      <rect class="box" x="70" y="132" width="310" height="46" rx="8"/>
+      <text class="lbl" x="225" y="151">the initial state</text>
+      <text class="sub" x="225" y="168">the system at t₀</text>
+      <text class="eq" x="460" y="161">≡</text>
+      <rect class="box" x="540" y="132" width="350" height="46" rx="8"/>
+      <text class="lbl" x="715" y="151">the call's arguments</text>
+      <text class="sub hot" x="715" y="168">recorded</text>
+
+      <rect class="box" x="70" y="190" width="310" height="46" rx="8"/>
+      <text class="lbl" x="225" y="209">the boundary conditions</text>
+      <text class="sub" x="225" y="226">what crosses the edge</text>
+      <text class="eq" x="460" y="219">≡</text>
+      <rect class="box" x="540" y="190" width="350" height="46" rx="8"/>
+      <text class="lbl" x="715" y="209">storage · network · clock · dice · caller</text>
+      <text class="sub hot" x="715" y="226">recorded</text>
+
+      <rect class="box ghost" x="70" y="248" width="310" height="46" rx="8"/>
+      <text class="lbl" x="225" y="267">the trajectory</text>
+      <text class="sub" x="225" y="284">the field at every point</text>
+      <text class="eq" x="460" y="277">≡</text>
+      <rect class="box ghost" x="540" y="248" width="350" height="46" rx="8"/>
+      <text class="lbl" x="715" y="267">every variable, every step</text>
+      <text class="sub cool" x="715" y="284">recomputed on demand — never stored</text>
+    </svg>
     <blockquote>Record only the boundary — the entire execution becomes reconstructible on demand.</blockquote>
   </section>
 
