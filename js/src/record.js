@@ -42,19 +42,17 @@ const active = new AsyncLocalStorage();
  * The SAME wrapped client and the SAME clock/RNG shims serve both modes — that is what
  * makes replay a resurrection of the original execution rather than a re-enactment of it.
  * In `record` they ask the world and write down the answer; in `replay` they answer from
- * the tape and never touch the world at all. The app cannot tell the difference, which is
- * exactly the point.
+ * the tape and never touch the world at all. The app cannot tell the difference.
  */
 export const hook = { mode: null, feed: null };
 
 /**
  * True while a wrapped effect is running the REAL client.
  *
- * Everything behind a door is behind the door. A store client calls `performance.now()` for
- * its own timing, an HTTP client calls `Math.random()` for a jitter, a mailer calls
- * `Date.now()` for a message id — and none of that is the *app* asking the world anything.
- * It is the world's own machinery, on the far side of a boundary whose answer we are already
- * writing down.
+ * A store client calls `performance.now()` for its own timing, an HTTP client calls
+ * `Math.random()` for a jitter, a mailer calls `Date.now()` for a message id. None of that is
+ * the app asking the world anything: it is the world's own machinery, on the far side of a
+ * boundary whose answer is already being written down.
  *
  * Recording it would be worse than noisy: on replay the real client never runs, so it never
  * asks, and the tape's answers to questions nobody asked sit there unconsumed — surfacing as
@@ -165,8 +163,7 @@ class Recorder {
    *
    * Either way there is a TIMEOUT. A sink that throws is swallowed; a sink that HANGS would
    * otherwise hold the request open until the platform killed the function, turning a slow store
-   * into a slow site. A recorder that can take the app down with it has failed at its first duty,
-   * which is to be ignorable.
+   * into a slow site.
    */
   flush() {
     if (!this.sink) return null;
@@ -378,9 +375,8 @@ function patch(target, key, replacement) {
  * Shim BOTH ways of asking the wall clock: `Date.now()` and `new Date()`.
  *
  * Shimming only `Date.now()` would be a trap. Code that reaches for `new Date()` — which is
- * most code — would re-roll the clock on replay, silently, and the resulting divergence
- * would point at a value rather than at the door it came through. A door you half-close is
- * worse than one you leave open, because it looks shut.
+ * most code — would re-roll the clock on replay, silently, and the resulting divergence would
+ * point at a value rather than at the door it came through.
  *
  * `new Date(...)` WITH arguments is deterministic and passes straight through: it is
  * arithmetic, not a question to the world.
@@ -407,9 +403,8 @@ export function installClock() {
 
     /**
      * Without this, replacing the global Date breaks `instanceof` for every Date created by
-     * code holding a reference to the original — including this library's own. A shim that
-     * corrupts type checks in the app it is observing has failed at its one job: to be
-     * invisible.
+     * code holding a reference to the original — including this library's own — so type checks
+     * in the observed app would start failing.
      */
     static [Symbol.hasInstance](x) {
       return x instanceof RealDate;

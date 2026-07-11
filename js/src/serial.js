@@ -104,19 +104,23 @@ export function fromJsonable(v) {
 /**
  * Redact a jsonable tree: `rules` by FIELD NAME, `scrub` by VALUE.
  *
- * Field rules assume secrets live in named fields. Often they do not. An address handed to
- * a store as a positional argument (`sismember('allowlist', addr)`), or baked into a key
- * (`user:${addr}`), or sitting in the middle of a sentence in an email body, has no field
- * name to match — and walks onto the tape untouched while a tidily-masked copy of itself
- * sits in the next field along. `scrub` sweeps every string wherever it sits, which is the
- * only thing that catches those.
+ * Field rules assume a secret lives in a named field. Often it does not. A value passed
+ * POSITIONALLY has no field name to match; nor does one interpolated into a key
+ * (`user:${id}`) or sitting mid-sentence in a body of prose. Any of those walks onto the
+ * tape untouched while a tidily-masked copy of itself sits in the next field along. `scrub`
+ * sweeps every string wherever it sits, which is the only thing that catches them.
  *
- * It also fixes something field rules cannot: **redacting an INPUT poisons everything
- * derived from it.** Mask the `email` kwarg and the recording holds a key derived from the
- * RAW address, while replay — handed the mask — derives a key from the MASK. Different
- * question, spurious divergence. A substring-level scrub is consistent under derivation:
- * `user:${addr}` scrubs to the same thing the replayed code builds out of the scrubbed
- * `addr`. That is what makes a pseudonymised recording replayable at all.
+ * It also reaches something field rules cannot: **redacting an INPUT poisons everything
+ * derived from it.** Mask an identifier and the recording holds a key built from the RAW
+ * value, while replay — handed the mask — builds one from the MASK. Different question,
+ * spurious divergence. A substring sweep is consistent under derivation: `user:${id}` scrubs
+ * to exactly what the replayed code builds out of the scrubbed `id`. That is what makes a
+ * pseudonymised recording replayable at all.
+ *
+ * It is NOT consistent under decryption. If the code recovers a value by decrypting stored
+ * ciphertext, no sweep can reach it, and masking either side makes the replayed code take a
+ * branch it never took — the recording then reproduces an execution that never happened.
+ * Some values have to stay on the tape, and the tape treated accordingly.
  *
  * A rule or scrub that throws degrades to REDACTED: the failure direction is "masked", never
  * "leaked" and never "broke the recorded call".

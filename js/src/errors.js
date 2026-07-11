@@ -1,10 +1,9 @@
 /**
  * The code asked the world a different question than the tape holds an answer to.
  *
- * This is the most useful failure the library can produce, and it is not an error in the
- * ordinary sense: it is the precise point at which the code's behaviour changed. A tape is
- * a complete record of one execution, so a replay that diverges from it has, by definition,
- * stopped being that execution — and it says exactly where.
+ * Not an error in the ordinary sense: it is the precise point at which the code's behaviour
+ * changed. A tape is a complete record of one execution, so a replay that diverges from it has,
+ * by definition, stopped being that execution — and this says exactly where.
  */
 export class ReplayDivergence extends Error {
   constructor(message) {

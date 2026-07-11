@@ -267,7 +267,7 @@ nothing to wrap.</p>
 <pre data-lang="py"><code>fr.install(BOUNDARY, tools_core, directory="flight",
            enabled=bool(os.getenv("MYAPP_FLIGHT_RECORDER")))</code></pre>
 
-<pre data-lang="js"><code>export const submit = fr.tool('submit_article', submitImpl);   // the call boundary
+<pre data-lang="js"><code>export const study = fr.tool('study_status', studyStatus);   // the call boundary
 
 fr.install(BOUNDARY, {
   directory: '.flight',
@@ -288,7 +288,7 @@ no env flip, no redeploy.</p>
 fr.install(BOUNDARY, tools_core, directory="flight",
            enabled=lambda tool, kwargs: kwargs.get("email") == RECORDING_FOR.get())</code></pre>
 
-<pre data-lang="js"><code>const WRITES = new Set(['submit_article', 'edit_submission', 'remove_submission']);
+<pre data-lang="js"><code>const WRITES = new Set(['set_level', 'record_answer']);
 
 fr.install(BOUNDARY, {
   directory: '.flight',
@@ -415,8 +415,8 @@ $ python -m app.replay flight/&lt;session&gt;.jsonl --call 2     # replay + full
 $ python -m app.replay ... --call 2 --watch level,total    # variable timeline</code></pre>
 
 <pre data-lang="js"><code>const tape   = fr.loadTape('.flight/flight-….jsonl');
-const call   = fr.pickCall(tape, { fn: 'submit_article' });
-const report = await fr.replayCall({ call, fn: submitImpl, boundary: BOUNDARY });
+const call   = fr.pickCall(tape, { fn: 'study_status' });
+const report = await fr.replayCall({ call, fn: studyStatus, boundary: BOUNDARY });
 
 report.ok           // result and error both reproduce the recording
 report.divergence   // …or the exact point where behaviour changed</code></pre>
@@ -480,9 +480,9 @@ tests/recordings/login-bug.jsonl::call1::fetch_profile FAILED</code></pre>
 <pre data-lang="js"><code>import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-test('the pinned submission still behaves', async () =&gt; {
-  const call   = fr.pickCall(fr.loadTape('tests/recordings/submit.jsonl'), { fn: 'submit_article' });
-  const report = await fr.replayCall({ call, fn: submitImpl, boundary: BOUNDARY });
+test('the pinned session still behaves', async () =&gt; {
+  const call   = fr.pickCall(fr.loadTape('tests/recordings/status.jsonl'), { fn: 'study_status' });
+  const report = await fr.replayCall({ call, fn: studyStatus, boundary: BOUNDARY });
 
   assert.equal(report.divergence, null, report.divergence?.message);
   assert.ok(report.ok);
@@ -559,7 +559,7 @@ recorder, both run against the same fixtures, each language validating the other
 means the tape has forked, which is the one failure the arrangement exists to prevent.</p>
 
 <pre><code>{"ev":"session","version":1,"node":"24.0.0","constants":{…}}
-{"ev":"call","seq":1,"fn":"submit_article","kwargs":{…},
+{"ev":"call","seq":1,"fn":"study_status","kwargs":{…},
  "events":[{"k":"fx","fn":"kv.get","args":["u1"],"res":{…}},
            {"k":"rand","m":"bytes","n":4,"hex":"9f2c1a70"},
            {"k":"now","v":"2026-07-11T14:01:40.244Z"},

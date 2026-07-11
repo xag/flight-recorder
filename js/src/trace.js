@@ -5,9 +5,8 @@
 // the V8 Inspector, which is where a debugger gets the same information, and that is enough.
 //
 // The mechanics and their sharp edge live in trace.worker.js. What matters here: tracing is for
-// REPLAY. It pauses the isolate on every traced line, which costs milliseconds per line — fine
-// when you are resurrecting one recorded execution to find out what it did, unthinkable in a
-// request path. Recording stays cheap; understanding is where you spend.
+// REPLAY. It pauses the isolate on every traced line, costing milliseconds per line — acceptable
+// when resurrecting one recorded execution to find out what it did, never in a request path.
 
 import { Worker } from 'node:worker_threads';
 import path from 'node:path';
@@ -31,10 +30,10 @@ export class Trace {
   }
 
   /**
-   * The timeline of one variable — every value it ever held, in order, with where.
+   * The timeline of one variable: every value it held, in order, and where.
    *
-   * This is the query the whole apparatus exists to answer. A self-consistent output tells you
-   * nothing about the internal value that produced it; the timeline tells you everything.
+   * An output can be entirely self-consistent and still be produced by a wrong internal value.
+   * That value is only visible here.
    */
   values(name) {
     const out = [];

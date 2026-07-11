@@ -8,15 +8,15 @@
 //
 //   // 1. Name the doors. The one app-specific artifact.
 //   export const BOUNDARY = fr.boundaryOf({
-//     redact: { token: null, password: null, encSender: null },
+//     redact: { token: null, password: null },
 //     constants: { 'config.LIMIT': LIMIT },
 //   });
 //
 //   // 2. Wrap what the app holds. A transparent proxy — never a mock.
-//   const redis = fr.wrap(new Redis({ url, token }), ['get', 'set', 'hgetall'], { prefix: 'kv' });
+//   export const store = fr.wrap(storeClient, ['read', 'write'], { prefix: 'store' });
 //
 //   // 3. Wrap the tools. One recorded line per call; that line IS the execution.
-//   export const submit = fr.tool('submit_article', submitImpl);
+//   export const doThing = fr.tool('do_thing', doThingImpl);
 //
 //   fr.install(BOUNDARY, { directory: '.flight', enabled: process.env.FLIGHT === '1' });
 
