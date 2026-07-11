@@ -5,3 +5,6 @@ __pycache__/
 dist/
 
 image.png
+
+# never commit a registry credential
+.npmrc

@@ -1,9 +1,30 @@
 {
   "name": "@xag/flight-recorder",
   "version": "0.1.0",
-  "description": "Record an app's tool calls at their nondeterminism boundary; replay them deterministically. Node port — tape format v1, shared with the Python implementation.",
+  "description": "Record an app's tool calls at their nondeterminism boundary; replay them deterministically against the real code. Node port — tape format v1, shared with the Python implementation.",
   "type": "module",
   "license": "MIT",
+  "author": "Xavier Grehant",
+  "homepage": "https://github.com/xag/flight-recorder#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xag/flight-recorder.git",
+    "directory": "js"
+  },
+  "bugs": {
+    "url": "https://github.com/xag/flight-recorder/issues"
+  },
+  "keywords": [
+    "record",
+    "replay",
+    "deterministic",
+    "testing",
+    "debugging",
+    "simulation",
+    "observability",
+    "nondeterminism",
+    "regression"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -12,9 +33,14 @@
     "./spec": "./src/spec/validate.js"
   },
   "files": [
-    "src"
+    "src",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "test": "node --test"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
