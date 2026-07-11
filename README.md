@@ -5,8 +5,7 @@
 Record an app's tool calls at their **nondeterminism boundary**; replay them
 deterministically with **every internal variable observable**.
 
-**[The slides — Testing as Simulation](https://xag.github.io/flight-recorder/slides.html)**
-([source](docs/slides.html)): the approach and the philosophy in fifteen slides, with the
+**[The slides — Testing as Simulation](https://xag.github.io/flight-recorder/slides.html)**: the approach and the philosophy in fifteen slides, with the
 production case study that shaped it.
 
 A program's execution is fully determined by its code plus its nondeterministic inputs —
