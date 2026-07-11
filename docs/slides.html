@@ -145,9 +145,27 @@
   td:first-child { font-family: "Cascadia Code", Consolas, ui-monospace, monospace; white-space: nowrap; }
   .table-wrap { overflow-x: auto; }
 
-  /* nowrap: a URL split across a line break reads as a typo, not a link. */
-  .slide a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; white-space: nowrap; }
-  .slide a:hover { border-bottom-color: currentColor; }
+  /* Deck chrome: one discreet way out, on every slide. Absolute inside .deck (which is
+     position: relative) and never fixed — a fixed element anchors to the layout viewport, so a
+     pinch-zoom strands it outside what you are looking at, and with body overflow hidden there is
+     no scroll to bring it back. Same reason the strip is in normal flow.
+     Top-RIGHT: the eyebrow and the title are left-aligned, so nothing collides. */
+  .deck-links {
+    position: absolute; z-index: 5; margin: 0;
+    top: clamp(1.2rem, 4vw, 4rem); right: clamp(1.2rem, 7vw, 7rem);
+    font: .75rem/1 "Cascadia Code", Consolas, ui-monospace, monospace;
+    letter-spacing: .06em; color: var(--muted);
+  }
+  .deck-links a {
+    color: var(--muted); text-decoration: none; white-space: nowrap;
+    border-bottom: 1px solid transparent;
+  }
+  .deck-links a:hover { color: var(--accent); border-bottom-color: currentColor; }
+  /* The cover's title-mark is a full-width orange band across that same line — the links would
+     land on top of it. The cover carries the repo URL in its byline anyway. */
+  .deck.on-cover .deck-links { display: none; }
+  /* On a phone the deck is one column of content; chrome in the corner is just clutter. */
+  @media (max-width: 640px) { .deck-links { display: none; } }
 
   .verdict {
     display: inline-block; font-family: "Cascadia Code", Consolas, ui-monospace, monospace;
@@ -240,7 +258,12 @@
 </head>
 <body>
 
-<div class="deck" id="deck">
+<div class="deck on-cover" id="deck">
+
+  <p class="deck-links">
+    <a href="https://xag.github.io/flight-recorder/">docs</a> ·
+    <a href="https://github.com/xag/flight-recorder">github</a>
+  </p>
 
   <!-- 1 · title -->
   <section class="slide">
@@ -249,9 +272,7 @@
     <p class="kicker lead">Record every tool call at its <strong>nondeterminism boundary</strong>.
     Replay it later, deterministically, with <strong>every internal variable observable</strong>.
     A testing approach — and the philosophy it fell out of.</p>
-    <p class="note mono" style="margin-top:2rem">poietic.studio · july 2026 ·
-    <a href="https://xag.github.io/flight-recorder/">docs</a> ·
-    <a href="https://github.com/xag/flight-recorder">github.com/xag/flight-recorder</a></p>
+    <p class="note mono" style="margin-top:2rem">poietic.studio · july 2026 · github.com/xag/flight-recorder</p>
   </section>
 
   <!-- 2 · the problem -->
@@ -643,9 +664,7 @@
     <h2 style="max-width:22ch">No claim about behavior without a place to look it up</h2>
     <p class="lead">The instruments exist so that a claim is a trace line, a log line, or a measurement —
     never a plausible story. That rule, applied in every repo, is worth more than any of the code.</p>
-    <p class="note mono" style="margin-top:2.2rem">
-    <a href="https://xag.github.io/flight-recorder/">docs</a> ·
-    <a href="https://github.com/xag/flight-recorder">github.com/xag/flight-recorder</a> ·
+    <p class="note mono" style="margin-top:2.2rem">github.com/xag/flight-recorder ·
     record → pin → fix → replay-diff · <span class="verdict ok">MATCH</span></p>
   </section>
 
@@ -661,6 +680,7 @@
 
 <script>
   const slides = [...document.querySelectorAll('.slide')];
+  const deck = document.getElementById('deck');
   const segs = document.getElementById('segs');
   const counter = document.getElementById('counter');
   let cur = 0;
@@ -677,6 +697,8 @@
     [...segs.children].forEach((s, j) => s.classList.toggle('done', j <= cur));
     counter.textContent = String(cur + 1).padStart(2, '0') + ' / ' + String(slides.length).padStart(2, '0');
     slides[cur].scrollTop = 0;
+    // The cover's title-mark is a full-width band across the top; the links would sit on it.
+    deck.classList.toggle('on-cover', cur === 0);
   }
   document.getElementById('prev').addEventListener('click', () => go(cur - 1));
   document.getElementById('next').addEventListener('click', () => go(cur + 1));
