@@ -2,13 +2,9 @@
 
 [![tests](https://github.com/xag/flight-recorder/actions/workflows/test.yml/badge.svg)](https://github.com/xag/flight-recorder/actions/workflows/test.yml)
 
-An AI can write the code, but it cannot watch it run: with no instruments it reads the source and
-theorises, and a human stays in the loop to run the app, reproduce the bug and re-run every
-scenario after each fix.
-
-flight-recorder is the missing instrument. It records what the database, the API and the clock
-answered while your app handled a request, so the request can be replayed against the real code
-with every variable readable.
+flight-recorder lets an AI diagnose and fix your app's bugs itself. It records what the database,
+the API and the clock answered while your app handled a request, so that request replays against
+the real code with every variable readable.
 
 ## → [Documentation](https://xag.github.io/flight-recorder/)
 
