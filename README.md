@@ -6,7 +6,7 @@ flight-recorder pushes the heavy lifting from human to AI, and from AI to code.
 
 As AI takes on most of the development, scenario testing and debugging become the bottleneck, and
 the work left to the human is the tedious kind. Not anymore: flight-recorder gives the AI the
-missing instruments. It records every answer your code got from the outside world while handling a
+missing instruments. It records the answers your code got from the outside world while handling a
 request, so the agent can re-run that exact request against the real code and watch any variable
 as the bug happens.
 
