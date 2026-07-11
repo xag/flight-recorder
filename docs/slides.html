@@ -140,17 +140,22 @@
   .verdict.ok { color: var(--match); border: 1px solid var(--match); }
   .verdict.div { color: var(--accent); border: 1px solid var(--accent); }
 
-  /* sequence diagrams (human / ai / code) — same voice as the deck: mono, ink, orange */
+  /* sequence diagrams (human / ai / code) — same voice as the deck: mono, ink, orange
+     Panels and type are tinted from currentColor, never from --panel/--muted directly. A
+     force-darkening browser inverts the page's HTML colors but leaves SVG fill alone, so a
+     solid --panel slab stays light while the ink label on top of it flips to white — the
+     white-on-white boxes of #14. Derived from currentColor, the slab and its label invert
+     together (or not at all), and the contrast holds either way. */
   .seq { width: 100%; max-width: 920px; height: auto; display: block; margin: 1rem auto 0; color: var(--ink); flex-shrink: 0; }
   .seq .lane { stroke: var(--line); stroke-width: 2; stroke-dasharray: 2 7; stroke-linecap: round; }
-  .seq .head rect { fill: var(--panel); stroke: var(--line); }
+  .seq .head rect { fill: currentColor; fill-opacity: .07; stroke: var(--line); }
   .seq .head text {
     font: 650 15px "Cascadia Code", Consolas, ui-monospace, monospace;
     fill: var(--ink); text-anchor: middle; letter-spacing: .18em;
   }
-  .seq .cap { font: 650 12px "Cascadia Code", Consolas, ui-monospace, monospace; fill: var(--muted); text-anchor: middle; letter-spacing: .1em; }
-  .seq .cap.hot { fill: var(--accent); }
-  .seq .cap.cool { fill: var(--match); }
+  .seq .cap { font: 650 12px "Cascadia Code", Consolas, ui-monospace, monospace; fill: currentColor; fill-opacity: .62; text-anchor: middle; letter-spacing: .1em; }
+  .seq .cap.hot { fill: var(--accent); fill-opacity: 1; }
+  .seq .cap.cool { fill: var(--match); fill-opacity: 1; }
   .seq .msg { stroke: var(--ink); stroke-width: 2; fill: none; }
   .seq .ret { stroke: var(--muted); stroke-width: 1.6; stroke-dasharray: 5 5; fill: none; }
   .seq .lbl {
@@ -158,7 +163,7 @@
     fill: var(--ink); text-anchor: middle;
   }
   .seq .lbl.hot { fill: var(--accent); }
-  .seq .sub { font: 11px "Cascadia Code", Consolas, ui-monospace, monospace; fill: var(--muted); text-anchor: middle; }
+  .seq .sub { font: 11px "Cascadia Code", Consolas, ui-monospace, monospace; fill: currentColor; fill-opacity: .62; text-anchor: middle; }
   .seq .lbl-l { text-anchor: start; }
   .seq .lbl-r { text-anchor: end; }
   .seq .act-h { fill: var(--accent-dim); stroke: var(--accent); stroke-width: 1.5; }
@@ -171,11 +176,11 @@
   .seq .frame-lbl.hot { fill: var(--accent); }
   .seq .frame-lbl.cool { fill: var(--match); }
   .seq .match-t { fill: var(--match); font-weight: 700; }
-  .seq .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+  .seq .box { fill: currentColor; fill-opacity: .07; stroke: var(--line); stroke-width: 1.5; }
   .seq .box.ghost { stroke-dasharray: 5 4; }
-  .seq .eq { font: 650 17px "Cascadia Code", Consolas, ui-monospace, monospace; fill: var(--muted); text-anchor: middle; }
-  .seq .sub.hot { fill: var(--accent); }
-  .seq .sub.cool { fill: var(--match); }
+  .seq .eq { font: 650 17px "Cascadia Code", Consolas, ui-monospace, monospace; fill: currentColor; fill-opacity: .62; text-anchor: middle; }
+  .seq .sub.hot { fill: var(--accent); fill-opacity: 1; }
+  .seq .sub.cool { fill: var(--match); fill-opacity: 1; }
 
   /* trace-strip progress + controls */
   .strip {
