@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import { hook, active, installClock, installRandom, patchMark, restoreTo } from './record.js';
 import { toJsonable, fromJsonable, redactJsonable } from './serial.js';
 import { ReplayDivergence, ProbeUnanswerable } from './errors.js';
+import { traced, Trace } from './trace.js';
 
 /** Read a tape. Tolerates a torn final line, which is the only corruption possible. */
 export function loadTape(pathOrText) {
@@ -163,9 +164,13 @@ class Feed {
  * @param {Function} o.fn       the REAL (unwrapped) tool function
  * @param {object} [o.boundary] the boundary — for its redact rules and error revivers
  * @param {boolean} [o.probe]   the tape was mutated: do not compare arguments
+ * @param {(string|RegExp)[]} [o.trace] files to observe from the inside — every local, on every
+ *   executed line. This is the point of replaying at all: a recording tells you what the world
+ *   answered, a trace tells you what the code then believed. Costs a pause per line, so name the
+ *   code you are investigating, not the world.
  * @returns {Promise<object>} a report
  */
-export async function replayCall({ call, fn, boundary = {}, probe = false }) {
+export async function replayCall({ call, fn, boundary = {}, probe = false, trace = null }) {
   const feed = new Feed(call.events ?? [], {
     probe: probe || Boolean(call.probe),
     revivers: boundary.errorRevivers ?? {},
@@ -190,9 +195,20 @@ export async function replayCall({ call, fn, boundary = {}, probe = false }) {
   let error = null;
   let divergence = null;
 
+  let traceOf = new Trace([]);
+
   try {
     // The event buffer is what tells the wrapped client it is inside a call at all.
-    result = await active.run([], () => fn(kwargs));
+    const run = () => active.run([], () => fn(kwargs));
+
+    if (trace) {
+      const t = await traced(run, { include: trace });
+      traceOf = t.trace;
+      if (t.error) throw t.error;
+      result = t.result;
+    } else {
+      result = await run();
+    }
   } catch (e) {
     if (e instanceof ReplayDivergence || e instanceof ProbeUnanswerable) {
       divergence = e;
@@ -206,7 +222,7 @@ export async function replayCall({ call, fn, boundary = {}, probe = false }) {
   }
 
   if (divergence) {
-    return { ok: false, divergence, resultMatch: false, errorMatch: false, unconsumed: feed.events.length - feed.i };
+    return { ok: false, divergence, trace: traceOf, resultMatch: false, errorMatch: false, unconsumed: feed.events.length - feed.i };
   }
 
   // The code asked FEWER questions than the recording holds answers for. That is a
@@ -219,7 +235,7 @@ export async function replayCall({ call, fn, boundary = {}, probe = false }) {
       `the code stopped asking ${unconsumed} question(s) the recording answered — ` +
         `next unconsumed: ${next.k}${next.fn ? ` ${next.fn}` : ''}`,
     );
-    return { ok: false, divergence, resultMatch: false, errorMatch: false, unconsumed };
+    return { ok: false, divergence, trace: traceOf, resultMatch: false, errorMatch: false, unconsumed };
   }
 
   // Mirror the recorder exactly: a call that raised has no return value (null), which is not
@@ -232,6 +248,7 @@ export async function replayCall({ call, fn, boundary = {}, probe = false }) {
     ok: resultMatch && errorMatch,
     result,
     error,
+    trace: traceOf,
     recordedResult: call.result,
     replayedResult,
     resultMatch,

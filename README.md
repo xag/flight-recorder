@@ -55,10 +55,10 @@ The format's conformance checker is written **twice, independently** — neither
 recorder, both run against the same fixtures, each language validating the other's. A disagreement
 means the tape has forked, which is the one failure the arrangement exists to prevent.
 
-One difference is worth knowing before you choose: **variable-level tracing exists only in Python.**
-`sys.settrace` hands it every local on every executed line; Node has no equivalent. A tape gives you
-the *boundary* in both — only Python gives you the *interior*.
-[The rest of the differences, and why each is forced.](https://xag.github.io/flight-recorder/#differ)
+Both give you the *interior* as well as the boundary: **every local, on every executed line** of the
+code you name. Python takes it from `sys.settrace`; Node drives the V8 Inspector from a worker
+thread, which is slower but sees the same thing — including across an `await`.
+[Where the languages differ, and why each difference is forced.](https://xag.github.io/flight-recorder/#differ)
 
 ## License
 

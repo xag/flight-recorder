@@ -434,6 +434,32 @@ look like it worked, which is worse than useless.</p>
   work than it used to, and the unconsumed answers are the only evidence.</li>
 </ul>
 
+<h3>Trace the replay: every local, on every line</h3>
+
+<p>A recording tells you what the <em>world</em> answered. A trace tells you what the <em>code</em>
+then believed. That is what turns <em>"what was <code>level</code> when it went wrong?"</em> into a
+lookup rather than an inference — and it is the whole reason to replay rather than merely diff.</p>
+
+<pre data-lang="py"><code>$ python -m app.replay flight/&lt;session&gt;.jsonl --call 2 --watch level,deck
+
+  tools.py:12   level = 0
+  tools.py:13   deck  = []</code></pre>
+
+<pre data-lang="js"><code>const report = await fr.replayCall({
+  call, fn: studyStatus, boundary: BOUNDARY,
+  trace: ['tools/'],          // the files to observe — not the world; every line costs a pause
+});
+
+report.trace.values('level');  // [{ value: 0, at: 'tools.js:12', fn: 'studyStatus' }]
+report.trace.render('deck');   // a readable timeline</code></pre>
+
+<div class="note" data-lang="js">
+  <p>Node has no <code>sys.settrace</code>, so this drives the <strong>V8 Inspector</strong> from a
+  worker thread — the same mechanism a debugger uses, and it sees across an <code>await</code>. It
+  pauses the isolate on every traced line, costing milliseconds per line: tracing belongs to
+  <em>replay</em>, never to a request path. Recording stays cheap; understanding is where you spend.</p>
+</div>
+
 <h2 id="regression">Pinned recordings</h2>
 
 <p>Record once, replay against every build. <strong>A pinned recording is a regression oracle, not a
@@ -516,14 +542,13 @@ in.</p>
   <tr><td>Randomness</td><td><code>sample</code> — the <em>positions</em> drawn, so a mutated population still replays</td><td><code>bytes</code>/<code>float</code>/<code>int</code> — the draw <em>is</em> the value</td></tr>
   <tr><td>Nothing</td><td>one — <code>None</code></td><td>two — <code>undefined</code> earns its own marker</td></tr>
   <tr><td>The sink</td><td>hand the bytes to a queue</td><td>hand the promise to the host — <code>waitUntil</code></td></tr>
-  <tr><td>Tracing</td><td><code>sys.settrace</code> — every local, every executed line, free</td><td><strong>not available.</strong> No equivalent exists; it would need the V8 Inspector</td></tr>
+  <tr><td>Tracing</td><td><code>sys.settrace</code> — every local, every executed line, free</td><td>the same, via the V8 Inspector from a worker thread — slower, and it sees across an <code>await</code></td></tr>
 </table>
 </div>
 
-<p>That last row is the one that matters when choosing. The trace is what turns <em>"what was
-<code>level</code> when it went wrong?"</em> into a lookup rather than an inference. In Node a tape
-gives you the <strong>boundary</strong> — every answer the world gave, replayed against the real code
-— but not yet the <strong>interior</strong>.</p>
+<p>Nothing in that table is a preference. Node has no <code>sys.settrace</code>, so tracing there
+drives the V8 Inspector from a worker thread — the same mechanism a debugger uses. It costs a pause
+per traced line, which is why tracing belongs to <em>replay</em> and never to a request path.</p>
 
 <h2 id="tape">The tape</h2>
 

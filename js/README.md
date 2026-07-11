@@ -172,13 +172,22 @@ A call that **raised** records `result: null`, which is not the same as a call t
 
 Record, replay, divergence detection, tape mutation.
 
-**Variable-level tracing is not available in Node.** `sys.settrace` hands Python every local on
-every executed line for free; Node has no equivalent, and it would take the V8 Inspector or a
-source transform. A tape gives you the boundary — every answer the world gave, replayed against
-the real code — but not yet the interior.
+**Variable-level tracing works.** Pass `trace` to `replayCall` and you get every local, on every
+executed line, of the files you name — including across an `await`:
 
-Invariants and pinned-recording suites are not duplicated here because they do not need to be:
-they consume the *tape*, and the tape is shared.
+```js
+const report = await fr.replayCall({ call, fn: studyStatus, boundary, trace: ['tools/'] });
+
+report.trace.values('level');   // [{ value: 0, at: 'tools.js:12', fn: 'studyStatus' }]
+report.trace.render('deck');    // a readable timeline
+```
+
+Node has no `sys.settrace`, so this drives the V8 Inspector from a worker thread — the same place a
+debugger gets it. It pauses the isolate on every traced line, which costs milliseconds per line: it
+is for **replay**, never a request path. Recording stays cheap; understanding is where you spend.
+
+Invariants and pinned-recording suites are not duplicated here because they do not need to be: they
+consume the *tape*, and the tape is shared.
 
 ## License
 

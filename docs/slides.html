@@ -23,6 +23,10 @@
     --match: #43b581;
     --code-bg: #0c1013;
     --shadow: 0 18px 50px rgba(0,0,0,.45);
+    /* The head band: the height of whatever sits above a title (the eyebrow, or the cover's
+       title-mark). Both are sized to fill exactly this, so every title in the deck lands on
+       the same line — flip through and the heading never moves. */
+    --band: 3rem;
   }
   @media (prefers-color-scheme: light) {
     :root {
@@ -70,21 +74,25 @@
     padding: clamp(1.2rem, 4vw, 4rem) clamp(1.2rem, 7vw, 7rem) 2rem;
     overflow-y: auto;
   }
-  /* Vertical centering via auto margins, not justify-content: center — a centered flex
-     column that overflows pushes its top into an unreachable scroll region (buried title). */
-  .slide.active { display: flex; flex-direction: column; }
+  /* Content hangs from the top, never centered. Centering (by auto margins or by
+     justify-content) makes a title's position a function of how much content is under it:
+     a short slide floats its heading down the page, a full one pins it to the top, and the
+     title jumps on every keypress. Top-aligned, the title sits at padding + --band on all of
+     them, and an overflowing slide simply scrolls (with justify-content: center it would
+     instead push its top into an unreachable scroll region — a buried title). */
+  .slide.active { display: flex; flex-direction: column; justify-content: flex-start; }
   .slide.active > * { flex-shrink: 0; }   /* never crush content (pre, table, svg) — scroll instead */
-  .slide.active > :first-child { margin-top: auto; }
-  .slide.active > :last-child { margin-bottom: auto; }
   @media (prefers-reduced-motion: no-preference) {
     .slide.active { animation: rise .35s ease-out; }
     @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
   }
 
+  /* Line-height is set in rem, not left to the inherited ratio: the band arithmetic below
+     has to be exact, and a ratio silently re-derives it from the font size. */
   .eyebrow {
     font-family: "Cascadia Code", Consolas, ui-monospace, monospace;
-    font-size: .78rem; letter-spacing: .22em; text-transform: uppercase;
-    color: var(--accent); margin: 0 0 1.1rem;
+    font-size: .78rem; line-height: 1.2rem; letter-spacing: .22em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 calc(var(--band) - 1.2rem);   /* 1.2rem of line = --band */
   }
   h1, h2 {
     font-family: "Cascadia Code", Consolas, ui-monospace, monospace;
@@ -210,11 +218,14 @@
   .hint { color: var(--muted); font-size: .74rem; }
   @media (max-width: 640px) { .hint { display: none; } }
 
+  /* The cover's stand-in for the eyebrow: same band, so the cover's h1 starts on the same
+     line as every h2. Its box is 1.2rem of line + .48rem of padding (.3em at .8rem). */
   .title-mark {
     display: inline-block; background: var(--accent); color: #fff;
     font-family: "Cascadia Code", Consolas, ui-monospace, monospace; font-weight: 700;
-    font-size: .8rem; letter-spacing: .18em; padding: .3em .8em; border-radius: 4px;
-    margin-bottom: 1.6rem;
+    font-size: .8rem; line-height: 1.2rem; letter-spacing: .18em;
+    padding: .3em .8em; border-radius: 4px;
+    margin-bottom: calc(var(--band) - 1.68rem);
   }
   .kicker { color: var(--muted); font-size: 1.05rem; max-width: 58ch; }
   blockquote {
@@ -597,7 +608,7 @@
       <tr><td>Randomness</td><td><span class="mono">sample</span> — the <em>positions</em> drawn</td><td><span class="mono">bytes</span>&thinsp;/&thinsp;<span class="mono">float</span>&thinsp;/&thinsp;<span class="mono">int</span> — the draw <em>is</em> the value</td></tr>
       <tr><td>Nothing</td><td>one — <span class="mono">None</span></td><td>two — <span class="mono">undefined</span> earns a marker</td></tr>
       <tr><td>The sink</td><td>hand the bytes to a queue</td><td>hand the promise to the host — <span class="mono">waitUntil</span></td></tr>
-      <tr><td>The tracer</td><td><span class="mono">sys.settrace</span> — every local, every line</td><td>no equivalent; would need the V8 Inspector</td></tr>
+      <tr><td>The tracer</td><td><span class="mono">sys.settrace</span> — every local, every line</td><td>the V8 Inspector, driven from a worker</td></tr>
     </table></div>
     <p class="note" style="margin-top:1rem">Not preferences — <em>consequences</em>. Every difference is forced by the language.<br>
     The format is frozen (<span class="mono">spec/tape-v1.md</span>) and its checker written <em>twice, independently</em> —
