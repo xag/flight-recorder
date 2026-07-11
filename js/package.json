@@ -1,0 +1,20 @@
+{
+  "name": "@xag/flight-recorder",
+  "version": "0.1.0",
+  "description": "Record an app's tool calls at their nondeterminism boundary; replay them deterministically. Node port — tape format v1, shared with the Python implementation.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./spec": "./src/spec/validate.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test"
+  }
+}
