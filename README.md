@@ -2,14 +2,9 @@
 
 [![tests](https://github.com/xag/flight-recorder/actions/workflows/test.yml/badge.svg)](https://github.com/xag/flight-recorder/actions/workflows/test.yml)
 
-While your app handles a request, flight-recorder writes down what the database, the API, the
-clock and the random number generator answered. Replay that recording and your real code runs the
-request again — same answers, on your machine, no network.
-
-So a bug that happened once, in production, is one you can now re-run as often as you like and
-read variable by variable, instead of reconstructing what must have happened. Keep the recording
-and it doubles as a test: replay it against a later build and you are told where the behaviour
-changed.
+flight-recorder records what the database, the API and the clock answered while your app handled a
+request, so you can replay it on your machine against the real code and read any variable instead
+of guessing what happened.
 
 ## → [Documentation](https://xag.github.io/flight-recorder/)
 
