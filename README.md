@@ -5,7 +5,7 @@
 Record an app's tool calls at their **nondeterminism boundary**; replay them
 deterministically with **every internal variable observable**.
 
-**[The slides — Testing as Simulation](https://xag.github.io/flight-recorder/slides.html)**: the approach and the philosophy in fifteen slides, with the
+**[The slides — Testing as Simulation](https://xag.github.io/flight-recorder/slides.html)**: the approach and the philosophy in sixteen slides, with the
 production case study that shaped it.
 
 A program's execution is fully determined by its code plus its nondeterministic inputs —
@@ -18,6 +18,42 @@ The cardinal rule — for this lib and for every boundary declaration it consume
 **instrument, never duplicate**. Nothing here evaluates a query, reimplements a client, or
 knows what any value means. Recording is a transparent proxy; replay feeds recorded answers
 back and verifies the questions match. The only structural knowledge anywhere is *names*.
+
+## Two runtimes, one tape
+
+| | | |
+|---|---|---|
+| **Python** | this package | `pip install flight-recorder` |
+| **Node** | [`js/`](js/) · [`@xag/flight-recorder`](https://www.npmjs.com/package/@xag/flight-recorder) | `npm install @xag/flight-recorder` |
+
+Both write **the same tape**: format v1, frozen in [`spec/tape-v1.md`](spec/tape-v1.md).
+
+That is the whole architecture, and it is what makes a port small. Only *record* and *replay*
+must be native — replaying JavaScript means re-running JavaScript. But **invariants and
+mutation consume the tape, and a tape is only data.** Freeze the data and the analysis engine
+is written once, for every runtime.
+
+The format's conformance checker is therefore written **twice, independently**
+([`spec/validate.py`](spec/validate.py), [`js/src/spec/validate.js`](js/src/spec/validate.js)),
+neither importing any recorder, both run against the same fixtures — Python validating tapes
+Node produced and vice versa. A disagreement means the tape has forked, which is the one
+failure this arrangement exists to prevent.
+
+### What is genuinely different, and why
+
+|  | Python | Node |
+|---|---|---|
+| **Boundary** | name module functions; patch with `setattr` | wrap the objects the app *holds*. An ESM namespace is immutable — there is no way to reach behind an `import` and swap what a caller already bound, so there is nothing to patch |
+| **Clock / RNG** | `datetime`, `random` shims | globals: `Date.now`, `new Date()`, `performance.now`, `Math.random`, `crypto.randomBytes` (sync *and* callback), `randomUUID`, `randomInt`, `randomFillSync`, `getRandomValues` |
+| **Randomness on the tape** | `m:"sample"` — the *positions* drawn, so a mutated population still replays | `m:"bytes"`/`"float"`/`"int"` — the draw **is** the value; there is no population to index into |
+| **Nothing** | one (`None`) | two. `undefined` is not `null` — a key present-and-undefined is not a key that is absent — so it gets a `__undef__` marker. Python revives it as `None` and never emits it |
+| **The sink** | must not block the event loop | **awaited**. On serverless the instance freezes the moment the response goes out, so a publish left in flight is not slow — it is *lost* |
+| **The tracer** | `sys.settrace` gives every local on every line, for free | **not yet ported.** Node has no equivalent; it needs the V8 Inspector or a source transform |
+
+So the Node port is **stage 1**: record, replay, divergence detection, tape mutation. The
+variable-level tracing — the thing that turns *"what was `level` when it went wrong?"* into a
+lookup rather than an inference — is Python-only for now. Everything downstream of the tape
+is not, because it consumes the tape.
 
 ## The approach, in plain words
 
