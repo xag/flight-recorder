@@ -134,7 +134,7 @@
     font-family: "Cascadia Code", Consolas, ui-monospace, monospace; font-size: .75rem;
     letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 600;
   }
-  td:first-child { font-family: "Cascadia Code", Consolas, ui-monospace, monospace; }
+  td:first-child { font-family: "Cascadia Code", Consolas, ui-monospace, monospace; white-space: nowrap; }
   .table-wrap { overflow-x: auto; }
 
   .verdict {
@@ -593,15 +593,15 @@
     data: freeze the data and the analysis is written once, for every language.</p>
     <div class="table-wrap"><table>
       <tr><th></th><th>Python</th><th>Node</th></tr>
-      <tr><td>Boundary</td><td>name module functions, patch with <span class="mono">setattr</span></td><td>wrap the objects the app <em>holds</em> — an ESM namespace is immutable, so there is nothing to patch</td></tr>
-      <tr><td>Randomness</td><td><span class="mono">sample</span> — the <em>positions</em> drawn</td><td><span class="mono">bytes</span> / <span class="mono">float</span> / <span class="mono">int</span> — the draw <em>is</em> the value</td></tr>
-      <tr><td>Nothing</td><td>one (<span class="mono">None</span>)</td><td>two — <span class="mono">undefined</span> earns its own marker</td></tr>
-      <tr><td>The sink</td><td>hand the bytes to a queue</td><td>hand the promise to the host (<span class="mono">waitUntil</span>) — a host that freezes at response time <em>loses</em> a fire-and-forget publish</td></tr>
-      <tr><td>The tracer</td><td><span class="mono">sys.settrace</span> — every local, every line, free</td><td>no equivalent exists; would need the V8 Inspector</td></tr>
+      <tr><td>Boundary</td><td>name module functions; patch in place</td><td>wrap what the app <em>holds</em> — namespaces are immutable</td></tr>
+      <tr><td>Randomness</td><td><span class="mono">sample</span> — the <em>positions</em> drawn</td><td><span class="mono">bytes</span>&thinsp;/&thinsp;<span class="mono">float</span>&thinsp;/&thinsp;<span class="mono">int</span> — the draw <em>is</em> the value</td></tr>
+      <tr><td>Nothing</td><td>one — <span class="mono">None</span></td><td>two — <span class="mono">undefined</span> earns a marker</td></tr>
+      <tr><td>The sink</td><td>hand the bytes to a queue</td><td>hand the promise to the host — <span class="mono">waitUntil</span></td></tr>
+      <tr><td>The tracer</td><td><span class="mono">sys.settrace</span> — every local, every line</td><td>no equivalent; would need the V8 Inspector</td></tr>
     </table></div>
-    <p class="note" style="margin-top:1rem">The format is frozen (<span class="mono">spec/tape-v1.md</span>) and its conformance
-    checker is written <em>twice, independently</em>, both runtimes validating both runtimes' fixtures. A disagreement means the
-    tape has forked — the one failure the whole arrangement exists to prevent.</p>
+    <p class="note" style="margin-top:1rem">Not preferences — <em>consequences</em>. Every difference is forced by the language.<br>
+    The format is frozen (<span class="mono">spec/tape-v1.md</span>) and its checker written <em>twice, independently</em> —
+    each language validating the other's fixtures. A disagreement means the tape has forked.</p>
   </section>
 
   <!-- 14 · beyond regression -->
