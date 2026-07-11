@@ -115,16 +115,36 @@ the awareness of this value is part of the value. Preserve the string verbatim.
 
 ### `k: "rand"` — a random draw
 
+`m` names the method. Two are defined, because the two runtimes draw randomness in
+genuinely different shapes and flattening one onto the other would lose the property that
+makes each replayable.
+
+**`m: "sample"`** — drawing members from a population (Python's `random.sample`).
+
 | key | type | meaning |
 |---|---|---|
-| `k` | `"rand"` | |
-| `m` | string | the method. v1 defines `"sample"`. |
+| `m` | `"sample"` | |
 | `n` | int | the population size drawn from. |
 | `kk` | int | how many were drawn. (`k` is taken by the discriminator.) |
-| `idx` | int[] | the **positions** drawn. |
+| `idx` | int[] | the **positions** drawn — `kk` of them, each in `[0, n)`. |
 
 Recording positions, not members, is what lets replay pick the same members from a
 *mutated* population without re-rolling the RNG.
+
+**`m: "bytes"`** — drawing raw entropy (Node's `crypto.randomBytes`, `randomUUID`).
+
+| key | type | meaning |
+|---|---|---|
+| `m` | `"bytes"` | |
+| `n` | int | how many bytes were drawn. |
+| `hex` | string | the bytes, lowercase hex — exactly `2n` characters. |
+
+There is no population to index into here: the draw *is* the value, and replay hands the
+same bytes back. Recording positions would be meaningless, and recording a seed would not
+survive a mutated tape.
+
+The two methods are not interchangeable, and neither is a special case of the other. A
+reader that only understands one MUST ignore the other rather than guess.
 
 ## Value encoding
 

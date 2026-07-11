@@ -131,18 +131,31 @@ function checkEvent(e, path, out) {
   }
 
   if (k === 'rand') {
-    if (e.m !== 'sample') out.push(`${path}: rand.m must be 'sample' in v1, got ${JSON.stringify(e.m)}`);
-    for (const key of ['n', 'kk']) {
-      if (!isInt(e[key])) out.push(`${path}: rand.${key} must be an int`);
-    }
-    if (!Array.isArray(e.idx) || !e.idx.every(isInt)) {
-      out.push(`${path}: rand.idx must be an array of ints`);
-    } else if (isInt(e.n)) {
-      const bad = e.idx.filter((i) => !(i >= 0 && i < e.n));
-      if (bad.length) out.push(`${path}: rand.idx ${JSON.stringify(bad)} out of range for population ${e.n}`);
-      if (isInt(e.kk) && e.idx.length !== e.kk) {
-        out.push(`${path}: rand.idx has ${e.idx.length} positions but kk=${e.kk}`);
+    // Two methods, because the runtimes draw randomness in genuinely different shapes.
+    // 'sample' indexes into a population (Python); 'bytes' IS the value (Node). Neither
+    // is a special case of the other — see spec/tape-v1.md.
+    if (e.m === 'sample') {
+      for (const key of ['n', 'kk']) {
+        if (!isInt(e[key])) out.push(`${path}: rand.${key} must be an int`);
       }
+      if (!Array.isArray(e.idx) || !e.idx.every(isInt)) {
+        out.push(`${path}: rand.idx must be an array of ints`);
+      } else if (isInt(e.n)) {
+        const bad = e.idx.filter((i) => !(i >= 0 && i < e.n));
+        if (bad.length) out.push(`${path}: rand.idx ${JSON.stringify(bad)} out of range for population ${e.n}`);
+        if (isInt(e.kk) && e.idx.length !== e.kk) {
+          out.push(`${path}: rand.idx has ${e.idx.length} positions but kk=${e.kk}`);
+        }
+      }
+    } else if (e.m === 'bytes') {
+      if (!isInt(e.n) || e.n < 0) out.push(`${path}: rand.n must be a non-negative int`);
+      if (typeof e.hex !== 'string' || (e.hex && !/^[0-9a-f]+$/.test(e.hex))) {
+        out.push(`${path}: rand.hex must be a lowercase hex string`);
+      } else if (isInt(e.n) && e.hex.length !== 2 * e.n) {
+        out.push(`${path}: rand.hex is ${e.hex.length} chars but n=${e.n} implies ${2 * e.n}`);
+      }
+    } else {
+      out.push(`${path}: rand.m must be 'sample' or 'bytes', got ${JSON.stringify(e.m)}`);
     }
   }
 }

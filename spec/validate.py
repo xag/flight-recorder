@@ -11,6 +11,7 @@ Returns a list of human-readable violations; empty means conformant.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 VERSION = 1
@@ -146,20 +147,31 @@ def _check_event(e: Any, path: str, out: list) -> None:
             out.append(f"{path}: now.v must be an ISO-8601 string, got {e.get('v')!r}")
 
     elif k == "rand":
-        if e.get("m") != "sample":
-            out.append(f"{path}: rand.m must be 'sample' in v1, got {e.get('m')!r}")
-        for key in ("n", "kk"):
-            if not isinstance(e.get(key), int):
-                out.append(f"{path}: rand.{key} must be an int")
-        idx = e.get("idx")
-        if not isinstance(idx, list) or not all(isinstance(i, int) for i in idx):
-            out.append(f"{path}: rand.idx must be an array of ints")
-        elif isinstance(e.get("n"), int):
-            bad = [i for i in idx if not 0 <= i < e["n"]]
-            if bad:
-                out.append(f"{path}: rand.idx {bad} out of range for population {e['n']}")
-            if isinstance(e.get("kk"), int) and len(idx) != e["kk"]:
-                out.append(f"{path}: rand.idx has {len(idx)} positions but kk={e['kk']}")
+        m = e.get("m")
+        if m == "sample":
+            for key in ("n", "kk"):
+                if not isinstance(e.get(key), int):
+                    out.append(f"{path}: rand.{key} must be an int")
+            idx = e.get("idx")
+            if not isinstance(idx, list) or not all(isinstance(i, int) for i in idx):
+                out.append(f"{path}: rand.idx must be an array of ints")
+            elif isinstance(e.get("n"), int):
+                bad = [i for i in idx if not 0 <= i < e["n"]]
+                if bad:
+                    out.append(f"{path}: rand.idx {bad} out of range for population {e['n']}")
+                if isinstance(e.get("kk"), int) and len(idx) != e["kk"]:
+                    out.append(f"{path}: rand.idx has {len(idx)} positions but kk={e['kk']}")
+        elif m == "bytes":
+            n = e.get("n")
+            if not isinstance(n, int) or n < 0:
+                out.append(f"{path}: rand.n must be a non-negative int")
+            hx = e.get("hex")
+            if not isinstance(hx, str) or (hx and not re.fullmatch(r"[0-9a-f]+", hx)):
+                out.append(f"{path}: rand.hex must be a lowercase hex string")
+            elif isinstance(n, int) and len(hx) != 2 * n:
+                out.append(f"{path}: rand.hex is {len(hx)} chars but n={n} implies {2 * n}")
+        else:
+            out.append(f"{path}: rand.m must be 'sample' or 'bytes', got {m!r}")
 
 
 def validate_line(obj: Any, i: int, out: list, *, first: bool) -> None:
