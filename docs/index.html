@@ -47,7 +47,13 @@
     border: 0; cursor: pointer; padding: .42rem .8rem;
   }
   .langs button + button { border-left: 1px solid var(--line); }
-  .langs button[aria-selected="true"] { background: var(--code-bg); color: var(--fg); font-weight: 700; }
+  /* The selected tab used to be --code-bg on --bg: #f6f8fa on #ffffff, a difference you cannot
+     see on a phone in daylight. A switch whose state is invisible reads as a switch that does
+     not work, so the selection is carried by an underline, not by a 1% wash. */
+  .langs button[aria-selected="true"] {
+    background: var(--code-bg); color: var(--fg); font-weight: 700;
+    box-shadow: inset 0 -2px 0 var(--link);
+  }
 
   /* sidebar + column */
   .layout {
@@ -119,8 +125,33 @@
   body[data-show="js"] [data-lang="js"] { display: block; }
 
   @media (max-width: 900px) {
-    .layout { grid-template-columns: 1fr; gap: 0; }
+    /* minmax(0, 1fr), never a bare 1fr. A grid item's automatic minimum size is its min-content
+       width, and <main>'s min-content is the longest unwrappable line of code on the page — so a
+       bare 1fr floors the column at ~735px and lays the whole document out wider than the phone.
+       Every paragraph then runs off the right edge, and no <pre> ever reaches its own overflow
+       scroll, because none of them is narrower than the track. The 0 minimum lets the column be
+       the viewport, and the code blocks go back to scrolling inside themselves. */
+    .layout { grid-template-columns: minmax(0, 1fr); gap: 0; }
     .toc { display: none; }
+  }
+
+  /* Phones: the top bar carries a name, a language switch and three links — more than fits on
+     one line, and unwrapped they crowd and collide. Let it become two rows. */
+  @media (max-width: 640px) {
+    html { scroll-padding-top: 6.5rem; }        /* the bar is two rows tall now */
+    .topbar-in { flex-wrap: wrap; gap: .55rem .9rem; padding: .55rem 1rem; }
+    .langs { margin-left: auto; }               /* row 1: name ......... [Python|Node] */
+    .topbar nav { order: 3; width: 100%; margin-left: 0; gap: 1rem; }   /* row 2: the links */
+    .langs button { padding: .6rem 1rem; min-height: 2.5rem; }   /* a thumb needs ~40px, not 26 */
+    .layout { padding: 0 1rem; }
+    main { padding-top: 1.2rem; }
+    /* A URL or a long identifier is one word to the line-breaker: without this it is the widest
+       thing on the page, and it alone would push the text off the edge again. */
+    p, li, .lead { overflow-wrap: break-word; }
+    /* Not the tables. A three-column comparison squeezed into 360px gives one word per line and
+       hyphen-free breaks straight through `undefined` — unreadable. Hold the columns at a width
+       that can be read and let .table-wrap scroll, which is what it is there for. */
+    .table-wrap table { min-width: 32rem; }
   }
 </style>
 </head>
