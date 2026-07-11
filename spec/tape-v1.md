@@ -99,7 +99,7 @@ data: the only surface a well-behaved consumer reads.
 
 `res` and `args` are mutually exclusive: a read has answers, a write has questions.
 
-### `k: "now"` — the clock
+### `k: "now"` — the wall clock
 
 | key | type | meaning |
 |---|---|---|
@@ -143,8 +143,34 @@ There is no population to index into here: the draw *is* the value, and replay h
 same bytes back. Recording positions would be meaningless, and recording a seed would not
 survive a mutated tape.
 
-The two methods are not interchangeable, and neither is a special case of the other. A
-reader that only understands one MUST ignore the other rather than guess.
+**`m: "float"`** — a uniform draw in `[0, 1)` (JavaScript's `Math.random`).
+
+| key | type | meaning |
+|---|---|---|
+| `m` | `"float"` | |
+| `v` | number | the value drawn, `0 <= v < 1`. |
+
+**`m: "int"`** — a uniform integer draw (Node's `crypto.randomInt`).
+
+| key | type | meaning |
+|---|---|---|
+| `m` | `"int"` | |
+| `v` | int | the value drawn. |
+
+The methods are not interchangeable, and none is a special case of another: each records the
+shape of the draw that actually happened, because that is what makes each one replayable
+against an *edited* tape. A reader that understands only some of them MUST ignore the rest
+rather than guess.
+
+### `k: "perf"` — the monotonic clock
+
+| key | type | meaning |
+|---|---|---|
+| `k` | `"perf"` | |
+| `v` | number | milliseconds, as `performance.now()` returned them. |
+
+A separate kind from `now` because it is a separate clock: monotonic, arbitrary origin, not
+a wall time. Feeding a wall time back into it would be a category error.
 
 ## Value encoding
 
@@ -155,9 +181,22 @@ string, a number, a bool, an array, an object, or exactly one marker.
 |---|---|---|
 | `{"__dt__": s}` | ISO-8601 | a datetime |
 | `{"__date__": s}` | ISO-8601 date | a date |
+| `{"__undef__": true}` | `true` | JS: `undefined`. Python: `None`. |
 | `{"__opaque__": s}` | a repr, ≤200 chars | the string (it cannot be revived faithfully — by design) |
 
 Nesting is capped at depth **16**; deeper values degrade to `__opaque__`.
+
+#### `__undef__`, and why a runtime with one nothing still needs it
+
+JavaScript has two nothings, `null` and `undefined`, and they are not interchangeable: a
+key that is present-and-undefined is not the same object as a key that is absent, and a
+function returning `undefined` is not one returning `null`. Encoding both as `null` loses
+information that a replay may depend on.
+
+Python has one nothing. So `__undef__` revives to `None` there — the same thing `null`
+revives to — and a Python recorder never emits it. The marker costs Python nothing and buys
+JavaScript exact fidelity, which is the whole reason it exists rather than being waved away
+as "close enough".
 
 An `__opaque__` value is a one-way door: it exists so that an exotic object cannot break a
 recording, not so it can be restored. A well-factored app reads plain JSON-ish data plus

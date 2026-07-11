@@ -16,11 +16,14 @@ from typing import Any
 
 VERSION = 1
 MAX_DEPTH = 16
-MARKERS = {"__dt__", "__date__", "__opaque__"}
+# __undef__ exists for JavaScript, which has two nothings. Python has one, so a Python
+# recorder never emits it and a Python reader revives it as None — the marker costs this
+# runtime nothing and buys the other one exact fidelity.
+MARKERS = {"__dt__", "__date__", "__undef__", "__opaque__"}
 # Reserved by the trace encoding — a *reader* must tolerate them, so they are legal in a
 # tape even though a v1 recorder never emits them.
 RESERVED_MARKERS = {"__snap__", "__seq__", "__str__", "__esc__"}
-EVENT_KINDS = {"fx", "db", "now", "rand"}
+EVENT_KINDS = {"fx", "db", "now", "perf", "rand"}
 
 
 def _is_iso(s: Any) -> bool:
@@ -58,6 +61,8 @@ def _check_value(v: Any, path: str, out: list, depth: int = 0) -> None:
             if k in MARKERS:
                 if k in ("__dt__", "__date__") and not _is_iso(v[k]):
                     out.append(f"{path}: {k} payload is not ISO-8601: {v[k]!r}")
+                if k == "__undef__" and v[k] is not True:
+                    out.append(f"{path}: __undef__ payload must be true")
                 if k == "__opaque__":
                     if not isinstance(v[k], str):
                         out.append(f"{path}: __opaque__ payload must be a string")
@@ -146,6 +151,13 @@ def _check_event(e: Any, path: str, out: list) -> None:
         if not _is_iso(e.get("v")):
             out.append(f"{path}: now.v must be an ISO-8601 string, got {e.get('v')!r}")
 
+    elif k == "perf":
+        # A separate kind from `now` because it is a separate clock: monotonic, arbitrary
+        # origin, not a wall time. Feeding a wall time back into it would be a category error.
+        v = e.get("v")
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            out.append(f"{path}: perf.v must be a number (milliseconds), got {v!r}")
+
     elif k == "rand":
         m = e.get("m")
         if m == "sample":
@@ -170,8 +182,15 @@ def _check_event(e: Any, path: str, out: list) -> None:
                 out.append(f"{path}: rand.hex must be a lowercase hex string")
             elif isinstance(n, int) and len(hx) != 2 * n:
                 out.append(f"{path}: rand.hex is {len(hx)} chars but n={n} implies {2 * n}")
+        elif m == "float":
+            v = e.get("v")
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0.0 <= v < 1.0:
+                out.append(f"{path}: rand.v must be a number in [0, 1), got {v!r}")
+        elif m == "int":
+            if isinstance(e.get("v"), bool) or not isinstance(e.get("v"), int):
+                out.append(f"{path}: rand.v must be an int, got {e.get('v')!r}")
         else:
-            out.append(f"{path}: rand.m must be 'sample' or 'bytes', got {m!r}")
+            out.append(f"{path}: rand.m must be one of sample|bytes|float|int, got {m!r}")
 
 
 def validate_line(obj: Any, i: int, out: list, *, first: bool) -> None:

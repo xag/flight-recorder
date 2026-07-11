@@ -218,7 +218,9 @@ export async function replayCall({ call, fn, boundary = {}, probe = false }) {
     return { ok: false, divergence, resultMatch: false, errorMatch: false, unconsumed };
   }
 
-  const replayedResult = redactJsonable(toJsonable(result), redact);
+  // Mirror the recorder exactly: a call that raised has no return value (null), which is not
+  // the same as one that returned `undefined`.
+  const replayedResult = error !== null ? null : redactJsonable(toJsonable(result), redact);
   const resultMatch = JSON.stringify(replayedResult) === JSON.stringify(call.result ?? null);
   const errorMatch = (error ?? null) === (call.error ?? null);
 

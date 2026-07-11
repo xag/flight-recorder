@@ -5,6 +5,10 @@
 // The failure direction is always "the recording is a bit poorer", never "the app broke
 // because it was being recorded".
 
+// Captured at module load, before any shim can replace the global. Encoding a value must
+// never be mistaken for the app asking the clock what time it is.
+const RealDate = Date;
+
 const MAX_DEPTH = 16;
 export const REDACTED = '[REDACTED]';
 
@@ -29,23 +33,23 @@ const opaque = (v) => ({ __opaque__: safeRepr(v) });
 /**
  * Encode one boundary value.
  *
- * KNOWN, DELIBERATE LOSS: JavaScript has two nothings and the tape has one. `undefined`
- * encodes as `null`. Introducing an `__undef__` marker would be a fork in all but name —
- * the Python reader would revive it as a plain dict and every invariant would have to know
- * about it — and the alternative, dropping the key entirely, silently changes an object's
- * shape. `null` is the honest lossy choice, and it is written down here rather than
- * discovered later. If a boundary is ever found where the distinction is load-bearing,
- * adding the marker is a non-breaking change (see "Changing this" in the spec).
+ * `undefined` gets its own marker rather than being flattened onto `null`. JavaScript has
+ * two nothings and they are not interchangeable: a key that is present-and-undefined is not
+ * a key that is absent, and a function returning `undefined` is not one returning `null`. A
+ * replay can depend on the difference, so the tape keeps it. Python — which has one nothing
+ * — revives `__undef__` as `None` and never emits it, so the marker costs that runtime
+ * nothing and buys this one exactness.
  */
 export function toJsonable(v, depth = 0) {
   if (depth > MAX_DEPTH) return opaque(v);
-  if (v === undefined || v === null) return null;
+  if (v === undefined) return { __undef__: true };
+  if (v === null) return null;
 
   const t = typeof v;
   if (t === 'string' || t === 'boolean') return v;
   if (t === 'number') return Number.isFinite(v) ? v : opaque(v); // NaN/±Infinity are not JSON
 
-  if (v instanceof Date) {
+  if (v instanceof RealDate) {
     return Number.isNaN(v.getTime()) ? opaque(v) : { __dt__: v.toISOString() };
   }
 
@@ -83,8 +87,11 @@ export function fromJsonable(v) {
   if (v !== null && typeof v === 'object') {
     const keys = Object.keys(v);
     if (keys.length === 1) {
-      if ('__dt__' in v) return new Date(v.__dt__);
-      if ('__date__' in v) return new Date(v.__date__);
+      if ('__undef__' in v) return undefined;
+      // RealDate, not the shimmed global: reviving a value must never be mistaken for the
+      // app asking the clock what time it is.
+      if ('__dt__' in v) return new RealDate(v.__dt__);
+      if ('__date__' in v) return new RealDate(v.__date__);
       if ('__opaque__' in v) return v.__opaque__;
     }
     const out = {};

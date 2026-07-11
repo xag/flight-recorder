@@ -22,7 +22,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { toJsonable, redactJsonable, short } from './serial.js';
-import { ReplayDivergence } from './errors.js';
+import { ReplayDivergence, ProbeUnanswerable } from './errors.js';
+
+// Captured at module load, before any shim replaces them. THE RECORDER MUST NEVER USE THE
+// SHIMMED GLOBALS: it stamps every line with the time and measures every call's duration,
+// and if those calls went through the shims it would write clock events the app never asked
+// for — and consume them on replay. The instrument would be recording itself.
+const RealDate = globalThis.Date;
+const realPerfNow = performance.now.bind(performance);
 
 export const FORMAT_VERSION = 1;
 
@@ -72,14 +79,14 @@ class Recorder {
     this.dir = directory;
     fs.mkdirSync(this.dir, { recursive: true });
 
-    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
+    const stamp = new RealDate().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
     this.path = path.join(this.dir, `flight-${stamp}-${process.pid}.jsonl`);
     this.seq = 0;
 
     this.write({
       ev: 'session',
       version: FORMAT_VERSION,
-      started: isoLocal(new Date()),
+      started: isoLocal(new RealDate()),
       node: process.versions.node,
       constants: toJsonable(b.constants ?? {}),
     });
@@ -99,9 +106,13 @@ class Recorder {
       fn,
       kwargs: redactJsonable(toJsonable(kwargs), boundary?.redact),
       events,
-      result: redactJsonable(toJsonable(result), boundary?.redact),
+      // A call that RAISED has no return value, and that is not the same as one that
+      // returned `undefined` — so it records null, as Python's does. Without this, the
+      // __undef__ marker would quietly claim every failed call returned undefined, and the
+      // two runtimes would disagree about what a failed call looks like.
+      result: error !== null ? null : redactJsonable(toJsonable(result), boundary?.redact),
       error,
-      ts: isoLocal(new Date()),
+      ts: isoLocal(new RealDate()),
       ms: Math.round(ms * 100) / 100,
     });
   }
@@ -112,7 +123,7 @@ function isoLocal(d) {
   const off = -d.getTimezoneOffset();
   const sign = off >= 0 ? '+' : '-';
   const pad = (n) => String(Math.floor(Math.abs(n))).padStart(2, '0');
-  const local = new Date(d.getTime() + off * 60000).toISOString().slice(0, -1);
+  const local = new RealDate(d.getTime() + off * 60000).toISOString().slice(0, -1);
   return `${local}${sign}${pad(off / 60)}:${pad(off % 60)}`;
 }
 
@@ -129,7 +140,7 @@ export function tool(name, fn) {
     if (!recorder || (gate && !gate(name, args))) return fn.call(this, args, ...rest);
 
     const events = [];
-    const t0 = performance.now();
+    const t0 = realPerfNow();
 
     return active.run(events, async () => {
       let result;
@@ -144,7 +155,7 @@ export function tool(name, fn) {
         // Recording must never be the reason a call fails. A tape we could not write is
         // strictly less bad than an app that fell over because we tried.
         try {
-          recorder.writeCall(name, args, events, result, error, performance.now() - t0);
+          recorder.writeCall(name, args, events, result, error, realPerfNow() - t0);
         } catch (e) {
           console.warn('flight-recorder: could not write the call —', e.message);
         }
@@ -243,39 +254,128 @@ function patch(target, key, replacement) {
   target[key] = replacement;
 }
 
+// --- the clock ----------------------------------------------------------------------
+
+/**
+ * Shim BOTH ways of asking the wall clock: `Date.now()` and `new Date()`.
+ *
+ * Shimming only `Date.now()` would be a trap. Code that reaches for `new Date()` — which is
+ * most code — would re-roll the clock on replay, silently, and the resulting divergence
+ * would point at a value rather than at the door it came through. A door you half-close is
+ * worse than one you leave open, because it looks shut.
+ *
+ * `new Date(...)` WITH arguments is deterministic and passes straight through: it is
+ * arithmetic, not a question to the world.
+ */
 export function installClock() {
-  const realNow = Date.now.bind(Date);
-  patch(Date, 'now', () => {
-    if (hook.mode === 'replay') return Date.parse(hook.feed.popExpect('now').v);
+  const realNow = RealDate.now.bind(RealDate);
+
+  const nowMs = () => {
+    if (hook.mode === 'replay') return RealDate.parse(hook.feed.popExpect('now').v);
     const ms = realNow();
-    emit({ k: 'now', v: new Date(ms).toISOString() });
+    emit({ k: 'now', v: new RealDate(ms).toISOString() });
     return ms;
+  };
+
+  class ShimDate extends RealDate {
+    constructor(...args) {
+      if (args.length === 0) super(nowMs());
+      else super(...args);
+    }
+
+    static now() {
+      return nowMs();
+    }
+
+    /**
+     * Without this, replacing the global Date breaks `instanceof` for every Date created by
+     * code holding a reference to the original — including this library's own. A shim that
+     * corrupts type checks in the app it is observing has failed at its one job: to be
+     * invisible.
+     */
+    static [Symbol.hasInstance](x) {
+      return x instanceof RealDate;
+    }
+  }
+
+  patch(globalThis, 'Date', ShimDate);
+
+  // The monotonic clock is a DIFFERENT door, not the same one in other clothes: arbitrary
+  // origin, no wall time. Handing back a wall time would be a category error, so it gets its
+  // own event kind.
+  const realPerfNow = performance.now.bind(performance);
+  patch(performance, 'now', () => {
+    if (hook.mode === 'replay') return hook.feed.popExpect('perf').v;
+    const v = realPerfNow();
+    emit({ k: 'perf', v });
+    return v;
   });
 }
 
+// --- randomness ---------------------------------------------------------------------
+
+/** Replay a recorded byte draw, checking the tape can still answer the question asked. */
+function replayBytes(n) {
+  const ev = hook.feed.popExpect('rand');
+  const buf = Buffer.from(ev.hex ?? '', 'hex');
+  // Under a MUTATED tape the recorded draw may no longer fit. Saying so plainly beats
+  // handing back a buffer of the wrong length and letting the nonsense surface a thousand
+  // lines later as something that looks like a bug in the app.
+  if (buf.length !== n) {
+    throw new ProbeUnanswerable(
+      `the code asked for ${n} random bytes but the tape holds ${buf.length} ` +
+        `(edit the rand event's n/hex to match)`,
+    );
+  }
+  return buf;
+}
+
+/**
+ * Shim every door randomness comes through in Node — not just the convenient one.
+ *
+ * Math.random, crypto.randomBytes (sync AND callback), randomUUID, randomInt,
+ * randomFillSync/randomFill, and webcrypto's getRandomValues. Leaving any of them open would
+ * mean an app that happens to use it re-rolls on replay and gets a divergence that explains
+ * nothing.
+ */
 export function installRandom() {
-  const realBytes = crypto.randomBytes.bind(crypto);
-  patch(crypto, 'randomBytes', (n, cb) => {
-    if (cb) return realBytes(n, cb); // async form: out of scope, passed straight through
-    if (hook.mode === 'replay') {
-      const ev = hook.feed.popExpect('rand');
-      // The recorded draw must still fit what the code now asks for. Under a MUTATED tape
-      // it may not — and saying so plainly beats handing back a buffer of the wrong length
-      // and letting the divergence surface a thousand lines later as nonsense.
-      const buf = Buffer.from(ev.hex, 'hex');
-      if (buf.length !== n) {
-        throw new ReplayDivergence(
-          `the code asked for ${n} random bytes but the tape holds ${buf.length} ` +
-            `(edit the rand event's n/hex to match)`,
-        );
-      }
-      return buf;
-    }
-    const buf = realBytes(n);
-    emit({ k: 'rand', m: 'bytes', n, hex: buf.toString('hex') });
-    return buf;
+  // Math.random
+  const realMathRandom = Math.random.bind(Math);
+  patch(Math, 'random', () => {
+    if (hook.mode === 'replay') return hook.feed.popExpect('rand').v;
+    const v = realMathRandom();
+    emit({ k: 'rand', m: 'float', v });
+    return v;
   });
 
+  // crypto.randomBytes — both the sync and the callback forms
+  const realBytes = crypto.randomBytes.bind(crypto);
+  patch(crypto, 'randomBytes', (n, cb) => {
+    if (!cb) {
+      if (hook.mode === 'replay') return replayBytes(n);
+      const buf = realBytes(n);
+      emit({ k: 'rand', m: 'bytes', n, hex: buf.toString('hex') });
+      return buf;
+    }
+
+    // The callback form is a door like any other. It used to pass straight through, which
+    // meant an app using it recorded nothing and re-rolled on replay.
+    if (hook.mode === 'replay') {
+      let buf;
+      try {
+        buf = replayBytes(n);
+      } catch (e) {
+        return process.nextTick(() => cb(e));
+      }
+      return process.nextTick(() => cb(null, buf));
+    }
+    return realBytes(n, (err, buf) => {
+      if (!err) emit({ k: 'rand', m: 'bytes', n, hex: buf.toString('hex') });
+      cb(err, buf);
+    });
+  });
+
+  // crypto.randomUUID
   const realUuid = crypto.randomUUID.bind(crypto);
   patch(crypto, 'randomUUID', (opts) => {
     if (hook.mode === 'replay') {
@@ -286,6 +386,58 @@ export function installRandom() {
     emit({ k: 'rand', m: 'bytes', n: 16, hex: uuid.replace(/-/g, '') });
     return uuid;
   });
+
+  // crypto.randomInt — a scalar draw, so it records the value, not bytes
+  const realInt = crypto.randomInt.bind(crypto);
+  patch(crypto, 'randomInt', (...args) => {
+    const cb = typeof args.at(-1) === 'function' ? args.pop() : null;
+
+    const draw = () => {
+      if (hook.mode === 'replay') return hook.feed.popExpect('rand').v;
+      const v = realInt(...args);
+      emit({ k: 'rand', m: 'int', v });
+      return v;
+    };
+
+    if (!cb) return draw();
+    try {
+      const v = draw();
+      return process.nextTick(() => cb(null, v));
+    } catch (e) {
+      return process.nextTick(() => cb(e));
+    }
+  });
+
+  // crypto.randomFillSync — fills a buffer in place; same shape as randomBytes
+  const realFillSync = crypto.randomFillSync.bind(crypto);
+  patch(crypto, 'randomFillSync', (buf, offset = 0, size = buf.byteLength - offset) => {
+    if (hook.mode === 'replay') {
+      const bytes = replayBytes(size);
+      Buffer.from(buf.buffer, buf.byteOffset + offset, size).set(bytes);
+      return buf;
+    }
+    realFillSync(buf, offset, size);
+    const hex = Buffer.from(buf.buffer, buf.byteOffset + offset, size).toString('hex');
+    emit({ k: 'rand', m: 'bytes', n: size, hex });
+    return buf;
+  });
+
+  // webcrypto getRandomValues — what portable code reaches for
+  if (globalThis.crypto?.getRandomValues) {
+    const realGRV = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+    patch(globalThis.crypto, 'getRandomValues', (arr) => {
+      const size = arr.byteLength;
+      if (hook.mode === 'replay') {
+        const bytes = replayBytes(size);
+        new Uint8Array(arr.buffer, arr.byteOffset, size).set(bytes);
+        return arr;
+      }
+      realGRV(arr);
+      const hex = Buffer.from(arr.buffer, arr.byteOffset, size).toString('hex');
+      emit({ k: 'rand', m: 'bytes', n: size, hex });
+      return arr;
+    });
+  }
 }
 
 // --- install ------------------------------------------------------------------------

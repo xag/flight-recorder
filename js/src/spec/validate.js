@@ -14,11 +14,13 @@
 export const VERSION = 1;
 export const MAX_DEPTH = 16;
 
-const MARKERS = new Set(['__dt__', '__date__', '__opaque__']);
+// __undef__ exists because JavaScript has two nothings and they are not interchangeable.
+// Python has one, revives it as None, and never emits it.
+const MARKERS = new Set(['__dt__', '__date__', '__undef__', '__opaque__']);
 // Reserved by the trace encoding: a reader must tolerate them even though a v1 recorder
 // never emits them.
 const RESERVED_MARKERS = new Set(['__snap__', '__seq__', '__str__', '__esc__']);
-const EVENT_KINDS = new Set(['fx', 'db', 'now', 'rand']);
+const EVENT_KINDS = new Set(['fx', 'db', 'now', 'perf', 'rand']);
 
 // ISO-8601 as Python's datetime.fromisoformat accepts it, which is what writes these tapes.
 // Deliberately strict about shape and permissive about the offset, because whether an
@@ -51,6 +53,9 @@ function checkValue(v, path, out, depth = 0) {
       if (MARKERS.has(k)) {
         if ((k === '__dt__' || k === '__date__') && !isIso(v[k])) {
           out.push(`${path}: ${k} payload is not ISO-8601: ${JSON.stringify(v[k])}`);
+        }
+        if (k === '__undef__' && v[k] !== true) {
+          out.push(`${path}: __undef__ payload must be true`);
         }
         if (k === '__opaque__') {
           if (typeof v[k] !== 'string') out.push(`${path}: __opaque__ payload must be a string`);
@@ -130,10 +135,19 @@ function checkEvent(e, path, out) {
     return;
   }
 
+  if (k === 'perf') {
+    // A separate kind from 'now' because it is a separate clock: monotonic, arbitrary
+    // origin, not a wall time. Feeding a wall time back into it would be a category error.
+    if (typeof e.v !== 'number' || !Number.isFinite(e.v)) {
+      out.push(`${path}: perf.v must be a number (milliseconds), got ${JSON.stringify(e.v)}`);
+    }
+    return;
+  }
+
   if (k === 'rand') {
-    // Two methods, because the runtimes draw randomness in genuinely different shapes.
-    // 'sample' indexes into a population (Python); 'bytes' IS the value (Node). Neither
-    // is a special case of the other — see spec/tape-v1.md.
+    // Four methods, because a draw's SHAPE is what makes it replayable against an edited
+    // tape. 'sample' indexes into a population (Python); 'bytes' IS the value; 'float' and
+    // 'int' are scalar draws. None is a special case of another — see spec/tape-v1.md.
     if (e.m === 'sample') {
       for (const key of ['n', 'kk']) {
         if (!isInt(e[key])) out.push(`${path}: rand.${key} must be an int`);
@@ -154,8 +168,14 @@ function checkEvent(e, path, out) {
       } else if (isInt(e.n) && e.hex.length !== 2 * e.n) {
         out.push(`${path}: rand.hex is ${e.hex.length} chars but n=${e.n} implies ${2 * e.n}`);
       }
+    } else if (e.m === 'float') {
+      if (typeof e.v !== 'number' || !(e.v >= 0 && e.v < 1)) {
+        out.push(`${path}: rand.v must be a number in [0, 1), got ${JSON.stringify(e.v)}`);
+      }
+    } else if (e.m === 'int') {
+      if (!isInt(e.v)) out.push(`${path}: rand.v must be an int, got ${JSON.stringify(e.v)}`);
     } else {
-      out.push(`${path}: rand.m must be 'sample' or 'bytes', got ${JSON.stringify(e.m)}`);
+      out.push(`${path}: rand.m must be one of sample|bytes|float|int, got ${JSON.stringify(e.m)}`);
     }
   }
 }

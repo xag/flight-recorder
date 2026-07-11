@@ -106,6 +106,38 @@ call.probe = true;           // a mutated upstream answer changes every downstre
 const report = await fr.replayCall({ call, fn: greet, boundary: BOUNDARY, probe: true });
 ```
 
+## The doors it closes for you
+
+Two kinds of nondeterminism are *global* — the app holds no object you could wrap — so the
+library shims them itself. All of them, not the convenient ones:
+
+| door | shimmed |
+|---|---|
+| wall clock | `Date.now()`, `new Date()` |
+| monotonic clock | `performance.now()` |
+| randomness | `Math.random()`, `crypto.randomBytes()` (sync **and** callback), `crypto.randomUUID()`, `crypto.randomInt()`, `crypto.randomFillSync()`, `crypto.getRandomValues()` |
+
+A half-shimmed door is worse than an open one, because it *looks* shut: code reaching for
+the form you skipped re-rolls on replay, silently, and the resulting divergence points at a
+value instead of at the door it came through. So none are skipped.
+
+`new Date(2020, 0, 1)` is **not** recorded — building a date from arguments is arithmetic,
+not a question to the world.
+
+Everything else — network, storage, queues, the filesystem — is not guessed at. You declare
+it with `wrap()`. That is the boundary, and it is the one app-specific artifact.
+
+## Fidelity
+
+**`undefined` is preserved**, not flattened onto `null`. JavaScript has two nothings and
+they are not interchangeable: a key that is present-and-undefined is not a key that is
+absent, and a function returning `undefined` is not one returning `null`. The tape keeps
+them apart with a `__undef__` marker. Python — which has one nothing — revives it as `None`
+and never emits it, so the marker costs that runtime nothing and buys this one exactness.
+
+A call that **raised** records `result: null`, which is not the same as a call that returned
+`undefined`. Both runtimes agree on that.
+
 ## Status
 
 **Stage 1**: record, replay, divergence detection, tape mutation.
@@ -114,18 +146,6 @@ Not yet ported: **variable-level tracing** (`sys.settrace` gives Python every lo
 executed line for free; Node has no equivalent and needs the V8 Inspector or a source
 transform), and the **invariants** and **pytest** integration — which do not need porting,
 because they consume the *tape*, and the tape is shared.
-
-## Known limits
-
-- **`undefined` encodes as `null`.** JavaScript has two nothings; the tape has one. A
-  marker would fork the format in all but name, and dropping the key changes an object's
-  shape. This is the honest lossy choice, and it is written down rather than discovered.
-- **`new Date()` and `Math.random()` are not shimmed.** `Date.now()`,
-  `crypto.randomBytes()` and `crypto.randomUUID()` are. Code that reaches for the
-  un-shimmed ones will re-roll on replay, and the divergence will not tell you why — so
-  prefer the shimmed forms at the boundary.
-- Only the **synchronous** form of `randomBytes` is recorded; the callback form passes
-  straight through.
 
 ## License
 

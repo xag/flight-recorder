@@ -82,6 +82,11 @@ def from_jsonable(v: Any) -> Any:
                 return datetime.fromisoformat(v["__dt__"])
             if "__date__" in v:
                 return date.fromisoformat(v["__date__"])
+            # JavaScript has two nothings; Python has one. A JS recorder distinguishes
+            # `undefined` from `null` because a replay there can depend on it — reading such
+            # a tape here, both are simply None. Python never emits this marker.
+            if "__undef__" in v:
+                return None
             if "__opaque__" in v:
                 return v["__opaque__"]
         return {k: from_jsonable(x) for k, x in v.items()}
@@ -149,7 +154,7 @@ _ADDR = re.compile(r" at 0x[0-9A-Fa-f]+")
 
 # Every single-key marker the trace encoding uses. A user dict that happens to have exactly
 # this shape must be escaped on encode, or revival would mistake it for a marker.
-_MARKERS = frozenset({"__dt__", "__date__", "__opaque__", "__snap__", "__seq__",
+_MARKERS = frozenset({"__dt__", "__date__", "__undef__", "__opaque__", "__snap__", "__seq__",
                       "__str__", "__esc__"})
 
 
