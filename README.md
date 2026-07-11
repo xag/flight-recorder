@@ -2,8 +2,18 @@
 
 [![tests](https://github.com/xag/flight-recorder/actions/workflows/test.yml/badge.svg)](https://github.com/xag/flight-recorder/actions/workflows/test.yml)
 
-Record an app's tool calls at their **nondeterminism boundary**; replay them deterministically
-against the real code.
+flight-recorder pushes the heavy lifting from human to AI, and from AI to code.
+
+As AI takes on most of the development, scenario testing and debugging become the bottleneck, and
+the work left to the human is the tedious kind. Not anymore: flight-recorder gives the AI the
+missing instruments. It records every answer your code got from the outside world while handling a
+request, so the agent can re-run that exact request against the real code and watch any variable
+as the bug happens.
+
+With those, the AI takes back the loop: designing the scenarios and running them, finding the root
+cause by looking it up rather than paying for a guess, catching the regressions, proving the fix —
+continuous improvement, closed. What is left to the human is the decisions, not the moving of
+things around.
 
 ## → [Documentation](https://xag.github.io/flight-recorder/)
 
@@ -20,20 +30,6 @@ npm install @xag/flight-recorder     # Node
 |---|---|---|
 | Python | `flight-recorder` (PyPI) | [`flight_recorder/`](flight_recorder/) |
 | Node | [`@xag/flight-recorder`](https://www.npmjs.com/package/@xag/flight-recorder) (npm) | [`js/`](js/) |
-
-## What it does
-
-A program's execution is fully determined by its code plus its nondeterministic inputs — what the
-store answered, what the API returned, what time it was, what the dice rolled. Record just those,
-per call: one cheap JSONL line. **That line *is* the execution, compressed.**
-
-Feed the answers back and the real code re-runs the original execution exactly — no network, no
-database, no waiting for the bug to happen again. Trace it while it runs and every local, on every
-executed line, is a lookup rather than an inference.
-
-**The cardinal rule: instrument, never duplicate.** Nothing here evaluates a query, reimplements a
-client, or knows what any value means. Recording is a transparent proxy; replay feeds the recorded
-answers back and verifies the *questions* still match.
 
 ## License
 
