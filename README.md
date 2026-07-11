@@ -7,8 +7,7 @@ against the real code.
 
 ## → [Documentation](https://xag.github.io/flight-recorder/)
 
-[Slides — Testing as Simulation](https://xag.github.io/flight-recorder/slides.html) ·
-[The tape format](spec/tape-v1.md)
+[Slides — Testing as Simulation](https://xag.github.io/flight-recorder/slides.html)
 
 ## Install
 
@@ -21,8 +20,6 @@ npm install @xag/flight-recorder     # Node
 |---|---|---|
 | Python | `flight-recorder` (PyPI) | [`flight_recorder/`](flight_recorder/) |
 | Node | [`@xag/flight-recorder`](https://www.npmjs.com/package/@xag/flight-recorder) (npm) | [`js/`](js/) |
-
-Both write the same tape — format v1, frozen in [`spec/tape-v1.md`](spec/tape-v1.md).
 
 ## What it does
 
