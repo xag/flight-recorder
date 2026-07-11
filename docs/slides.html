@@ -145,6 +145,10 @@
   td:first-child { font-family: "Cascadia Code", Consolas, ui-monospace, monospace; white-space: nowrap; }
   .table-wrap { overflow-x: auto; }
 
+  /* nowrap: a URL split across a line break reads as a typo, not a link. */
+  .slide a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; white-space: nowrap; }
+  .slide a:hover { border-bottom-color: currentColor; }
+
   .verdict {
     display: inline-block; font-family: "Cascadia Code", Consolas, ui-monospace, monospace;
     font-size: .8rem; font-weight: 700; letter-spacing: .1em;
@@ -245,7 +249,9 @@
     <p class="kicker lead">Record every tool call at its <strong>nondeterminism boundary</strong>.
     Replay it later, deterministically, with <strong>every internal variable observable</strong>.
     A testing approach — and the philosophy it fell out of.</p>
-    <p class="note mono" style="margin-top:2rem">poietic.studio · july 2026 · github.com/xag/flight-recorder</p>
+    <p class="note mono" style="margin-top:2rem">poietic.studio · july 2026 ·
+    <a href="https://xag.github.io/flight-recorder/">docs</a> ·
+    <a href="https://github.com/xag/flight-recorder">github.com/xag/flight-recorder</a></p>
   </section>
 
   <!-- 2 · the problem -->
@@ -637,7 +643,9 @@
     <h2 style="max-width:22ch">No claim about behavior without a place to look it up</h2>
     <p class="lead">The instruments exist so that a claim is a trace line, a log line, or a measurement —
     never a plausible story. That rule, applied in every repo, is worth more than any of the code.</p>
-    <p class="note mono" style="margin-top:2.2rem">github.com/xag/flight-recorder ·
+    <p class="note mono" style="margin-top:2.2rem">
+    <a href="https://xag.github.io/flight-recorder/">docs</a> ·
+    <a href="https://github.com/xag/flight-recorder">github.com/xag/flight-recorder</a> ·
     record → pin → fix → replay-diff · <span class="verdict ok">MATCH</span></p>
   </section>
 
