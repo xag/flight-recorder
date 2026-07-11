@@ -5,18 +5,16 @@
 Record an app's tool calls at their **nondeterminism boundary**; replay them deterministically
 against the real code.
 
-### 📖 **[Documentation](https://xag.github.io/flight-recorder/)** · 🎞 **[Slides — Testing as Simulation](https://xag.github.io/flight-recorder/slides.html)** · 📼 **[The tape format](spec/tape-v1.md)**
-
-> The docs are a web page rather than this file because every example exists in two languages, and
-> a README cannot show you one and hide the other — GitHub renders no tabs. Pick your language there
-> and the whole page follows.
+**[Documentation](https://xag.github.io/flight-recorder/)** ·
+[Slides](https://xag.github.io/flight-recorder/slides.html) ·
+[Tape format](spec/tape-v1.md)
 
 ```bash
 pip install flight-recorder          # Python
 npm install @xag/flight-recorder     # Node
 ```
 
----
+## What it does
 
 A program's execution is fully determined by its code plus its nondeterministic inputs — what the
 store answered, what the API returned, what time it was, what the dice rolled. Record just those,
@@ -33,8 +31,8 @@ answers back and verifies the *questions* still match. The only structural knowl
 1. **Name the doors** — the handful of places the world enters. That declaration is the *boundary*,
    and it is the only app-specific artifact. Nothing behind it is ever mocked; real code runs
    everywhere.
-2. **Record what came through** — inputs, every answer the world gave *in the order it was asked*,
-   and the result.
+2. **Record what came through** — the inputs, every answer the world gave *in the order it was
+   asked*, and the result.
 3. **Replay is resurrection, not re-enactment** — and if the code asks a *different question* than
    the recording holds, you are told precisely where behaviour changed.
 4. **Recordings answer "same?", invariants answer "right?"** — a bug records as faithfully as a fix,
@@ -44,10 +42,10 @@ answers back and verifies the *questions* still match. The only structural knowl
 
 ## Two implementations, one tape
 
-| | | |
+| Language | Package | Source |
 |---|---|---|
-| **Python** | this repo | `flight_recorder/` |
-| **Node** | [`@xag/flight-recorder`](https://www.npmjs.com/package/@xag/flight-recorder) | [`js/`](js/) |
+| Python | `flight-recorder` (PyPI) | [`flight_recorder/`](flight_recorder/) |
+| Node | [`@xag/flight-recorder`](https://www.npmjs.com/package/@xag/flight-recorder) (npm) | [`js/`](js/) |
 
 Both write the same tape — format v1, frozen in [`spec/tape-v1.md`](spec/tape-v1.md). Only *record*
 and *replay* are language-bound: replaying JavaScript means running JavaScript. Everything downstream
@@ -59,8 +57,8 @@ means the tape has forked, which is the one failure the arrangement exists to pr
 
 One difference is worth knowing before you choose: **variable-level tracing exists only in Python.**
 `sys.settrace` hands it every local on every executed line; Node has no equivalent. A tape gives you
-the *boundary* in both — but only Python gives you the *interior*.
-[The rest of the differences, and why each is forced](https://xag.github.io/flight-recorder/#differ).
+the *boundary* in both — only Python gives you the *interior*.
+[The rest of the differences, and why each is forced.](https://xag.github.io/flight-recorder/#differ)
 
 ## License
 
