@@ -6,143 +6,172 @@
 <title>flight-recorder — record the boundary, replay the real code</title>
 <meta name="description" content="Record an app's tool calls at their nondeterminism boundary; replay them deterministically against the real code. Python and Node, one tape.">
 <style>
+  /* Library documentation. Plain, legible, unbranded — the reader came for the API, not a
+     product. Light by default, because that is what docs are; dark honoured if asked for. */
   :root {
-    color-scheme: dark light;
-    --ground: #101519;
-    --panel: #161d23;
-    --panel-2: #1c242c;
-    --ink: #e9edf0;
-    --muted: #8b959e;
-    --line: #2a333c;
-    --accent: #f2551e;        /* international orange — the colour of real flight recorders */
-    --accent-dim: #f2551e22;
-    --match: #43b581;
-    --code-bg: #0c1013;
-    --mono: "Cascadia Code", Consolas, ui-monospace, monospace;
+    --bg: #ffffff;
+    --fg: #1f2328;
+    --muted: #59636e;
+    --line: #d1d9e0;
+    --line-soft: #e6ebf0;
+    --link: #0969da;
+    --code-bg: #f6f8fa;
+    --mono: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1;
+      --line: #3d444d; --line-soft: #21262d; --link: #4493f8; --code-bg: #151b23;
+    }
   }
   * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; scroll-padding-top: 5rem; }
+  html { scroll-behavior: smooth; scroll-padding-top: 4.5rem; }
   body {
-    margin: 0; background: var(--ground); color: var(--ink);
-    font: 16.5px/1.65 "Segoe UI", system-ui, -apple-system, sans-serif;
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   }
-  .mono, code { font-family: var(--mono); }
+  code, pre, .mono { font-family: var(--mono); }
 
-  /* --- the language switch, pinned so it is reachable from any section ------------- */
-  header {
-    position: sticky; top: 0; z-index: 10;
-    background: rgba(16,21,25,.92); backdrop-filter: blur(8px);
-    border-bottom: 1px solid var(--line);
-  }
-  .bar {
-    max-width: 980px; margin: 0 auto; padding: .7rem 1.4rem;
-    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
-  }
-  .brand { font-family: var(--mono); font-weight: 700; letter-spacing: -.02em; }
-  .brand span { color: var(--accent); }
-  .bar nav { display: flex; gap: 1rem; font-size: .87rem; margin-left: auto; }
-  .bar nav a { color: var(--muted); text-decoration: none; }
-  .bar nav a:hover { color: var(--ink); }
+  /* top bar: name and switch. No hero, no branding. */
+  .topbar { position: sticky; top: 0; z-index: 20; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .topbar-in { max-width: 1180px; margin: 0 auto; padding: .6rem 1.5rem; display: flex; align-items: center; gap: 1rem; }
+  .name { font-family: var(--mono); font-weight: 600; font-size: .95rem; }
+  .name a { color: var(--fg); text-decoration: none; }
+  .topbar nav { margin-left: auto; display: flex; gap: 1.1rem; font-size: .875rem; }
+  .topbar nav a { color: var(--muted); text-decoration: none; }
+  .topbar nav a:hover { color: var(--link); }
 
-  .langs { display: flex; gap: .25rem; background: var(--panel-2); padding: .22rem; border-radius: 999px; }
+  .langs { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
   .langs button {
-    font: 600 .8rem/1 var(--mono); letter-spacing: .04em;
-    color: var(--muted); background: none; border: 0; cursor: pointer;
-    padding: .42rem .85rem; border-radius: 999px;
+    font: 500 .8rem/1 var(--mono); color: var(--muted); background: var(--bg);
+    border: 0; cursor: pointer; padding: .42rem .8rem;
   }
-  .langs button[aria-selected="true"] { background: var(--accent); color: #fff; }
+  .langs button + button { border-left: 1px solid var(--line); }
+  .langs button[aria-selected="true"] { background: var(--code-bg); color: var(--fg); font-weight: 700; }
 
-  main { max-width: 980px; margin: 0 auto; padding: 0 1.4rem 6rem; }
+  /* sidebar + column */
+  .layout {
+    max-width: 1180px; margin: 0 auto; padding: 0 1.5rem;
+    display: grid; grid-template-columns: 205px minmax(0, 1fr); gap: 3rem;
+  }
+  .toc {
+    position: sticky; top: 3.6rem; align-self: start;
+    max-height: calc(100vh - 5rem); overflow-y: auto; padding: 1.8rem 0; font-size: .875rem;
+  }
+  .toc ul { list-style: none; margin: 0; padding: 0; }
+  .toc a { display: block; padding: .22rem 0; color: var(--muted); text-decoration: none; }
+  .toc a:hover { color: var(--link); }
+  .toc-head {
+    font: 600 .7rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 .6rem;
+  }
 
-  h1 { font-family: var(--mono); font-size: clamp(1.9rem, 4.5vw, 2.9rem); letter-spacing: -.03em; margin: 2.6rem 0 .6rem; }
+  main { padding: 1.8rem 0 6rem; max-width: 46rem; }
+
+  h1 { font-size: 1.8rem; font-weight: 600; letter-spacing: -.01em; margin: .4rem 0 .3rem; }
   h2 {
-    font-family: var(--mono); font-size: 1.42rem; letter-spacing: -.02em;
-    margin: 3.4rem 0 .5rem; padding-top: .6rem; border-top: 1px solid var(--line);
+    font-size: 1.32rem; font-weight: 600; letter-spacing: -.01em;
+    margin: 2.8rem 0 .5rem; padding-bottom: .3rem; border-bottom: 1px solid var(--line-soft);
   }
-  h3 { font-size: 1.05rem; margin: 1.8rem 0 .4rem; }
-  p { margin: .7rem 0; }
-  .lead { font-size: 1.12rem; color: var(--ink); }
+  h3 { font-size: 1.04rem; font-weight: 600; margin: 1.7rem 0 .3rem; }
+  p { margin: .75rem 0; }
+  .lead { font-size: 1.05rem; color: var(--muted); margin-bottom: 1.1rem; }
   .muted { color: var(--muted); }
-  a { color: var(--accent); }
-  strong { color: #fff; }
-  em { color: #fff; font-style: italic; }
+  a { color: var(--link); }
+  strong { font-weight: 600; }
 
-  ol.steps { padding-left: 1.15rem; }
-  ol.steps li { margin: .85rem 0; }
-  ol.steps li::marker { color: var(--accent); font-family: var(--mono); font-weight: 700; }
-  ul.tight { padding-left: 1.15rem; }
-  ul.tight li { margin: .45rem 0; }
-  ul.tight li::marker { color: var(--accent); }
+  ol.steps, ul.tight { padding-left: 1.3rem; }
+  ol.steps li, ul.tight li { margin: .5rem 0; }
 
   pre {
-    background: var(--code-bg); border: 1px solid var(--line); border-radius: 10px;
-    padding: .95rem 1.1rem; overflow-x: auto; font-size: .875rem; line-height: 1.5;
-    margin: .8rem 0;
+    background: var(--code-bg); border: 1px solid var(--line-soft); border-radius: 6px;
+    padding: .85rem 1rem; overflow-x: auto; font-size: .84rem; line-height: 1.55; margin: .1rem 0 1rem;
   }
-  pre code { color: #cfd8de; }
-  code:not(pre code) {
-    background: var(--panel-2); padding: .1em .38em; border-radius: 5px; font-size: .9em;
+  :not(pre) > code {
+    background: var(--code-bg); border: 1px solid var(--line-soft);
+    padding: .1em .35em; border-radius: 4px; font-size: .86em;
   }
 
-  .rule {
-    border-left: 3px solid var(--accent); background: var(--accent-dim);
-    padding: .85rem 1.1rem; border-radius: 0 8px 8px 0; margin: 1.2rem 0;
+  /* callouts: bordered, not branded */
+  .rule, .note {
+    background: var(--code-bg); border: 1px solid var(--line-soft);
+    border-left: 3px solid var(--line); border-radius: 0 6px 6px 0;
+    padding: .1rem 1rem; margin: 1.1rem 0;
   }
-  .note {
-    border-left: 3px solid var(--line); padding: .1rem 1.1rem; margin: 1.1rem 0; color: var(--muted);
-  }
+  .rule { border-left-color: var(--fg); }
 
   .badge {
-    display: inline-block; font: 600 .68rem/1 var(--mono); letter-spacing: .1em; text-transform: uppercase;
-    padding: .34rem .6rem; border-radius: 999px; vertical-align: middle; margin-left: .5rem;
-    background: var(--panel-2); color: var(--muted); border: 1px solid var(--line);
+    display: inline-block; font: 600 .68rem/1 var(--mono); letter-spacing: .05em;
+    padding: .3rem .5rem; border-radius: 4px; vertical-align: middle; margin-left: .5rem;
+    background: var(--code-bg); color: var(--muted); border: 1px solid var(--line-soft);
   }
-  .badge.py { color: #7fd1ff; border-color: #7fd1ff44; }
 
-  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .93rem; }
-  th, td { text-align: left; padding: .6rem .9rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { font-family: var(--mono); font-size: .72rem; letter-spacing: .13em; text-transform: uppercase; color: var(--muted); }
-  td:first-child { font-family: var(--mono); white-space: nowrap; color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .9rem; }
+  th, td { text-align: left; padding: .5rem .8rem; border: 1px solid var(--line-soft); vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 600; }
+  td:first-child { font-family: var(--mono); font-size: .84rem; white-space: nowrap; }
   .table-wrap { overflow-x: auto; }
 
-  footer { border-top: 1px solid var(--line); margin-top: 4rem; padding: 2rem 0; color: var(--muted); font-size: .9rem; }
+  footer { border-top: 1px solid var(--line-soft); margin-top: 3.5rem; padding: 1.5rem 0; color: var(--muted); font-size: .875rem; }
 
-  /* --- what the switch actually does ---------------------------------------------- */
   [data-lang] { display: none; }
   body[data-show="py"] [data-lang="py"],
   body[data-show="js"] [data-lang="js"] { display: block; }
+
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; gap: 0; }
+    .toc { display: none; }
+  }
 </style>
 </head>
 <body data-show="py">
 
-<header>
-  <div class="bar">
-    <span class="brand">flight<span>-</span>recorder</span>
+<div class="topbar">
+  <div class="topbar-in">
+    <span class="name"><a href="#top">flight-recorder</a></span>
     <div class="langs" role="tablist" aria-label="Language">
       <button role="tab" data-set="py" aria-selected="true">Python</button>
       <button role="tab" data-set="js" aria-selected="false">Node</button>
     </div>
     <nav>
-      <a href="#boundary">Boundary</a>
-      <a href="#record">Record</a>
-      <a href="#replay">Replay</a>
-      <a href="#differ">Differences</a>
       <a href="slides.html">Slides</a>
+      <a href="https://github.com/xag/flight-recorder/blob/main/spec/tape-v1.md">Tape format</a>
       <a href="https://github.com/xag/flight-recorder">GitHub</a>
     </nav>
   </div>
-</header>
+</div>
+
+<div class="layout">
+<nav class="toc" aria-label="Contents">
+  <p class="toc-head">Contents</p>
+  <ul>
+    <li><a href="#install">Install</a></li>
+    <li><a href="#approach">The approach</a></li>
+    <li><a href="#boundary">Declare the boundary</a></li>
+    <li><a href="#record">Record</a></li>
+    <li><a href="#replay">Replay</a></li>
+    <li><a href="#regression">Pinned recordings</a></li>
+    <li><a href="#mutation">Edit the tape</a></li>
+    <li><a href="#invariants">Invariants</a></li>
+    <li><a href="#differ">Language differences</a></li>
+    <li><a href="#tape">The tape</a></li>
+    <li><a href="#limits">Limits</a></li>
+    <li><a href="#lineage">Lineage</a></li>
+  </ul>
+</nav>
 
 <main>
 
-<h1>Record the boundary.<br>Replay the real code.</h1>
+<h1 id="top">flight-recorder</h1>
 
-<p class="lead">A program's execution is fully determined by its code plus its nondeterministic
-inputs — what the store answered, what the API returned, what time it was, what the dice rolled.
-Record just those, per call: one cheap JSONL line. That line <em>is</em> the execution, compressed.</p>
+<p class="lead">Record an app's tool calls at their nondeterminism boundary; replay them
+deterministically against the real code.</p>
 
-<p>Feed the answers back and the real code re-runs the original execution exactly — no network,
-no database, no waiting for the bug to happen again.</p>
+<p>A program's execution is fully determined by its code plus its nondeterministic inputs — what the
+store answered, what the API returned, what time it was, what the dice rolled. Record just those, per
+call: one cheap JSONL line. That line <em>is</em> the execution, compressed. Feed the answers back and
+the real code re-runs the original execution exactly — no network, no database, no waiting for the bug
+to happen again.</p>
 
 <div class="rule">
   <strong>The cardinal rule: instrument, never duplicate.</strong> Nothing here evaluates a query,
@@ -591,6 +620,7 @@ claim above is a survey result, not a proof.</p>
 </footer>
 
 </main>
+</div>
 
 <script>
   // One switch, every sample on the page. Remembered, because nobody wants to re-pick their
