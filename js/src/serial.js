@@ -102,42 +102,67 @@ export function fromJsonable(v) {
 }
 
 /**
- * Apply field-name redaction rules to a jsonable tree.
+ * Redact a jsonable tree: `rules` by FIELD NAME, `scrub` by VALUE.
  *
- * A rule that throws degrades to REDACTED: the failure direction is "masked", never
+ * Field rules assume secrets live in named fields. Often they do not. An address handed to
+ * a store as a positional argument (`sismember('allowlist', addr)`), or baked into a key
+ * (`user:${addr}`), or sitting in the middle of a sentence in an email body, has no field
+ * name to match — and walks onto the tape untouched while a tidily-masked copy of itself
+ * sits in the next field along. `scrub` sweeps every string wherever it sits, which is the
+ * only thing that catches those.
+ *
+ * It also fixes something field rules cannot: **redacting an INPUT poisons everything
+ * derived from it.** Mask the `email` kwarg and the recording holds a key derived from the
+ * RAW address, while replay — handed the mask — derives a key from the MASK. Different
+ * question, spurious divergence. A substring-level scrub is consistent under derivation:
+ * `user:${addr}` scrubs to the same thing the replayed code builds out of the scrubbed
+ * `addr`. That is what makes a pseudonymised recording replayable at all.
+ *
+ * A rule or scrub that throws degrades to REDACTED: the failure direction is "masked", never
  * "leaked" and never "broke the recorded call".
  *
- * Rules MUST be idempotent. Replay re-derives the question it is about to ask, scrubs it
- * the same way, and compares against the tape — so a value that is already a mask has to
- * scrub to itself, or a redacted recording could never be replayed.
+ * Both MUST be idempotent. Replay re-derives the question it is about to ask, scrubs it the
+ * same way, and compares against the tape — so a value that is already a mask has to scrub
+ * to itself, or a redacted recording could never be replayed.
  */
-export function redactJsonable(v, rules) {
-  if (!rules || !Object.keys(rules).length) return v;
+export function redactJsonable(v, rules, scrub) {
+  const hasRules = rules && Object.keys(rules).length;
+  if (!hasRules && !scrub) return v;
 
-  if (Array.isArray(v)) return v.map((x) => redactJsonable(x, rules));
+  // A leaf string. `scrub` sweeps EVERY string, wherever it sits.
+  const leaf = (x) => {
+    if (typeof x !== 'string' || !scrub) return x;
+    try {
+      return scrub(x);
+    } catch {
+      return REDACTED;
+    }
+  };
+
+  if (Array.isArray(v)) return v.map((x) => redactJsonable(x, rules, scrub));
 
   if (v !== null && typeof v === 'object') {
     const out = {};
     for (const [k, x] of Object.entries(v)) {
-      if (Object.hasOwn(rules, k)) {
+      if (hasRules && Object.hasOwn(rules, k)) {
         const rule = rules[k];
         if (rule === null || rule === undefined) {
           out[k] = REDACTED;
         } else {
           try {
-            out[k] = rule(x);
+            out[k] = leaf(rule(x));
           } catch {
             out[k] = REDACTED;
           }
         }
       } else {
-        out[k] = redactJsonable(x, rules);
+        out[k] = redactJsonable(x, rules, scrub);
       }
     }
     return out;
   }
 
-  return v;
+  return leaf(v);
 }
 
 /** Compact stable rendering of a chained-call argument, for `db` signatures. */

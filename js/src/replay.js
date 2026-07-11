@@ -66,12 +66,13 @@ class Feed {
    * @param {object} [o.revivers] error type name → (args) => Error
    * @param {object} [o.redact]   the boundary's rules, so a redacted tape still compares
    */
-  constructor(events, { probe = false, revivers = {}, redact = {} } = {}) {
+  constructor(events, { probe = false, revivers = {}, redact = {}, scrub = null } = {}) {
     this.events = events;
     this.i = 0;
     this.probe = probe;
     this.revivers = revivers;
     this.redact = redact;
+    this.scrub = scrub;
   }
 
   get exhausted() {
@@ -123,7 +124,7 @@ class Feed {
       // idempotent: a value that came off the tape is already a mask and must scrub to
       // itself, or a redacted recording could never be replayed.
       const recorded = JSON.stringify(ev.args ?? []);
-      const replayed = JSON.stringify(redactJsonable(args, this.redact));
+      const replayed = JSON.stringify(redactJsonable(args, this.redact, this.scrub));
       if (recorded !== replayed) {
         throw this._diverge(`fx ${fn}(${replayed})`, `fx ${fn}(${recorded})`);
       }
@@ -169,6 +170,7 @@ export async function replayCall({ call, fn, boundary = {}, probe = false }) {
     probe: probe || Boolean(call.probe),
     revivers: boundary.errorRevivers ?? {},
     redact: boundary.redact ?? {},
+    scrub: boundary.scrub ?? null,
   });
 
   const redact = boundary.redact ?? {};
@@ -220,7 +222,7 @@ export async function replayCall({ call, fn, boundary = {}, probe = false }) {
 
   // Mirror the recorder exactly: a call that raised has no return value (null), which is not
   // the same as one that returned `undefined`.
-  const replayedResult = error !== null ? null : redactJsonable(toJsonable(result), redact);
+  const replayedResult = error !== null ? null : redactJsonable(toJsonable(result), redact, boundary.scrub ?? null);
   const resultMatch = JSON.stringify(replayedResult) === JSON.stringify(call.result ?? null);
   const errorMatch = (error ?? null) === (call.error ?? null);
 

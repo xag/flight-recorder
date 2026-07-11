@@ -213,3 +213,113 @@ test('the recorder never writes clock events the app did not ask for', async () 
   assert.deepEqual(call.events, [], 'a call that asks nothing records nothing');
   assert.ok(report.ok);
 });
+
+// --- scrub: the values a field-name rule cannot see ----------------------------------------
+
+test('scrub sweeps values a field rule cannot see — positional args, keys, prose', async () => {
+  const ADDRESS = /[\w.+-]+@[\w-]+\.[\w.-]+/g;
+  const hide = (s) => (typeof s === 'string' ? s.replace(ADDRESS, 'user@hidden') : s);
+
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flight-'));
+  const boundary = fr.boundaryOf({ scrub: hide });
+  const raw = { has: () => true, put: () => 'OK' };
+  const store = fr.wrap(raw, ['has', 'put'], { prefix: 'kv' });
+  fr.install(boundary, { directory: dir });
+
+  const impl = async ({ email }) => {
+    await store.has('allowlist', email);        // POSITIONAL — no field name to match
+    await store.put(`user:${email}`, { note: `welcome ${email}` }); // in a KEY, and in PROSE
+    return { greeting: `hi ${email}` };
+  };
+
+  await fr.tool('t', impl)({ email: 'writer@example.com' });
+  const text = fs.readFileSync(fr.tapePath(), 'utf8');
+  const call = fr.pickCall(fr.loadTape(fr.tapePath()), { fn: 't' });
+  fr.uninstall();
+
+  assert.ok(!text.includes('writer@example.com'), 'the address is nowhere on the tape');
+  assert.deepEqual(call.events[0].args, ['allowlist', 'user@hidden'], 'positional arg swept');
+  assert.equal(call.events[1].args[0], 'user:user@hidden', 'inside a key, swept');
+  assert.equal(call.events[1].args[1].note, 'welcome user@hidden', 'inside prose, swept');
+  assert.equal(call.result.greeting, 'hi user@hidden');
+});
+
+test('a scrubbed recording still REPLAYS — the sweep is consistent under derivation', async () => {
+  // This is the subtle one. Masking an INPUT poisons everything derived from it: the tape
+  // holds a key built from the RAW address, while replay — handed the mask — builds a key
+  // from the MASK, and the two no longer match. A substring sweep does not have that
+  // problem, because `user:${addr}` scrubs to exactly what the replayed code builds out of
+  // the scrubbed `addr`.
+  const ADDRESS = /[\w.+-]+@[\w-]+\.[\w.-]+/g;
+  const hide = (s) => (typeof s === 'string' ? s.replace(ADDRESS, 'user@hidden') : s);
+
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flight-'));
+  const boundary = fr.boundaryOf({ scrub: hide });
+  const store = fr.wrap({ get: () => ({ ok: true }) }, ['get'], { prefix: 'kv' });
+  fr.install(boundary, { directory: dir });
+
+  const impl = async ({ email }) => ({ found: await store.get(`user:${email}`) });
+  await fr.tool('t', impl)({ email: 'writer@example.com' });
+
+  const call = fr.pickCall(fr.loadTape(fr.tapePath()), { fn: 't' });
+  fr.uninstall();
+
+  const dead = fr.wrap({ get: () => { throw new Error('the world was touched'); } }, ['get'], { prefix: 'kv' });
+  const replayImpl = async ({ email }) => ({ found: await dead.get(`user:${email}`) });
+
+  const report = await fr.replayCall({ call, fn: replayImpl, boundary });
+  assert.equal(report.divergence, null, report.divergence?.message);
+  assert.ok(report.ok, 'a pseudonymised tape replays — which is what makes it usable at all');
+});
+
+// --- a door's own internals stay behind the door -------------------------------------------
+
+test("a wrapped client's internal clock/RNG calls never reach the tape", async () => {
+  // The hazard, found by wiring a real app: @upstash/redis calls performance.now() inside
+  // its own request path. That is the world's machinery on the far side of a boundary we are
+  // already recording — not the app asking anything. Recorded, it becomes an answer to a
+  // question nobody asks on replay (the real client never runs), and it surfaces as a
+  // divergence on event 0 pointing at the app, which did nothing wrong.
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flight-'));
+  const boundary = fr.boundaryOf({});
+
+  const chatty = {
+    async get(key) {
+      performance.now();          // like a client timing its own request
+      Date.now();                 // like a client stamping a retry
+      Math.random();              // like a client jittering a backoff
+      await new Promise((r) => setImmediate(r)); // and it does it across an await, too
+      performance.now();
+      return { key };
+    },
+  };
+  const store = fr.wrap(chatty, ['get'], { prefix: 'kv' });
+  fr.install(boundary, { directory: dir });
+
+  const impl = async () => {
+    const t = Date.now();          // the APP asking — this one counts
+    const row = await store.get('k');
+    return { t, row };
+  };
+
+  await fr.tool('t', impl)({});
+  const call = fr.pickCall(fr.loadTape(fr.tapePath()), { fn: 't' });
+  fr.uninstall();
+
+  assert.deepEqual(
+    call.events.map((e) => e.k),
+    ['now', 'fx'],
+    "only the app's own clock call and the effect itself — none of the client's internals",
+  );
+
+  // …and it replays, which is the proof that mattered.
+  const dead = fr.wrap({ get: () => { throw new Error('the world was touched'); } }, ['get'], { prefix: 'kv' });
+  const replayImpl = async () => {
+    const t = Date.now();
+    const row = await dead.get('k');
+    return { t, row };
+  };
+  const report = await fr.replayCall({ call, fn: replayImpl, boundary });
+  assert.equal(report.divergence, null, report.divergence?.message);
+  assert.ok(report.ok);
+});

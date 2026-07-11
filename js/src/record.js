@@ -48,12 +48,31 @@ const active = new AsyncLocalStorage();
  */
 export const hook = { mode: null, feed: null };
 
+/**
+ * True while a wrapped effect is running the REAL client.
+ *
+ * Everything behind a door is behind the door. A store client calls `performance.now()` for
+ * its own timing, an HTTP client calls `Math.random()` for a jitter, a mailer calls
+ * `Date.now()` for a message id — and none of that is the *app* asking the world anything.
+ * It is the world's own machinery, on the far side of a boundary whose answer we are already
+ * writing down.
+ *
+ * Recording it would be worse than noisy: on replay the real client never runs, so it never
+ * asks, and the tape's answers to questions nobody asked sit there unconsumed — surfacing as
+ * a divergence on the very first event, pointing at the app, which did nothing wrong.
+ *
+ * So: while inside an effect, emission is suppressed. The effect's own event is emitted
+ * outside this context, after it settles.
+ */
+const insideEffect = new AsyncLocalStorage();
+
 let recorder = null;
 let boundary = null;
 let gate = null;
 const patches = []; // [target, key, original]
 
 function emit(ev) {
+  if (insideEffect.getStore()) return; // the far side of a door we already record
   const buf = active.getStore();
   if (buf) buf.push(scrub(ev));
 }
@@ -64,10 +83,11 @@ const PAYLOAD_KEYS = ['args', 'kwargs', 'res', 'result'];
 
 function scrub(ev) {
   const rules = boundary?.redact;
-  if (!rules) return ev;
+  const sweep = boundary?.scrub;
+  if (!rules && !sweep) return ev;
   const out = { ...ev };
   for (const k of PAYLOAD_KEYS) {
-    if (k in out) out[k] = redactJsonable(out[k], rules);
+    if (k in out) out[k] = redactJsonable(out[k], rules, sweep);
   }
   return out;
 }
@@ -104,13 +124,13 @@ class Recorder {
       ev: 'call',
       seq: this.seq,
       fn,
-      kwargs: redactJsonable(toJsonable(kwargs), boundary?.redact),
+      kwargs: redactJsonable(toJsonable(kwargs), boundary?.redact, boundary?.scrub),
       events,
       // A call that RAISED has no return value, and that is not the same as one that
       // returned `undefined` — so it records null, as Python's does. Without this, the
       // __undef__ marker would quietly claim every failed call returned undefined, and the
       // two runtimes would disagree about what a failed call looks like.
-      result: error !== null ? null : redactJsonable(toJsonable(result), boundary?.redact),
+      result: error !== null ? null : redactJsonable(toJsonable(result), boundary?.redact, boundary?.scrub),
       error,
       ts: isoLocal(new RealDate()),
       ms: Math.round(ms * 100) / 100,
@@ -206,7 +226,10 @@ export function wrap(target, methods, { prefix = '' } = {}) {
 
         let res;
         try {
-          res = value.apply(t, args);
+          // The real client runs INSIDE the suppression context, so its own clock/RNG calls
+          // — and any it makes across an await — do not reach the tape. The `.then` handlers
+          // below are attached outside it, so the effect's own event still gets emitted.
+          res = insideEffect.run(true, () => value.apply(t, args));
         } catch (e) {
           ev.err = errEvent(e);
           emit(ev);
@@ -455,6 +478,10 @@ export function boundaryOf(o = {}) {
   return {
     constants: o.constants ?? {},
     redact: o.redact ?? {},
+    // Applied to EVERY string in a payload, wherever it sits — positional args, keys, prose.
+    // Field rules cannot see those, and a redacted input would otherwise poison every value
+    // derived from it. Must be idempotent.
+    scrub: o.scrub ?? null,
     clock: o.clock ?? true,
     random: o.random ?? true,
     // type name -> (args) => Error. Replay must rebuild a recorded error with its real
