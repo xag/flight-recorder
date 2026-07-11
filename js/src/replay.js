@@ -16,7 +16,7 @@
 
 import fs from 'node:fs';
 
-import { hook, active, installClock, installRandom, uninstall as uninstallPatches } from './record.js';
+import { hook, active, installClock, installRandom, patchMark, restoreTo } from './record.js';
 import { toJsonable, fromJsonable, redactJsonable } from './serial.js';
 import { ReplayDivergence, ProbeUnanswerable } from './errors.js';
 
@@ -177,7 +177,9 @@ export async function replayCall({ call, fn, boundary = {}, probe = false }) {
   const kwargs = fromJsonable(call.kwargs ?? {});
 
   // The clock and the RNG must be shimmed for replay too, or the code re-rolls the dice and
-  // is no longer the execution on the tape.
+  // is no longer the execution on the tape. Mark the patch stack so we unwind exactly what we
+  // add — a replay must not tear down a recording session that was already running.
+  const mark = patchMark();
   installClock();
   installRandom();
 
@@ -200,7 +202,7 @@ export async function replayCall({ call, fn, boundary = {}, probe = false }) {
   } finally {
     hook.mode = null;
     hook.feed = null;
-    uninstallPatches();
+    restoreTo(mark);
   }
 
   if (divergence) {

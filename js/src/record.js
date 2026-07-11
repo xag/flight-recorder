@@ -30,6 +30,7 @@ import { ReplayDivergence, ProbeUnanswerable } from './errors.js';
 // for — and consume them on replay. The instrument would be recording itself.
 const RealDate = globalThis.Date;
 const realPerfNow = performance.now.bind(performance);
+const realRandomBytes = crypto.randomBytes.bind(crypto);
 
 export const FORMAT_VERSION = 1;
 
@@ -105,8 +106,19 @@ class Recorder {
     this.sink = sink;
     this.seq = 0;
 
+    // A UNIQUE name, and the entropy is not decoration.
+    //
+    // Timestamp-to-the-second plus pid looks unique and is not: serverless instances are
+    // separate containers that happily reuse low pids (4 is common) and start within the same
+    // second. Two functions of the same app then choose the SAME name, and a sink that stores
+    // by name has one tape silently overwrite the other. Found in production, where the
+    // moderator's tape was clobbered by the web form's.
+    //
+    // realRandomBytes, not the shim: naming a tape is not the app asking the world for dice.
+    // A shimmed draw here would write a rand event nobody asked for, and consume one on replay.
     const stamp = new RealDate().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
-    this.name = `flight-${stamp}-${process.pid}.jsonl`;
+    const nonce = realRandomBytes(4).toString('hex');
+    this.name = `flight-${stamp}-${process.pid}-${nonce}.jsonl`;
 
     if (this.dir) {
       fs.mkdirSync(this.dir, { recursive: true });
@@ -570,13 +582,30 @@ export function install(
 }
 
 export function uninstall() {
-  while (patches.length) {
-    const [target, key, original] = patches.pop();
-    target[key] = original;
-  }
+  restoreTo(0);
   recorder = null;
   boundary = null;
   gate = null;
+}
+
+/**
+ * Where the patch stack currently is, and how to unwind back to it.
+ *
+ * replayCall() shims the clock and the RNG for the duration of a replay, and used to clean up
+ * by calling uninstall() — which also tore down the RECORDER. So replaying a tape silently
+ * switched off recording for the rest of the process, and the next call went unrecorded with
+ * no complaint from anybody. Marking and unwinding restores exactly what replay added and
+ * leaves an active recording session alone.
+ */
+export function patchMark() {
+  return patches.length;
+}
+
+export function restoreTo(mark) {
+  while (patches.length > mark) {
+    const [target, key, original] = patches.pop();
+    target[key] = original;
+  }
 }
 
 /** The tape being written, or null. */

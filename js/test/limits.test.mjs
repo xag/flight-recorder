@@ -427,3 +427,62 @@ test('a concurrent fan-out records in the order the questions were ASKED', async
   assert.ok(report.ok);
   assert.deepEqual(report.result.rows.map((r) => r.key), ['a', 'b', 'c']);
 });
+
+test('replaying a tape does not switch off the recorder', async () => {
+  // It used to. replayCall() shimmed the clock for the duration of the replay and cleaned up
+  // with uninstall(), which also tore down the RECORDER — so the next real call went
+  // unrecorded, silently, and only a test that recorded AFTER a replay ever noticed.
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flight-'));
+  const boundary = fr.boundaryOf({});
+  fr.install(boundary, { directory: dir });
+
+  await fr.tool('one', async () => ({ t: Date.now() }))({});
+  const call = fr.pickCall(fr.loadTape(fr.tapePath()), { fn: 'one' });
+
+  const report = await fr.replayCall({ call, fn: async () => ({ t: Date.now() }), boundary });
+  assert.ok(report.ok, 'the replay itself worked');
+
+  // …and recording is still on.
+  await fr.tool('two', async () => ({ t: Date.now() }))({});
+  const names = fr.loadTape(fr.tapePath()).calls.map((c) => c.fn);
+  fr.uninstall();
+
+  assert.deepEqual(names, ['one', 'two'], 'the call made after the replay is still on the tape');
+});
+
+test('tape names are unique — two recorders in the same second do not collide', async () => {
+  // Timestamp-to-the-second + pid looked unique and was not. On Vercel, separate functions run
+  // in separate containers that reuse low pids and start in the same second, so two of them
+  // chose the same name and the sink silently overwrote one tape with the other. It cost a
+  // moderator's recording before anyone noticed.
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flight-'));
+
+  const names = new Set();
+  for (let i = 0; i < 20; i++) {
+    fr.install(fr.boundaryOf({}), { directory: dir });
+    names.add(path.basename(fr.tapePath()));
+    fr.uninstall();
+  }
+
+  assert.equal(names.size, 20, 'twenty recorders in the same second produced twenty names');
+  for (const n of names) assert.match(n, /^flight-\d{8}T\d{6}-\d+-[0-9a-f]{8}\.jsonl$/);
+});
+
+test('naming a tape does not put a rand event on it', async () => {
+  // The nonce must come from the captured RNG, not the shim — otherwise the recorder writes a
+  // draw the app never made, and consumes one on replay.
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flight-'));
+  const boundary = fr.boundaryOf({});
+  fr.install(boundary, { directory: dir });
+
+  const { report, call } = await (async () => {
+    const impl = async () => ({ ok: 1 });
+    await fr.tool('t', impl)({});
+    const c = fr.pickCall(fr.loadTape(fr.tapePath()), { fn: 't' });
+    fr.uninstall();
+    return { report: await fr.replayCall({ call: c, fn: impl, boundary }), call: c };
+  })();
+
+  assert.deepEqual(call.events, [], 'a call that asks nothing records nothing');
+  assert.ok(report.ok);
+});
