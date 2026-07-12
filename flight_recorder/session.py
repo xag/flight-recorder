@@ -287,6 +287,16 @@ class SessionVerdict:
         return bad / total if total else 0.0
 
 
+def _message(e: AssertionError) -> str:
+    """The claim's own message, without pytest's autopsy.
+
+    Under pytest, assertions are rewritten and `str(e)` carries the message AND a dump of the
+    expression that failed — `assert not ['call 9 ...', 'call 14 ...']`, the same findings again,
+    as a Python list, wrapped. The report IS this library's product; a claim must read the same
+    whether it was checked from a test or from a terminal."""
+    return str(e).split("\nassert ")[0].strip() or "assertion failed"
+
+
 def check_sessions(sessions: Iterable, invariants: Any) -> SessionVerdict:
     checks = collect(invariants)
     sessions = list(sessions)
@@ -302,7 +312,7 @@ def check_sessions(sessions: Iterable, invariants: Any) -> SessionVerdict:
             except AssertionError as e:
                 bad, total = v.tally[inv.description]
                 v.tally[inv.description] = (bad + 1, total)
-                v.findings.append(Finding(inv.description, inv.about, s.name, str(e) or "assertion failed"))
+                v.findings.append(Finding(inv.description, inv.about, s.name, _message(e)))
             except Exception as e:  # the claim is broken, not the surface
                 bad, total = v.tally[inv.description]
                 v.tally[inv.description] = (bad + 1, total)
