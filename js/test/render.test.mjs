@@ -71,9 +71,17 @@ test('a render is a tape, and the tape holds what only the browser knows', { ski
   assert.ok(card.over[1] > 0, 'the card should report vertical overflow');
   assert.equal(card.ell, undefined);
 
-  // The default button background is #f0f0f0 and no stylesheet on this page says so. The browser's
+  // No stylesheet on this page gives the button a background, and yet one painted: the browser's
   // own UA sheet is part of the cascade, and only the browser has run it.
-  assert.equal(at('button.icon:nth(3)').backdrop, '#f0f0f0');
+  //
+  // Which grey it chose is Chromium's business, and it changes between versions (#f0f0f0 became
+  // #efefef, and will become something else). Pinning the shade pins a browser build — the test
+  // then fails on an upgrade while the tape it is checking is perfectly correct. So assert the
+  // claim instead: the button did not get the white the page would have given it. Something the
+  // stylesheets never mention reached the tape, which is the only thing this line is here to say.
+  const icon = at('button.icon:nth(3)');
+  assert.ok(icon.backdrop, 'the button resolved a backdrop');
+  assert.notEqual(icon.backdrop, chip.backdrop, 'the UA sheet painted it, not the page');
 
   // Focus, under a REAL Tab — because :focus-visible does not match a programmatic focus() on a
   // link, and an instrument that focused elements itself would cry wolf on a good page.
