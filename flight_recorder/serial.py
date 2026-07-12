@@ -31,9 +31,29 @@ TRACE_MAX_ITEMS = 100
 TRACE_MAX_CHARS = 512
 
 
+def _opaque_value(v: Any) -> dict:
+    """A value the tape cannot represent, marked — with the memory address scrubbed.
+
+    The default repr of an object carries its id: `<Image object at 0x7f3c…>`. Recording
+    that is recording a POINTER, and a pointer is different on every run — so the effect
+    or result it belongs to can never match on replay, and the divergence has nothing to
+    do with the code under test. Any tool returning a plain object (an image, a handle)
+    was unreplayable purely because of this. The tracer already scrubbed addresses for
+    exactly this reason (`_opaque` below); the tape did not.
+    """
+    return {"__opaque__": _ADDR.sub("", repr_or_placeholder(v))[:200]}
+
+
+def repr_or_placeholder(v: Any) -> str:
+    try:
+        return repr(v)
+    except Exception as e:  # a repr that raises must not take the recording down with it
+        return f"<unreprable {type(v).__name__}: {type(e).__name__}>"
+
+
 def to_jsonable(v: Any, depth: int = 0) -> Any:
     if depth > _MAX_DEPTH:
-        return {"__opaque__": repr(v)[:200]}
+        return _opaque_value(v)
     if v is None or isinstance(v, (str, int, float, bool)):
         return v
     if isinstance(v, datetime):
@@ -44,7 +64,7 @@ def to_jsonable(v: Any, depth: int = 0) -> Any:
         return {str(k): to_jsonable(x, depth + 1) for k, x in v.items()}
     if isinstance(v, (list, tuple, set)):
         return [to_jsonable(x, depth + 1) for x in v]
-    return {"__opaque__": repr(v)[:200]}
+    return _opaque_value(v)
 
 
 def redact_jsonable(v: Any, rules: dict) -> Any:
