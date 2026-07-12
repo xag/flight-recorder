@@ -17,7 +17,7 @@ from flight_recorder.boundary import (
     Boundary, ChainTarget, DEFAULT_TERMINAL_READS, DEFAULT_TERMINAL_WRITES,
 )
 from flight_recorder.record import (
-    ChainNode, DatetimeShim, Gate, RandomShim, SessionSink, FORMAT_VERSION,
+    ChainNode, DatetimeShim, ForbiddenValue, Gate, RandomShim, SessionSink, FORMAT_VERSION,
     hook, install, install_mcp, session_path, uninstall,
 )
 from flight_recorder.replay import (
@@ -40,14 +40,14 @@ from flight_recorder.session import (
     no_wasted_repeats, session_invariant,
 )
 from flight_recorder.serial import (
-    REDACTED, Truncated, TruncatedText, from_jsonable, from_trace_jsonable,
+    REDACTED, Truncated, TruncatedText, forbidden_hit, from_jsonable, from_trace_jsonable,
     redact_jsonable, snapshot_jsonable, to_jsonable, trace_jsonable,
 )
 
 __all__ = [
     "Boundary", "ChainTarget", "DEFAULT_TERMINAL_READS", "DEFAULT_TERMINAL_WRITES",
-    "ChainNode", "DatetimeShim", "Gate", "RandomShim", "SessionSink", "FORMAT_VERSION",
-    "hook", "install", "install_mcp", "session_path", "uninstall",
+    "ChainNode", "DatetimeShim", "ForbiddenValue", "Gate", "RandomShim", "SessionSink",
+    "FORMAT_VERSION", "hook", "install", "install_mcp", "session_path", "uninstall",
     "Feed", "PlaybackChain", "ProbeUnanswerable", "Recording", "ReplayAdapter",
     "ReplayDivergence", "ReplayedEffectError", "ReplayReport", "Snap", "TRACE_VERSION",
     "Tracer", "format_report", "load_session", "replay_call", "run_cli",
@@ -59,6 +59,7 @@ __all__ = [
     "Finding", "Session", "SessionInvariant", "SessionVerdict", "Step", "check_sessions",
     "format_session_verdict", "load_sessions", "no_retry_after_failure", "no_tool_bounce",
     "no_wasted_repeats", "session_invariant",
-    "REDACTED", "Truncated", "TruncatedText", "from_jsonable", "from_trace_jsonable",
-    "redact_jsonable", "snapshot_jsonable", "to_jsonable", "trace_jsonable",
+    "REDACTED", "Truncated", "TruncatedText", "forbidden_hit", "from_jsonable",
+    "from_trace_jsonable", "redact_jsonable", "snapshot_jsonable", "to_jsonable",
+    "trace_jsonable",
 ]

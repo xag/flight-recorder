@@ -19,6 +19,7 @@ Four kinds of input are supported:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -58,12 +59,35 @@ class Boundary:
     # values. Field-name driven: it cannot reach positional values with no name (pass
     # sensitive values as keywords) or chain signatures (which render arguments).
     redact: Any = field(default_factory=dict)
+    # The tripwire that backstops `redact`. Redaction is declarative and opt-in, so it
+    # protects exactly the fields you thought of, and its failure mode is silent and open:
+    # forget `salt` and the tape leaks; add `recovery_token` to the model next month and the
+    # tape leaks; rename a field and the rule quietly stops matching. Nothing tells you. And
+    # by construction it cannot reach a value with no name at all — a positional argument, a
+    # chain signature, an opaque repr.
+    #
+    # `forbid` states the property those rules cannot: THIS TAPE CARRIES NO CREDENTIAL. Each
+    # entry is a regex (a str or a compiled pattern) matched against the fully-redacted JSON
+    # line the recorder is about to write; a hit raises record.ForbiddenValue and writes
+    # nothing — not to the file, not to the sidecar, not to a sink. It turns "I forgot one"
+    # from an invisible leak into a noisy failure at record time.
+    #
+    # Match shapes, not values: a credential you can enumerate you can already redact. It is
+    # the one you cannot name that this is for.
+    #
+    #     forbid=[r"\b[a-f0-9]{64}\b",          # a scrypt digest survived redaction
+    #             r"-----BEGIN [A-Z ]*PRIVATE KEY-----"]
+    forbid: Any = field(default_factory=list)
 
     def redact_rules(self) -> dict:
         """The redact declaration normalized to {field_name: transform_or_None}."""
         if isinstance(self.redact, (set, frozenset, list, tuple)):
             return {name: None for name in self.redact}
         return dict(self.redact or {})
+
+    def forbid_patterns(self) -> list:
+        """The forbid declaration normalized to compiled patterns."""
+        return [p if hasattr(p, "search") else re.compile(p) for p in (self.forbid or [])]
 
     def revive_error(self, err: dict) -> BaseException:
         reviver: Optional[Callable] = self.error_revivers.get(err.get("type", ""))

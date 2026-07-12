@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Optional
 
 _MAX_DEPTH = 16
 
@@ -93,6 +93,26 @@ def redact_jsonable(v: Any, rules: dict) -> Any:
     if isinstance(v, list):
         return [redact_jsonable(x, rules) for x in v]
     return v
+
+
+def forbidden_hit(text: str, patterns: Any) -> Optional[str]:
+    """The first Boundary.forbid pattern that matches `text`, or None if it is clean.
+
+    Scans the SERIALIZED record, not the value tree, and that is the whole point. Redaction
+    is field-name driven, so it protects exactly the fields you named; a secret reaches the
+    tape through every path a field name cannot see — a positional argument, a chain
+    signature, an opaque repr, a key, a string some effect built by concatenation. The one
+    thing all of those have in common is that they end up in the line about to be written.
+    So the tripwire reads that line.
+
+    Returns the PATTERN, never the match. The caller puts this in an exception message, and
+    a tripwire that quotes the credential it caught — into a log, a stack trace, an issue —
+    is the leak it exists to prevent.
+    """
+    for p in patterns:
+        if p.search(text):
+            return p.pattern
+    return None
 
 
 def from_jsonable(v: Any) -> Any:

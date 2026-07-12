@@ -31,9 +31,40 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Protocol, Union
 
 from flight_recorder.boundary import Boundary, ChainTarget
-from flight_recorder.serial import redact_jsonable, short, snapshot_jsonable, to_jsonable
+from flight_recorder.serial import (
+    forbidden_hit, redact_jsonable, short, snapshot_jsonable, to_jsonable,
+)
 
 FORMAT_VERSION = 1
+
+
+class ForbiddenValue(Exception):
+    """A `Boundary.forbid` pattern matched the record the recorder was about to write.
+
+    Raised at record time, before any bytes reach the file, the sidecar or the sink — so the
+    credential does not land, anywhere, ever. This is the one failure in the recorder that is
+    deliberately NOT best-effort: everywhere else the direction is "the recording is a bit
+    poorer, the app survives", because a recorder must not break the app it observes. Here it
+    inverts. A tape being written with a live credential on it is not a poorer recording, it
+    is an exfiltration path, and the app is already in the state you swore it would never be
+    in. Failing the call is the quiet option.
+
+    The message names the RULE and never the match: it ends up in logs and stack traces, and
+    a tripwire that quotes the secret it caught has become the leak it was there to prevent.
+    """
+
+
+def _guard(line: str, patterns: list, what: str) -> None:
+    """Refuse to write `line` if a forbid pattern matches it. A no-op — and free — for the
+    boundary that declares no tripwire, which is every boundary that existed before this."""
+    if not patterns:
+        return
+    hit = forbidden_hit(line, patterns)
+    if hit is not None:
+        raise ForbiddenValue(
+            f"{what} matches a forbidden pattern ({hit!r}) after redaction — nothing was "
+            f"written. A value that must never reach a tape was about to: name the field in "
+            f"Boundary.redact, or widen a rule that has stopped matching, and record again.")
 
 
 class SessionSink(Protocol):
@@ -309,21 +340,31 @@ class _CallSink(list):
     IS the crashed call's partial record (the CLI lists them as INCOMPLETE). Mirroring
     failures never break the call — the sidecar is best-effort by design."""
 
-    def __init__(self, path: Path, header: dict):
+    def __init__(self, path: Path, header: dict, forbid: Optional[list] = None):
         super().__init__()
         self._path = path
+        self._forbid = forbid or []
+        line = json.dumps(header, ensure_ascii=False, default=repr)
+        # Ahead of the open(), and outside the best-effort try below: a sidecar is a file on
+        # disk like any other, and a forbidden value must not reach it either. The guard is
+        # the one thing here that is allowed to raise.
+        _guard(line, self._forbid, f"the opening record of call {header.get('fn')!r}")
         try:
             self._f = path.open("w", encoding="utf-8")
-            self._f.write(json.dumps(header, ensure_ascii=False, default=repr) + "\n")
+            self._f.write(line + "\n")
             self._f.flush()
         except Exception:
             self._f = None
 
     def append(self, ev: dict) -> None:
+        line = json.dumps(ev, ensure_ascii=False, default=repr)
+        # Before the buffer, not just before the file: the buffer becomes the call record.
+        # This is the earliest the tape can know, and it names the event that carried it.
+        _guard(line, self._forbid, f"a recorded {ev.get('k')!r} event")
         super().append(ev)
         if self._f is not None:
             try:
-                self._f.write(json.dumps(ev, ensure_ascii=False, default=repr) + "\n")
+                self._f.write(line + "\n")
                 self._f.flush()
             except Exception:
                 pass
@@ -346,6 +387,7 @@ class Recorder:
         self.path = self.dir / f"flight-{stamp}-{os.getpid()}.jsonl"
         self.sink = sink
         self._redact = boundary.redact_rules()
+        self._forbid = boundary.forbid_patterns()
         self._lock = threading.Lock()
         self._bytes = bytearray()  # mirror of the file, kept only to feed a sink
         self._seq = 0
@@ -374,7 +416,12 @@ class Recorder:
             pass
 
     def _write(self, obj: dict) -> None:
-        data = (json.dumps(obj, ensure_ascii=False, default=repr) + "\n").encode("utf-8")
+        line = json.dumps(obj, ensure_ascii=False, default=repr)
+        # The last gate, and the widest: the header's constants and extras, a positional
+        # effect argument, an opaque repr, a chain signature — everything that reaches the
+        # tape reaches it as this line, including what `redact` structurally cannot see.
+        _guard(line, self._forbid, f"the {obj.get('ev')!r} record")
+        data = (line + "\n").encode("utf-8")
         with self._lock:
             with self.path.open("ab") as f:  # bytes, so the file and the mirror agree
                 f.write(data)
@@ -391,7 +438,8 @@ class Recorder:
             self.dir / f"{self.path.stem}.call{n}.inflight",
             {"ev": "inflight", "fn": fn,
              "kwargs": redact_jsonable(to_jsonable(kwargs), self._redact),
-             "started": datetime.now().astimezone().isoformat()})
+             "started": datetime.now().astimezone().isoformat()},
+            self._forbid)
 
     def write_call(self, fn: str, kwargs: dict, events: list, result: Any,
                    error: Optional[str], ms: float) -> None:

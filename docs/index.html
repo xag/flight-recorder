@@ -416,6 +416,39 @@ scrub to itself, or a redacted recording could never be replayed. A rule that ra
 mask: the failure direction is <em>masked</em>, never <em>leaked</em>, and never <em>broke the
 recorded call</em>.</p>
 
+<h3 data-lang="py">Then assert you got them all</h3>
+
+<div class="note" data-lang="py">
+  <p>Redaction is declarative and opt-in, so it protects exactly the fields you thought of — and its
+  failure mode is <strong>silent and open</strong>. Forget <code>salt</code> and the tape leaks.
+  Someone adds <code>recovery_token</code> to the model next month and the tape leaks. Rename a field
+  and the rule quietly stops matching. Nothing tells you. And a value with no name at all — a
+  positional argument, a chain signature, an opaque repr — has nothing for a field rule to grip.</p>
+</div>
+
+<p data-lang="py"><code>forbid</code> states the property those rules cannot: <em>this tape carries no
+credential</em>. Each entry is a regex, matched against the fully-redacted line the recorder is about
+to write. A hit raises <code>ForbiddenValue</code> and writes nothing — not to the file, not to the
+crash sidecar, not to a sink.</p>
+
+<pre data-lang="py"><code>BOUNDARY = fr.Boundary(
+    redact={"password_hash": None, "salt": None},
+    forbid=[r"\b[a-f0-9]{64}\b",                    # a scrypt digest survived redaction
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----"], # → raise, do not write
+)</code></pre>
+
+<p data-lang="py">Match <strong>shapes, not values</strong>: a credential you can enumerate you could
+already have redacted. It is the one you cannot name that this is for. The failure names the rule and
+never the match — a tripwire that quotes the secret it caught, into a log or a stack trace, has become
+the leak it was there to prevent.</p>
+
+<div class="note" data-lang="py">
+  <p><strong>This is the one failure the recorder does not swallow.</strong> Everywhere else the
+  direction is <em>the recording is a bit poorer, the app survives</em>. Here it inverts: a tape being
+  written with a live credential on it is not a poorer recording, it is an exfiltration path — and the
+  app is already in the state you swore it would never be in. Failing the call is the quiet option.</p>
+</div>
+
 <div class="note">
   <p><strong>What cannot be masked.</strong> Redacting an <em>input</em> poisons everything derived
   from it: mask an identifier and the recording holds a key built from the raw value while replay,
