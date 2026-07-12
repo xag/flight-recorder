@@ -435,9 +435,48 @@
     <blockquote>A fix proven against captured reality, not against a hand-written test's imagination.</blockquote>
   </section>
 
+  <!-- 7b · case study: both instruments -->
+  <section class="slide">
+    <p class="eyebrow">07 · Case study</p>
+    <h2>The loop closes with nobody in it</h2>
+    <p class="lead">A vocabulary coach. Its corpus decides what the deck <em>teaches</em>; its reader, what a
+    learner is <em>credited with</em>. Nothing checked that the two agree. <strong class="accent">Nothing
+    raised.</strong></p>
+
+    <div class="cols" style="margin-top:1rem">
+      <div class="card"><h3>1 · The <em>invariant</em> found it <span class="verdict div">WRONG</span></h3>
+        <p>Every tape said <span class="verdict ok">MATCH</span>: the bug was in what the code
+        <em>meant</em>, not what it <em>did</em>. Only a claim about every execution catches that —
+        <em>every word the deck teaches, the reader reads back</em>. <strong>522 unreachable words</strong>:
+        the deck taught <span style="white-space:nowrap">듣다, <em>to listen</em></span>; the reader credited
+        <span style="white-space:nowrap">들다 — <strong>to lift</strong></span>.</p></div>
+
+      <div class="card"><h3>2 · <em>Replay</em> caught the fix <span class="verdict div">DIVERGED</span></h3>
+        <p>The obvious fix satisfied the invariant and broke a recorded scenario. One call, one word:</p>
+        <pre style="margin:.5rem 0;padding:.55rem .9rem;line-height:1.45">- 보다  (#672)   <span class="c">to see</span>
++ 보고  (#2342)  <span class="c">a report</span></pre>
+        <p>Reverted, and narrowed. <strong>An invariant cannot catch a regression it never thought to
+        forbid.</strong></p></div>
+    </div>
+
+    <div class="cols" style="margin-top:.75rem">
+      <div class="card"><h3>3 · The tape had recorded the <em>bug</em></h3>
+        <p>With the real fix in, another tape diverged — it had faithfully recorded the <em>wrong</em>
+        answer. <strong>A recording is evidence, not a spec.</strong> Re-recorded deliberately; the diff
+        held the intended change and nothing else.</p></div>
+
+      <div class="card"><h3>4 · It became the regression test</h3>
+        <p>It now runs in CI over <strong>six languages, ~32,000 words</strong> — and caught a fresh
+        unreachable word in each of the three corpora added after it, before any shipped.</p></div>
+    </div>
+
+    <blockquote style="margin-top:1rem">No human intervened: bug found, the fix's own regression caught,
+    tapes re-recorded, three languages added — overnight. The human read the diff and said ship it.</blockquote>
+  </section>
+
   <!-- 8 · without the recorder -->
   <section class="slide">
-    <p class="eyebrow">07 · Without the recorder</p>
+    <p class="eyebrow">08 · Without the recorder</p>
     <h2>The human is the test harness</h2>
     <p class="lead">Testing hangs on a person at the controls — run it, reproduce it, re-run it
     all after every fix. The AI can’t take this over: without instruments it can only read the
@@ -493,7 +532,7 @@
 
   <!-- 9 · with the recorder -->
   <section class="slide">
-    <p class="eyebrow">08 · With the recorder</p>
+    <p class="eyebrow">09 · With the recorder</p>
     <h2>Push the process to the right</h2>
     <p class="lead">Given instruments, the AI carries the process — the code and the scenarios,
     the runs, the diagnosis, the proof. Recordings show every internal, replay answers with
@@ -553,7 +592,7 @@
   </section>
   <!-- 10 · three membranes -->
   <section class="slide">
-    <p class="eyebrow">09 · Honesty</p>
+    <p class="eyebrow">10 · Honesty</p>
     <h2>Three membranes, three instruments</h2>
     <p class="lead">The replay layer is real physics — but its laws stop at the process boundary.
     Know which instrument sees what.</p>
@@ -579,7 +618,7 @@
 
   <!-- 11 · redaction -->
   <section class="slide">
-    <p class="eyebrow">10 · Production safety</p>
+    <p class="eyebrow">11 · Production safety</p>
     <h2>Redact before anything leaves the process</h2>
     <p class="lead">A recording holds what crossed the boundary — verbatim. For boundaries that carry
     credentials or PII, <code class="inline">redact</code> names the fields that must never reach
@@ -605,7 +644,7 @@
 
   <!-- 12 · discipline -->
   <section class="slide">
-    <p class="eyebrow">11 · The discipline, per repo</p>
+    <p class="eyebrow">12 · The discipline, per repo</p>
     <h2>Five habits</h2>
     <ul class="tight" style="font-size:1.05rem">
       <li><strong>Shape the membrane first.</strong> A pure tool-logic core behind an injected service —
@@ -623,7 +662,7 @@
 
   <!-- 13 · fleet -->
   <section class="slide">
-    <p class="eyebrow">12 · Proof of generality</p>
+    <p class="eyebrow">13 · Proof of generality</p>
     <h2>One lib, five apps, two runtimes</h2>
     <p class="lead">The engine (<span class="mono">flight-recorder</span>, zero dependencies, zero consumer
     knowledge) was extracted at its second consumer and hardened by each next one.</p>
@@ -643,7 +682,7 @@
 
   <!-- 13 · two runtimes -->
   <section class="slide">
-    <p class="eyebrow">13 · Two runtimes</p>
+    <p class="eyebrow">14 · Two runtimes</p>
     <h2>One tape, two languages</h2>
     <p class="lead">Two implementations, <em>one tape</em>. Only <em>record</em> and <em>replay</em> are language-bound —
     replaying JavaScript means running JavaScript. Invariants and mutation consume the <em>tape</em>, and a tape is only
@@ -663,7 +702,7 @@
 
   <!-- 14 · beyond regression -->
   <section class="slide">
-    <p class="eyebrow">14 · What it opens</p>
+    <p class="eyebrow">15 · What it opens</p>
     <h2>States become data you author</h2>
     <p class="lead">Because replay feeds the code <em>any</em> boundary answers, hostile states are edited
     recordings — not databases you have to construct.</p>
@@ -679,7 +718,7 @@
 
   <!-- 15 · closing -->
   <section class="slide">
-    <p class="eyebrow">15 · The meta-rule</p>
+    <p class="eyebrow">16 · The meta-rule</p>
     <h2 style="max-width:22ch">No claim about behavior without a place to look it up</h2>
     <p class="lead">The instruments exist so that a claim is a trace line, a log line, or a measurement —
     never a plausible story. That rule, applied in every repo, is worth more than any of the code.</p>
