@@ -75,7 +75,7 @@ function emit(ev) {
   if (buf) buf.push(scrub(ev));
 }
 
-export { scrub, active, patch };
+export { scrub, active, patch, isoLocal };
 
 const PAYLOAD_KEYS = ['args', 'kwargs', 'res', 'result'];
 

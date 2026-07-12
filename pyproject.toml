@@ -7,6 +7,11 @@ license = "MIT"
 requires-python = ">=3.11"
 dependencies = []
 
+# The design checker: claims over a render tape. `flight-design tape.jsonl --tokens tokens.json`.
+# It reads a tape, so it needs no browser and no dependencies — only the CAPTURE needs a browser.
+[project.scripts]
+flight-design = "flight_recorder.design:run_cli"
+
 # Loaded by pytest when installed; inert unless `flight_recordings` is set (see
 # flight_recorder/pytest_plugin.py). pytest is never imported at library import time.
 [project.entry-points.pytest11]

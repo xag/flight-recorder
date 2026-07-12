@@ -1,0 +1,69 @@
+<!doctype html>
+<!--
+  A page with seven deliberate defects, each chosen because THE SOURCE CANNOT SEE IT.
+
+  This is the conformance fixture for the design invariants. An instrument that finds nothing on a
+  good page is indistinguishable from an instrument that is broken, so there must exist a page
+  whose defects are known, named, and found.
+
+  Every defect below passes a stylesheet linter, a type checker, and a code review.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>defects</title>
+<style>
+  :root { --ink:#1a1c20; --paper:#ffffff; --muted:#8a8a8a; }
+  body { margin:0; background:var(--paper); color:var(--ink); font:16px/1.6 system-ui, sans-serif; padding:24px }
+
+  /* 1. CONTRAST, LOST TO OPACITY. The colour is #1a1c20 on #ffffff — 15:1, and a linter reads
+        exactly that and passes it. The element is 30% opaque, so what the eye receives is 2:1.
+        The stylesheet is not wrong about the colour. It is wrong about the pixel. */
+  .faded { opacity:.3 }
+
+  /* 2. CONTRAST, AGAINST A BACKDROP THAT NEVER PAINTED. The author believed .chip sits on the
+        dark panel, where a muted grey would be fine. The panel's background is only set inside a
+        media query that does not match, so the chip paints on white. */
+  @media (min-width: 2000px) { .panel { background:#2b2f36 } }
+  .chip { color:var(--muted); background:transparent; font-size:14px }
+
+  /* 3. TEXT CUT OFF. overflow:hidden with no ellipsis: the sentence is simply truncated, and no
+        screenshot diff will ever call it a regression — it has always looked like this. */
+  .card { width:180px; height:44px; overflow:hidden; border:1px solid #dddddd; padding:8px }
+
+  /* 4. A FOCUS RING REMOVED AND NEVER REPLACED. One word, invisible in review, and the
+        consequence is visible only to someone pressing Tab. */
+  .ghost { outline:none; background:none; border:1px solid #cccccc; padding:10px }
+
+  /* 5. A TAP TARGET BELOW 24px. It looked fine on the laptop it was built on. */
+  .tiny { display:block; width:16px; height:16px; padding:0; border:0; background:#07794b }
+
+  /* 6. A DIV THAT IS A BUTTON. Mouse users never notice. Tab never reaches it. */
+  .fake-button { background:#07794b; color:#ffffff; padding:12px; width:120px; cursor:pointer }
+</style>
+</head>
+<body>
+
+  <p class="faded">Terms and conditions apply to every submission.</p>
+
+  <div class="panel">
+    <span class="chip">draft &middot; not yet reviewed</span>
+  </div>
+
+  <div class="card">A long enough sentence that it will not fit inside a card this small, and so it is cut.</div>
+
+  <button class="ghost">Publish</button>
+
+  <button class="tiny" aria-label="Close"></button>
+
+  <div class="fake-button" role="button" tabindex="-1">Submit</div>
+
+  <!-- 7. AN ICON BUTTON WITH NO ACCESSIBLE NAME. The screen reader announces "button". -->
+  <button class="icon">
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M2 4h12M2 8h12M2 12h12" stroke="#333333" stroke-width="1.5"/>
+    </svg>
+  </button>
+
+</body>
+</html>

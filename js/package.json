@@ -30,7 +30,16 @@
   },
   "exports": {
     ".": "./src/index.js",
+    "./render": "./src/render.js",
     "./spec": "./src/spec/validate.js"
+  },
+  "peerDependencies": {
+    "playwright": ">=1.40"
+  },
+  "peerDependenciesMeta": {
+    "playwright": {
+      "optional": true
+    }
   },
   "files": [
     "src",
@@ -38,7 +47,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "browser": "npm i --no-save playwright && npx playwright install chromium"
   },
   "publishConfig": {
     "access": "public"

@@ -8,3 +8,7 @@ image.png
 
 # never commit a registry credential
 .npmrc
+
+# The JS package's dependencies. Vendoring them into the library is how a 56-file
+# node_modules tree nearly landed in a commit that was meant to change one function.
+js/node_modules/

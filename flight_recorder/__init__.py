@@ -30,6 +30,10 @@ from flight_recorder.invariants import (
     Call, InvariantReport, Invariant, Obs, Raise, Return, Trace, Trajectory, Violation,
     check_invariants, collect, format_invariant_report, invariant,
 )
+from flight_recorder.design import (
+    DesignInvariant, DesignReport, Node, Render, check_design, contrast, design_invariant,
+    format_design_report, load_renders, luminance, standard_invariants, token_invariants,
+)
 from flight_recorder.session import (
     Finding, Session, SessionInvariant, SessionVerdict, Step, check_sessions,
     format_session_verdict, load_sessions, no_retry_after_failure, no_tool_bounce,
@@ -49,6 +53,9 @@ __all__ = [
     "Tracer", "format_report", "load_session", "replay_call", "run_cli",
     "Call", "Invariant", "InvariantReport", "Obs", "Raise", "Return", "Trace", "Trajectory",
     "Violation", "check_invariants", "collect", "format_invariant_report", "invariant",
+    "DesignInvariant", "DesignReport", "Node", "Render", "check_design", "contrast",
+    "design_invariant", "format_design_report", "load_renders", "luminance",
+    "standard_invariants", "token_invariants",
     "Finding", "Session", "SessionInvariant", "SessionVerdict", "Step", "check_sessions",
     "format_session_verdict", "load_sessions", "no_retry_after_failure", "no_tool_bounce",
     "no_wasted_repeats", "session_invariant",

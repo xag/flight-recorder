@@ -19,3 +19,22 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: uv sync
       - run: uv run pytest tests/ -q
+
+  # The Node suite, and with it the one test that needs a real browser.
+  #
+  # Playwright is an OPTIONAL peer: the library imports no browser automation library, and nobody
+  # who installs flight-recorder should have to download a browser. So test/render.test.mjs skips
+  # when playwright is absent — and a skip nothing ever opts into is how an instrument quietly
+  # stops being one. CI opts in. That is what makes the skip safe everywhere else.
+  js:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: js
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm run browser
+      - run: npm test
