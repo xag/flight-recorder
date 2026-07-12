@@ -31,6 +31,12 @@ export class ToyStore {
   async boom(key) {
     throw new ToyError(`no such key: ${key}`, 42);
   }
+
+  // A PLAIN Error — which is what every real client throws. ToyError above carries an explicit
+  // `.args`, and so was the one shape the recorder happened to get right.
+  async plainBoom(key) {
+    throw new Error(`upstream refused: ${key}`);
+  }
 }
 
 /** The tools, built over an injected (and therefore wrappable) store. */
@@ -48,6 +54,19 @@ export function makeTools(store) {
     // an effect that throws: the fx.err branch
     async explode({ user }) {
       await store.boom(user);
+    },
+
+    // The shape that actually happens in the wild: a client throws a plain Error, the app catches
+    // it and puts `e.message` into what it returns. If revival rebuilds the error from its repr —
+    // the stack — this returns 300 characters of `at ClientRequest.<anonymous>` instead of a
+    // sentence, and the tool's result diverges for a reason that has nothing to do with the app.
+    async report({ user }) {
+      try {
+        await store.plainBoom(user);
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, why: `fetch failed: ${e.message}` };
+      }
     },
 
     // a tool that itself throws after a successful effect: call.error

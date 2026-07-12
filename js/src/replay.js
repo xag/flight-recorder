@@ -142,16 +142,27 @@ class Feed {
    * meant to be reproducing. Hence the boundary declares its revivers.
    */
   _reviveError(err) {
+    const args = fromJsonable(err.args) ?? [];
+
     const revive = this.revivers[err.type];
     if (revive) {
       try {
-        return revive(fromJsonable(err.args) ?? []);
+        return revive(args);
       } catch {
         /* fall through to the generic error below */
       }
     }
-    const e = new Error(err.repr ?? err.type);
+
+    // The MESSAGE, not the repr. `repr` is the recorded stack trace, and an error rebuilt with a
+    // stack for a message is a different error: code that reads `e.message` — and most code does,
+    // to log it or to return it — gets 300 characters of `at ClientRequest.<anonymous>` where the
+    // recording had a sentence, and diverges over the instrument rather than over itself.
+    //
+    // `args[0]` is the message (see errEvent). `repr` remains the fallback for a tape written
+    // before that was true, and becomes the stack, which is what it always was.
+    const e = new Error(args[0] ?? err.repr ?? err.type);
     e.name = err.type;
+    if (err.repr) e.stack = err.repr;
     return e;
   }
 }

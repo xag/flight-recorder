@@ -353,8 +353,27 @@ export function wrap(target, methods, { prefix = '' } = {}) {
   });
 }
 
+/**
+ * Record a raised error.
+ *
+ * `args` carries the exception's CONSTRUCTIVE VALUES — what you would pass to rebuild it. That is
+ * what Python records (`e.args`, the exception's own tuple) and what the revivers in `boundaryOf`
+ * are handed: `errorRevivers: { NotFound: ([msg]) => new NotFound(msg) }`.
+ *
+ * A JavaScript `Error` has no `.args`, so this used to record `[]` — and the consequence was quiet
+ * and bad. The message went onto the tape only as the first line of `repr`, which is the STACK; the
+ * documented reviver above could never receive a message; and the generic fallback rebuilt the
+ * error with the stack AS its message. Any code that reads `e.message` — putting it in a log line,
+ * an error field, an HTTP body — then produced 300 characters of stack trace on replay where the
+ * recording had a sentence, and diverged for a reason that had nothing to do with the app.
+ *
+ * A JS Error's constructive value IS its message (`new Error(msg)`). So that is what goes in
+ * `args`, which makes the two runtimes agree and the reviver contract true.
+ */
 function errEvent(e) {
-  const args = e instanceof Error && Array.isArray(e.args) ? e.args : [];
+  const args = e instanceof Error
+    ? (Array.isArray(e.args) ? e.args : [e.message])
+    : [];
   return {
     type: e?.name ?? typeof e,
     repr: String(e?.stack ?? e).slice(0, 300),

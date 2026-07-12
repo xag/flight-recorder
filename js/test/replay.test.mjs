@@ -28,28 +28,29 @@ const BOUNDARY = () =>
 async function record(toolName, args, { boundary = BOUNDARY() } = {}) {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flight-'));
   const raw = new ToyStore();
-  const store = fr.wrap(raw, ['get', 'set', 'boom'], { prefix: 'store' });
+  const store = fr.wrap(raw, ['get', 'set', 'boom', 'plainBoom'], { prefix: 'store' });
   fr.install(boundary, { directory: dir });
 
   const impls = makeTools(store);
   const wrapped = fr.tool(toolName, impls[toolName]);
 
   let threw = null;
+  let result;
   try {
-    await wrapped(args);
+    result = await wrapped(args);
   } catch (e) {
     threw = e;
   }
   const tapePath = fr.tapePath();
   fr.uninstall();
 
-  return { tape: fr.loadTape(tapePath), tapePath, raw, impls, store, threw, boundary };
+  return { tape: fr.loadTape(tapePath), tapePath, raw, impls, store, threw, result, boundary };
 }
 
 /** Replay a recorded call against the real code, with a FRESH store it must never touch. */
 async function replay({ tape, boundary, toolName, probe = false, call = null }) {
   const fresh = new ToyStore();
-  const store = fr.wrap(fresh, ['get', 'set', 'boom'], { prefix: 'store' });
+  const store = fr.wrap(fresh, ['get', 'set', 'boom', 'plainBoom'], { prefix: 'store' });
   const impls = makeTools(store);
 
   const report = await fr.replayCall({
@@ -104,6 +105,24 @@ test('a recorded error is revived with its real TYPE, so the code branches the s
   assert.match(report.error, /ToyError/);
 });
 
+test('a revived plain Error carries its MESSAGE, not its stack', async () => {
+  const rec = await record('report', { user: 'ghost' });
+
+  // What the app actually saw when the world refused it.
+  assert.equal(rec.result.why, 'fetch failed: upstream refused: ghost');
+
+  const { report } = await replay({ ...rec, toolName: 'report' });
+
+  assert.equal(report.divergence, null);
+  assert.ok(
+    report.ok,
+    'the code read `e.message` off the revived error and got the same sentence back. Rebuilt from '
+    + '`repr` — the recorded STACK — it would read `Error: upstream refused: ghost\\n    at ...` '
+    + 'instead, and every app that logs or returns a caught message would diverge on replay.',
+  );
+  assert.equal(report.result.why, 'fetch failed: upstream refused: ghost');
+});
+
 test('a tool that threw replays as having thrown', async () => {
   const rec = await record('halfway', { user: 'alice' });
   const { report } = await replay({ ...rec, toolName: 'halfway' });
@@ -129,7 +148,7 @@ test('a different question is caught, not silently answered', async () => {
   // The code changed: it now looks up a different key. Every recorded answer is still
   // there and still plausible — only the QUESTION moved.
   const fresh = new ToyStore();
-  const store = fr.wrap(fresh, ['get', 'set', 'boom'], { prefix: 'store' });
+  const store = fr.wrap(fresh, ['get', 'set', 'boom', 'plainBoom'], { prefix: 'store' });
   const changed = async ({ user }) => {
     await store.get(`v2:${user}`); // was: store.get(user)
     return {};
@@ -151,7 +170,7 @@ test('asking a different EFFECT is caught', async () => {
   const rec = await record('greet', { user: 'alice' });
 
   const fresh = new ToyStore();
-  const store = fr.wrap(fresh, ['get', 'set', 'boom'], { prefix: 'store' });
+  const store = fr.wrap(fresh, ['get', 'set', 'boom', 'plainBoom'], { prefix: 'store' });
   const changed = async ({ user }) => { await store.set(user, 1); }; // set, not get
 
   const report = await fr.replayCall({
@@ -171,7 +190,7 @@ test('the code that stops asking is caught too — the sneaky one', async () => 
   const rec = await record('greet', { user: 'alice' });
 
   const fresh = new ToyStore();
-  const store = fr.wrap(fresh, ['get', 'set', 'boom'], { prefix: 'store' });
+  const store = fr.wrap(fresh, ['get', 'set', 'boom', 'plainBoom'], { prefix: 'store' });
   const lazy = async ({ user }) => {
     await store.get(user); // and then... nothing. No write, no clock, no dice.
     return {};
