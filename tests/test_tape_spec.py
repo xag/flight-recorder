@@ -44,6 +44,43 @@ def make_boundary() -> fr.Boundary:
     )
 
 
+def make_sem_boundary() -> fr.Boundary:
+    """The same boundary, plus `create_account` and a redaction rule.
+
+    `create_account` is declared because the span that claims to have registered somebody must
+    ENCLOSE the evidence that it did. A fixture whose `register` span sits above an empty
+    stretch of tape would illustrate the opposite of the point: testimony is checkable only
+    when the thing it testifies about is recorded underneath it.
+
+    The redaction rule is there because a semantic event's `data` is scrubbed like any other
+    payload — testimony is written by the app, about the app's own values, and is exactly as
+    likely to carry a credential as an effect's arguments are.
+    """
+    b = make_boundary()
+    b.effects = [(toy_effects, ["fetch_remote", "maybe_fail", "read_config",
+                                "create_account"])]
+    b.redact = {"password"}
+    return b
+
+
+def _record_a_sem_tape(tmp_path) -> str:
+    """Drive the real recorder over every shape a `sem` event can take."""
+    fr.install(make_sem_boundary(), toy_tools, directory=str(tmp_path), enabled=True)
+    try:
+        asyncio.run(toy_tools.enrol("t@example.com", password="hunter2"))
+    finally:
+        fr.uninstall()
+
+    tapes = sorted(Path(tmp_path).glob("flight-*.jsonl"))
+    assert tapes, "the recorder wrote no tape"
+    return tapes[-1].read_text(encoding="utf-8")
+
+
+def _sems(text: str) -> list:
+    return [e for line in text.splitlines() if line.strip()
+            for e in (json.loads(line).get("events") or []) if e.get("k") == "sem"]
+
+
 def _record_a_tape(tmp_path) -> str:
     """Drive the real recorder over every event kind the format defines."""
     fr.install(make_boundary(), toy_tools, directory=str(tmp_path), enabled=True)
@@ -100,14 +137,68 @@ def test_fixture_is_conformant(fixture):
     assert not violations, f"{fixture.name}:\n  " + "\n  ".join(violations)
 
 
+def test_the_real_recorder_emits_a_conformant_sem_tape(tmp_path):
+    text = _record_a_sem_tape(tmp_path)
+    violations = validate_tape(text)
+    assert not violations, "the recorder's own sem tape violates the spec:\n  " + "\n  ".join(violations)
+
+
+def test_recorded_sem_tape_exercises_every_shape_a_sem_can_take(tmp_path):
+    """A spec frozen against a tape whose spans all succeeded is not frozen at all — and the
+    error branch is a different shape, on the event that a reader will most want to find."""
+    sems = _sems(_record_a_sem_tape(tmp_path))
+
+    assert {s["phase"] for s in sems} == {"begin", "end", "point"}
+
+    nested = [s for s in sems if s["phase"] == "begin"]
+    assert len(nested) >= 3, "the fixture must carry a span inside a span"
+
+    outcomes = {s.get("outcome") for s in sems if s["phase"] == "end"}
+    assert outcomes == {"ok", "error"}, f"both outcomes must be on the tape, got {outcomes}"
+
+    # A value marker, and a value redaction had to reach: both live in sem `data`.
+    data = [s["data"] for s in sems if "data" in s]
+    assert any(isinstance(d.get("started"), dict) and "__dt__" in d["started"] for d in data), \
+        "no value marker in any sem data — the encoder was never exercised"
+    assert any(d.get("password") == "[REDACTED]" for d in data), \
+        "a password rode a sem event to the tape in the clear"
+
+
+def test_the_fixture_puts_evidence_underneath_the_testimony(tmp_path):
+    """The property the whole event kind exists for. A span that claims an act must enclose the
+    raw events that act consisted of — otherwise the claim is unfalsifiable, and an
+    unfalsifiable claim on a tape is worse than no claim, because it reads like one."""
+    text = _record_a_sem_tape(tmp_path)
+    evs = [e for line in text.splitlines() if line.strip()
+           for e in (json.loads(line).get("events") or [])]
+
+    opened = next(i for i, e in enumerate(evs)
+                  if e.get("k") == "sem" and e.get("name") == "register"
+                  and e["phase"] == "begin")
+    closed = next(i for i, e in enumerate(evs)
+                  if e.get("k") == "sem" and e.get("name") == "register"
+                  and e["phase"] == "end")
+    inside = [e for e in evs[opened + 1:closed] if e.get("k") == "fx"]
+    assert [e["fn"].rsplit(".", 1)[-1] for e in inside] == ["create_account", "maybe_fail"], \
+        "the register span does not enclose the effects it claims to be made of"
+
+
 def test_regenerate_fixtures(tmp_path):
-    """FR_REGEN_FIXTURES=1 refreshes the golden tape from the real recorder."""
+    """FR_REGEN_FIXTURES=1 refreshes the golden tapes from the real recorder."""
     if not os.environ.get("FR_REGEN_FIXTURES"):
         pytest.skip("set FR_REGEN_FIXTURES=1 to regenerate")
     FIXTURES.mkdir(parents=True, exist_ok=True)
-    text = _record_a_tape(tmp_path)
+
+    # Two sessions, two directories. A session file is named for the second it was opened in
+    # and the pid that opened it, so two installs from one process inside the same second land
+    # on the same path and append — one file, two headers, and a mystifying failure.
+    text = _record_a_tape(tmp_path / "plain")
     assert not validate_tape(text)
     (FIXTURES / "python-toy.jsonl").write_text(text, encoding="utf-8")
+
+    sem_text = _record_a_sem_tape(tmp_path / "sem")
+    assert not validate_tape(sem_text)
+    (FIXTURES / "python-sem-toy.jsonl").write_text(sem_text, encoding="utf-8")
 
 
 # --- the checker itself must be sharp, or "conformant" means nothing ------------------
@@ -169,6 +260,82 @@ def test_checker_rejects_rand_idx_disagreeing_with_kk():
     ev = {"k": "rand", "m": "sample", "n": 5, "kk": 3, "idx": [0, 1]}
     call = {**CALL, "events": [ev]}
     assert any("kk=" in v for v in validate_tape(_tape(SESSION, call)))
+
+
+def _sem_call(*sems: dict) -> dict:
+    return {**CALL, "events": list(sems)}
+
+
+def test_checker_accepts_well_nested_spans():
+    call = _sem_call(
+        {"k": "sem", "name": "outer", "phase": "begin", "sid": 1},
+        {"k": "sem", "name": "inner", "phase": "begin", "sid": 2},
+        {"k": "sem", "name": "mark", "phase": "point", "sid": 3, "data": {"n": 1}},
+        {"k": "sem", "name": "inner", "phase": "end", "sid": 2, "outcome": "ok"},
+        {"k": "sem", "name": "outer", "phase": "end", "sid": 1, "outcome": "error"},
+    )
+    assert validate_tape(_tape(SESSION, call)) == []
+
+
+def test_checker_rejects_straddling_spans():
+    """The one structural promise sem makes. Two spans that cross would put an event inside
+    both and inside neither, and every reader walking the stream would build a different tree
+    — which is the whole reason enclosure may be derived from order at all."""
+    call = _sem_call(
+        {"k": "sem", "name": "a", "phase": "begin", "sid": 1},
+        {"k": "sem", "name": "b", "phase": "begin", "sid": 2},
+        {"k": "sem", "name": "a", "phase": "end", "sid": 1},
+        {"k": "sem", "name": "b", "phase": "end", "sid": 2},
+    )
+    assert any("well-nested" in v for v in validate_tape(_tape(SESSION, call)))
+
+
+def test_checker_rejects_an_unclosed_span():
+    call = _sem_call({"k": "sem", "name": "a", "phase": "begin", "sid": 1})
+    assert any("never closed" in v for v in validate_tape(_tape(SESSION, call)))
+
+
+def test_checker_rejects_an_end_with_no_begin():
+    call = _sem_call({"k": "sem", "name": "a", "phase": "end", "sid": 1})
+    assert any("no open span" in v for v in validate_tape(_tape(SESSION, call)))
+
+
+def test_checker_rejects_a_reused_sid():
+    """An `end` names its `begin` by sid. Reuse one and the pairing is guesswork."""
+    call = _sem_call(
+        {"k": "sem", "name": "a", "phase": "begin", "sid": 1},
+        {"k": "sem", "name": "b", "phase": "point", "sid": 1},
+        {"k": "sem", "name": "a", "phase": "end", "sid": 1},
+    )
+    assert any("reused" in v for v in validate_tape(_tape(SESSION, call)))
+
+
+def test_checker_rejects_a_bad_phase_and_a_misplaced_outcome():
+    bad_phase = _sem_call({"k": "sem", "name": "a", "phase": "middle", "sid": 1})
+    assert any("phase" in v for v in validate_tape(_tape(SESSION, bad_phase)))
+
+    misplaced = _sem_call({"k": "sem", "name": "a", "phase": "point", "sid": 1,
+                           "outcome": "ok"})
+    assert any("outcome" in v for v in validate_tape(_tape(SESSION, misplaced)))
+
+
+def test_a_reader_from_before_sem_existed_still_accepts_a_sem_tape(monkeypatch):
+    """The forward-compatibility claim, made concrete rather than asserted in prose.
+
+    A v1 reader built before this event kind existed knows nothing of `sem` — so it must
+    ignore it and go on calling the tape conformant. If this ever fails, adding an event kind
+    became a breaking change and the format's whole versioning story ("readers ignore what they
+    do not know") was a fiction.
+    """
+    import spec.validate as v
+    monkeypatch.setattr(v, "EVENT_KINDS", {"fx", "db", "now", "perf", "rand"})
+
+    call = _sem_call(
+        {"k": "sem", "name": "outer", "phase": "begin", "sid": 1},
+        {"k": "fx", "fn": "f", "args": [], "kwargs": {}, "res": 1},
+        {"k": "sem", "name": "outer", "phase": "end", "sid": 1, "outcome": "ok"},
+    )
+    assert v.validate_tape(_tape(SESSION, call)) == []
 
 
 def test_checker_tolerates_unknown_ev_and_unknown_keys():

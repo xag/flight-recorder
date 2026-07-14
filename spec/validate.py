@@ -23,7 +23,8 @@ MARKERS = {"__dt__", "__date__", "__undef__", "__opaque__"}
 # Reserved by the trace encoding — a *reader* must tolerate them, so they are legal in a
 # tape even though a v1 recorder never emits them.
 RESERVED_MARKERS = {"__snap__", "__seq__", "__str__", "__esc__"}
-EVENT_KINDS = {"fx", "db", "now", "perf", "rand"}
+EVENT_KINDS = {"fx", "db", "now", "perf", "rand", "sem"}
+SEM_PHASES = {"begin", "end", "point"}
 
 
 def _is_iso(s: Any) -> bool:
@@ -158,6 +159,30 @@ def _check_event(e: Any, path: str, out: list) -> None:
         if isinstance(v, bool) or not isinstance(v, (int, float)):
             out.append(f"{path}: perf.v must be a number (milliseconds), got {v!r}")
 
+    elif k == "sem":
+        # Testimony, not evidence. The checker validates its SHAPE and says nothing about its
+        # content: `name` is the app's own vocabulary and no implementation may interpret it.
+        # A checker that knew what a span name meant would have given the library semantics,
+        # which is the one thing the library is not allowed to have.
+        if not isinstance(e.get("name"), str) or not e.get("name"):
+            out.append(f"{path}: sem needs a non-empty string 'name'")
+        phase = e.get("phase")
+        if phase not in SEM_PHASES:
+            out.append(f"{path}: sem.phase must be one of begin|end|point, got {phase!r}")
+        if isinstance(e.get("sid"), bool) or not isinstance(e.get("sid"), int):
+            out.append(f"{path}: sem needs an int 'sid', unique within the call")
+        if "data" in e:
+            if not isinstance(e["data"], dict):
+                out.append(f"{path}: sem.data must be an object")
+            else:
+                _check_value(e["data"], f"{path}.data", out)
+        if "outcome" in e:
+            if phase != "end":
+                out.append(f"{path}: sem.outcome belongs to an 'end', not a {phase!r}")
+            if e["outcome"] not in ("ok", "error"):
+                out.append(f"{path}: sem.outcome must be 'ok' or 'error', "
+                           f"got {e['outcome']!r}")
+
     elif k == "rand":
         m = e.get("m")
         if m == "sample":
@@ -191,6 +216,57 @@ def _check_event(e: Any, path: str, out: list) -> None:
                 out.append(f"{path}: rand.v must be an int, got {e.get('v')!r}")
         else:
             out.append(f"{path}: rand.m must be one of sample|bytes|float|int, got {m!r}")
+
+
+def _check_sem_nesting(evs: list, path: str, out: list) -> None:
+    """The one structural promise `sem` makes: begin/end pairs are well-nested within a call.
+
+    Enclosure is derived from ORDER — a span contains every event between its begin and its
+    end — so nesting is not decoration, it is the only thing that makes the derivation sound.
+    Two spans that straddle (A begins, B begins, A ends, B ends) would put an event inside both
+    and inside neither, and every reader that walks the stream would build a different tree.
+
+    A span left open by a process that died mid-call is a separate matter and not a violation
+    here: that call never reached the tape at all. It lives in the `inflight` sidecar, which is
+    an unknown `ev` to this checker, and where an unclosed span is exactly the information the
+    reader wants.
+    """
+    stack: list[tuple[int, str]] = []
+    seen: set[int] = set()
+    for j, e in enumerate(evs):
+        if not isinstance(e, dict) or e.get("k") != "sem":
+            continue
+        sid, phase, name = e.get("sid"), e.get("phase"), e.get("name")
+        if not isinstance(sid, int) or phase not in SEM_PHASES:
+            continue  # already reported by _check_event; do not compound it
+
+        if phase in ("begin", "point"):
+            if sid in seen:
+                out.append(f"{path}.events[{j}]: sem sid {sid} is reused — a sid must be "
+                           f"unique within the call, or an 'end' cannot name its 'begin'")
+            seen.add(sid)
+            if phase == "begin":
+                stack.append((sid, name))
+        else:  # end
+            if not stack:
+                out.append(f"{path}.events[{j}]: sem 'end' (sid {sid}) with no open span")
+            elif stack[-1][0] != sid:
+                open_sid, open_name = stack[-1]
+                out.append(
+                    f"{path}.events[{j}]: sem spans are not well-nested — 'end' closes sid "
+                    f"{sid} while sid {open_sid} ({open_name!r}) is still open. Spans nest; "
+                    f"they never straddle.")
+                # Unwind to it if it is open at all, so one crossing is not reported N times.
+                if any(s == sid for s, _ in stack):
+                    while stack and stack[-1][0] != sid:
+                        stack.pop()
+                    stack.pop()
+            else:
+                stack.pop()
+
+    for sid, name in stack:
+        out.append(f"{path}: sem span {name!r} (sid {sid}) is never closed — a completed call "
+                   f"holds no open spans")
 
 
 def validate_line(obj: Any, i: int, out: list, *, first: bool) -> None:
@@ -247,6 +323,7 @@ def validate_line(obj: Any, i: int, out: list, *, first: bool) -> None:
         else:
             for j, e in enumerate(evs):
                 _check_event(e, f"line {i}.events[{j}]", out)
+            _check_sem_nesting(evs, f"line {i}", out)
         return
 
     # unknown ev (e.g. the reserved "inflight"): a reader must tolerate it.

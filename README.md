@@ -19,6 +19,30 @@ things around.
 
 [Slides — Testing as Simulation](https://xag.github.io/flight-recorder/slides.html)
 
+## Tapes that carry meaning
+
+A recording answers **“same?”**. An invariant answers **“right?”**. Neither answers **“what was
+this?”** — which is the question anyone actually opens a tape with.
+
+So an app can say, in its own words, what a stretch of execution *meant*, and have the claim recorded
+in-stream, wrapped around the raw events it produced:
+
+```python
+with fr.span("assign_turn", chore=chore_id):   # every boundary event inside is inside the span
+    holder = db.collection("members").document(who).get()
+    fr.note("skipped", reason="absent")        # a moment worth marking, no span
+```
+
+The library gains no semantics from this — the name is free text, nothing validates it, nothing
+interprets it. A semantic event is the app's **testimony**, recorded next to the **evidence**. Writing
+both down, in order, and judging neither is exactly what makes the testimony checkable by someone else:
+a span claiming to have charged a card, with no call to the thing that charges cards beneath it, is now
+a claim a reader can refute.
+
+It costs nothing when the recorder is off, and a span whose body raises is still closed on the tape,
+marked `error` — a span that vanished when the code inside it failed would hide precisely the execution
+somebody came to the tape to read.
+
 ## Install
 
 ```bash
@@ -33,4 +57,4 @@ npm install @xag/flight-recorder     # Node
 
 ## License
 
-MIT
+Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).

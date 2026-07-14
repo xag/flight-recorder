@@ -8,6 +8,13 @@ ordered boundary events, result. `replay_call()` re-executes a record on the rea
 the recorded inputs fed back, under a `sys.settrace` tracer, and reports whether the
 recording was reproduced bit-for-bit.
 
+An app may also say what a stretch of execution *meant* — `note()` and `span()` write the app's
+own domain vocabulary onto the tape, in-stream, wrapped around the raw events it produced. A
+recording answers "same?", an invariant answers "right?", a semantic span answers "what was
+this?". The library gains no semantics from it: names are opaque, nothing is validated, nothing
+is interpreted. A semantic event is *testimony*, recorded next to the *evidence*, and putting
+both on one tape in order is precisely what lets somebody else refute the testimony.
+
 The cardinal rule, for this lib and for the per-app boundary declarations it consumes:
 INSTRUMENT, NEVER DUPLICATE. Nothing evaluates queries or reimplements client behavior;
 the only structural knowledge anywhere is names.
@@ -18,7 +25,7 @@ from flight_recorder.boundary import (
 )
 from flight_recorder.record import (
     ChainNode, DatetimeShim, ForbiddenValue, Gate, RandomShim, SessionSink, FORMAT_VERSION,
-    hook, install, install_mcp, session_path, uninstall,
+    hook, install, install_mcp, note, session_path, span, uninstall,
 )
 from flight_recorder.replay import (
     Feed, PlaybackChain, ProbeUnanswerable, ReplayAdapter, ReplayDivergence,
@@ -47,7 +54,8 @@ from flight_recorder.serial import (
 __all__ = [
     "Boundary", "ChainTarget", "DEFAULT_TERMINAL_READS", "DEFAULT_TERMINAL_WRITES",
     "ChainNode", "DatetimeShim", "ForbiddenValue", "Gate", "RandomShim", "SessionSink",
-    "FORMAT_VERSION", "hook", "install", "install_mcp", "session_path", "uninstall",
+    "FORMAT_VERSION", "hook", "install", "install_mcp", "note", "session_path", "span",
+    "uninstall",
     "Feed", "PlaybackChain", "ProbeUnanswerable", "Recording", "ReplayAdapter",
     "ReplayDivergence", "ReplayedEffectError", "ReplayReport", "Snap", "TRACE_VERSION",
     "Tracer", "format_report", "load_session", "replay_call", "run_cli",
