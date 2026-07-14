@@ -102,9 +102,26 @@ class _Hook:
     mode: str = "off"   # off | record | replay
     feed: Any = None    # flight_recorder.replay.Feed during replay
     redact: dict = {}   # the active boundary's normalized redact rules
+    # Where the REPLAYED code's own note()/span() calls land. A recorded sem event is never
+    # fed back — it is testimony, and replay serves evidence — so the replayed code makes its
+    # claims afresh and they are captured here, to be compared with the recorded ones.
+    sems: Any = None    # a _SemCapture during replay, None otherwise
 
 
 hook = _Hook()
+
+
+class _SemCapture(list):
+    """The replayed execution's semantic events, in order. Its sids are its own: they name
+    spans within this replay, and nothing pairs them against the recording's."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._sid = 0
+
+    def next_sid(self) -> int:
+        self._sid += 1
+        return self._sid
 
 _active: ContextVar[Optional[list]] = ContextVar("flight_active", default=None)
 # True for the duration of any top-level tool call, recorded or not. `_active` cannot serve:
@@ -358,24 +375,38 @@ class RandomShim:
 def _sem(name: str, phase: str, data: dict, sid: Optional[int] = None,
          outcome: Optional[str] = None) -> Optional[int]:
     """Emit one semantic event, or nothing at all. Returns the sid, or None if nothing was
-    recorded — which is the ordinary case in production, where the recorder is off."""
-    if hook.mode != "record":
+    written — which is the ordinary case in production, where the recorder is off.
+
+    Under replay the same calls fire again, from the same code, and are CAPTURED rather than
+    written: the recorded sems are never fed back (they were never answers), so what the
+    replayed code claims this time is a fresh statement, and a reader can compare the two."""
+    if hook.mode == "record":
+        sink = _active.get()
+    elif hook.mode == "replay":
+        sink = hook.sems
+    else:
         return None
-    buf = _active.get()
-    if buf is None:
+    if sink is None:
         return None
+
     if sid is None:
-        sid = buf.next_sid()
+        sid = sink.next_sid()
     ev = {"k": "sem", "name": name, "phase": phase, "sid": sid}
     if outcome is not None:
         ev["outcome"] = outcome
     if data:
         ev["data"] = {k: to_jsonable(v) for k, v in data.items()}
-    # Through _emit, so `data` meets `redact` (it is in _PAYLOAD_KEYS) and then the `forbid`
-    # tripwire in _CallSink.append. Testimony gets exactly the same treatment as evidence:
-    # an app that names a password in a span's data has leaked it precisely as hard as one
-    # that passed it to an effect.
-    _emit(ev)
+
+    if hook.mode == "record":
+        # Through _emit, so `data` meets `redact` (it is in _PAYLOAD_KEYS) and then the
+        # `forbid` tripwire in _CallSink.append. Testimony gets exactly the same treatment as
+        # evidence: an app that names a password in a span's data has leaked it precisely as
+        # hard as one that passed it to an effect.
+        _emit(ev)
+    else:
+        # Scrubbed like the recording was: a replayed sem ends up in a report that gets
+        # printed, and a value the tape was forbidden to hold must not reach a terminal either.
+        sink.append(_scrub_event(ev))
     return sid
 
 
@@ -802,6 +833,7 @@ def uninstall() -> None:
     hook.mode = "off"
     hook.feed = None
     hook.redact = {}
+    hook.sems = None
     _recorder = None
     _pending = None
     _gate = None

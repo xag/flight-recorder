@@ -129,6 +129,32 @@ async def enrol(email: str, password: str = "") -> dict:
     return {"email": email, "account": account}
 
 
+async def enrol_refactored(email: str, password: str = "") -> dict:
+    """`enrol`, after somebody deleted one span.
+
+    Byte for byte the same questions to the boundary, in the same order — so replay of an
+    `enrol` tape against THIS function is green on every existing signal: same answers, same
+    result, same events consumed. The only thing that changed is the code's account of what it
+    was doing, and that is exactly the change a semantic divergence exists to name. It is not
+    presumed to be a bug: this may be a refactor. The tape says what happened, not what to
+    think about it.
+    """
+    with fr.span("enrol", email=email, started=datetime.now()):
+        rows = list(DB.collection("users").document(email).collection("items")
+                    .where("x", ">", 0).stream())          # the load_corpus span is gone
+        fr.note("corpus_read", rows=len(rows))
+
+        account = None
+        try:
+            with fr.span("register", password=password):
+                account = await fx.create_account(email, password=password)
+                await fx.maybe_fail(99)
+        except fx.ToyError as e:
+            fr.note("registration_failed", why=e.args[0])
+
+    return {"email": email, "account": account}
+
+
 LITERAL_TOKEN = "T" * 64  # a "credential" born inside the code, never passed in
 
 

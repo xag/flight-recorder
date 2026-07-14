@@ -39,9 +39,28 @@ both down, in order, and judging neither is exactly what makes the testimony che
 a span claiming to have charged a card, with no call to the thing that charges cards beneath it, is now
 a claim a reader can refute.
 
+So a tape becomes something you **read** rather than search — the skeleton first, the raw JSONL only
+inside the span that looks wrong:
+
+```
+>>> print(fr.Recording.load(tape).call(0).render_spans())
+enrol  ok  (1 now)
+  enrol  ok
+    load_corpus  ok  (1 db)
+    - corpus_read  rows=3
+    register  ERROR  (2 fx)
+    - registration_failed  why="kaput"
+```
+
 It costs nothing when the recorder is off, and a span whose body raises is still closed on the tape,
 marked `error` — a span that vanished when the code inside it failed would hide precisely the execution
 somebody came to the tape to read.
+
+Replay never feeds a recorded claim back: the replayed code testifies afresh, and the two accounts are
+compared. Changed testimony is a **third signal**, independent of a boundary divergence (the recording
+is stale) and an invariant violation (the code is wrong) — it says the code's account of what it was
+doing has changed, which may be a refactor. It does not fail a replay unless you ask it to
+(`sem_strict=True`).
 
 ## Install
 
