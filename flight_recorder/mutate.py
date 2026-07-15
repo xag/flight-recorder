@@ -33,11 +33,95 @@ from __future__ import annotations
 
 import json
 import tempfile
+from collections import Counter
 from pathlib import Path
 from typing import Any, Optional
 
 from flight_recorder.replay import load_session
-from flight_recorder.serial import to_jsonable
+from flight_recorder.serial import short, to_jsonable
+
+
+# --- the span tree: a tape, read top-down -------------------------------------------------
+
+def _span_tree(rec: dict) -> dict:
+    """A call's semantic skeleton: `{name, sid, phase, data, outcome, children, events}`.
+
+    `events` are the raw boundary events DIRECTLY enclosed by a node — not those of its child
+    spans. That is what makes the tree readable: each line accounts for the evidence it is
+    itself responsible for, and a span's own events are the ones its claim actually rests on.
+
+    Enclosure comes from order, exactly as the tape defines it. The reader is deliberately
+    forgiving about a malformed tape — an `end` with nothing open is ignored, an unclosed span
+    stays open with `outcome: None` — because `spec/validate.py` is the arbiter of
+    well-formedness and a reader that crashes on a broken tape is useless precisely when
+    somebody needs to look at one. An unclosed span is not even a defect in the common case:
+    it is what a call that died mid-flight leaves in its `.inflight` sidecar, and it is the
+    single most informative thing there.
+    """
+    root = {"name": rec.get("fn"), "sid": None, "phase": "call",
+            "data": rec.get("kwargs") or {},
+            "outcome": "error" if rec.get("error") else "ok",
+            "children": [], "events": []}
+    stack = [root]
+
+    for ev in rec.get("events") or []:
+        if ev.get("k") != "sem":
+            stack[-1]["events"].append(ev)
+            continue
+
+        phase = ev.get("phase")
+        node = {"name": ev.get("name"), "sid": ev.get("sid"), "phase": phase,
+                "data": ev.get("data") or {}, "outcome": None,
+                "children": [], "events": []}
+        if phase == "point":
+            stack[-1]["children"].append(node)
+        elif phase == "begin":
+            node["phase"] = "span"
+            stack[-1]["children"].append(node)
+            stack.append(node)
+        elif phase == "end" and len(stack) > 1:
+            stack.pop()["outcome"] = ev.get("outcome")
+
+    return root
+
+
+_OUTCOME = {"ok": "ok", "error": "ERROR", None: "open"}
+
+
+def _tally(events: list) -> str:
+    counts = Counter(e.get("k") for e in events)
+    return ", ".join(f"{n} {kind}" for kind, n in sorted(counts.items()))
+
+
+def _kv(data: dict) -> str:
+    return ", ".join(f"{k}={short(v)}" for k, v in data.items())
+
+
+def render_spans(tree: dict) -> str:
+    """The span tree as compact indented text — the view a reader loads BEFORE deciding
+    whether to descend into the raw JSONL, and the reason a tape with meaning on it can be
+    read at all rather than merely searched.
+
+    One line per span: what was claimed, how it ended, and how much evidence sits directly
+    under it. Point notes inline, marked. ASCII only: this prints to a Windows console under
+    cp1252, which turns anything prettier into mojibake exactly when it matters.
+    """
+    lines: list[str] = []
+
+    def walk(node: dict, depth: int) -> None:
+        pad = "  " * depth
+        if node["phase"] == "point":
+            data = _kv(node["data"])
+            lines.append(f"{pad}- {node['name']}" + (f"  {data}" if data else ""))
+            return
+        head = f"{pad}{node['name']}  {_OUTCOME.get(node['outcome'], node['outcome'])}"
+        tally = _tally(node["events"])
+        lines.append(head + (f"  ({tally})" if tally else ""))
+        for child in node["children"]:
+            walk(child, depth + 1)
+
+    walk(tree, 0)
+    return "\n".join(lines)
 
 
 def _snap_wrap(item: Any, i: int) -> Any:
@@ -202,6 +286,16 @@ class CallHandle:
     def clock(self) -> ClockHandle:
         return ClockHandle([e for e in self.record["events"] if e["k"] == "now"], self)
 
+    # --- reading -----------------------------------------------------------------
+
+    def spans(self) -> dict:
+        """This call's semantic skeleton (see `_span_tree`)."""
+        return _span_tree(self.record)
+
+    def render_spans(self) -> str:
+        """This call, top-down: one line per claim, with the evidence tallied under it."""
+        return render_spans(self.spans())
+
     # --- inputs ---------------------------------------------------------------
 
     @property
@@ -245,6 +339,16 @@ class Recording:
         if not 0 <= index < len(self.calls):
             raise IndexError(f"call {index} out of range: {len(self.calls)} call(s)")
         return CallHandle(self.calls[index], self)
+
+    def spans(self) -> list:
+        """Every call's semantic skeleton, in order."""
+        return [_span_tree(rec) for rec in self.calls]
+
+    def render_spans(self) -> str:
+        """The whole session, top-down. This is what a reader opens first: the meaning of each
+        call, and only then — if some claim looks wrong — the raw events underneath it."""
+        return "\n\n".join(f"call {i}:\n{render_spans(tree)}"
+                           for i, tree in enumerate(self.spans()))
 
     def _write(self, path: Path) -> Path:
         with Path(path).open("w", encoding="utf-8") as f:

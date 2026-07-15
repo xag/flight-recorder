@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from flight_recorder.boundary import Boundary, ChainTarget
-from flight_recorder.record import hook, patch_boundary, unpatch_all, _patch
+from flight_recorder.record import _SemCapture, hook, patch_boundary, unpatch_all, _patch
 from flight_recorder.serial import (
     from_jsonable, redact_jsonable, render, safe_repr, short, to_jsonable, trace_jsonable,
 )
@@ -106,20 +106,44 @@ class Feed:
             return ev.get("fn") == fn
         return True
 
+    def skip_sems(self) -> None:
+        """Step over recorded `sem` events. They are never answers.
+
+        A sem event is the app's testimony about what it was doing, not something the world
+        told it, so there is nothing here to feed back: the replayed code re-runs its own
+        note()/span() calls and testifies afresh. They are counted as CONSUMED because they
+        were read and passed over deliberately — "every event consumed" has to keep meaning
+        "the code asked the recording everything it holds", and a tape that went quietly
+        unconsumable the moment somebody instrumented their app would have made semantic spans
+        cost a false replay failure.
+        """
+        while self.pos < len(self.events) and self.events[self.pos].get("k") == "sem":
+            self.pos += 1
+            self.consumed += 1
+
     def pop_expect(self, kind: str, sig: Optional[str] = None, op: Optional[str] = None,
                    fn: Optional[str] = None) -> dict:
+        self.skip_sems()
         if self.probe:
             j = self.pos
             while j < len(self.events):
-                if self._matches(self.events[j], kind, sig, op, fn):
-                    if j > self.pos:
-                        self.skipped += j - self.pos
+                ev = self.events[j]
+                if ev.get("k") == "sem":
+                    j += 1
+                    continue  # not an answer, and not evidence of a changed path either
+                if self._matches(ev, kind, sig, op, fn):
+                    passed = [e for e in self.events[self.pos:j] if e.get("k") != "sem"]
+                    sems = (j - self.pos) - len(passed)
+                    if passed:
+                        self.skipped += len(passed)
                         self.skip_log.append(
                             f"'{self._want(kind, sig, op, fn)}' answered by event {j}, "
-                            f"skipping {j - self.pos} recorded event(s)")
+                            f"skipping {len(passed)} recorded event(s)")
+                    # The sems we stepped over are consumed, not skipped: skipping means the
+                    # mutation changed the path, and testimony is no evidence of that.
                     self.pos = j + 1
-                    self.consumed += 1
-                    return self.events[j]
+                    self.consumed += 1 + sems
+                    return ev
                 j += 1
             raise ProbeUnanswerable(
                 f"the replayed code asked for '{self._want(kind, sig, op, fn)}' but the "
@@ -362,6 +386,27 @@ def load_session(path: Path) -> tuple[dict, list]:
     return header, calls
 
 
+def _sem_pairs(events: list) -> list:
+    """The semantic trace: what was claimed, and in what order. Names and phases only — the
+    payloads are a reader's business, and comparing them would make an added field to a span's
+    data look like a change of meaning."""
+    return [(e.get("name"), e.get("phase")) for e in events if e.get("k") == "sem"]
+
+
+def _sem_divergence(recorded: list, replayed: list) -> Optional[str]:
+    """The first place the two accounts differ, or None if they agree."""
+    def show(pair: Optional[tuple]) -> str:
+        return "nothing" if pair is None else f"{pair[0]!r} {pair[1]}"
+
+    for i in range(max(len(recorded), len(replayed))):
+        a = recorded[i] if i < len(recorded) else None
+        b = replayed[i] if i < len(replayed) else None
+        if a != b:
+            return (f"semantic divergence at {i}: recorded {show(a)}, replayed {show(b)} — "
+                    f"the code's account of what it was doing has changed")
+    return None
+
+
 @dataclass
 class ReplayReport:
     fn: str
@@ -375,6 +420,18 @@ class ReplayReport:
     trace_path: Optional[Path] = None
     transitions: int = 0
     warnings: list = field(default_factory=list)
+    # The semantic traces, recorded and replayed, as (name, phase) sequences — and the first
+    # place they disagree. A THIRD signal, and deliberately not folded into the other two: a
+    # boundary divergence says the recording is stale, an invariant violation says the code is
+    # wrong, and this says the code's own account of what it was doing has changed. That may be
+    # a refactor and it may be a bug, and the tape does not presume to know which. So it does
+    # not gate `ok` by default — pinned suites must not turn red because somebody renamed a
+    # span while instrumentation is still being grown. `sem_strict=True` opts a suite in, once
+    # its vocabulary has settled and a change of testimony IS a finding.
+    sems_recorded: list = field(default_factory=list)
+    sems_replayed: list = field(default_factory=list)
+    sem_divergence: Optional[str] = None
+    sem_strict: bool = False
     # What the replayed code actually produced, jsonable. An invariant asserts on this —
     # not on the recorded result, which is the thing being questioned.
     replayed_result: Any = None
@@ -389,26 +446,35 @@ class ReplayReport:
     @property
     def ok(self) -> bool:
         return (self.result_match and self.error_match and self.divergence is None
-                and not self.write_divergences and self.events_consumed == self.events_total)
+                and not self.write_divergences and self.events_consumed == self.events_total
+                and (not self.sem_strict or self.sem_divergence is None))
 
 
 def replay_call(path: Path, index: int, adapter: ReplayAdapter,
-                trace_path: Optional[Path] = None, probe: bool = False) -> ReplayReport:
+                trace_path: Optional[Path] = None, probe: bool = False,
+                sem_strict: bool = False) -> ReplayReport:
     """Re-execute one recorded call. `probe=True` replays a MUTATED recording: boundary
     answers come from the (edited) tape matched by name rather than exactly, writes and
     result/error matching don't gate anything, and the verdict belongs to invariants.
     A recording whose call carries `"probe": true` (saved by the mutation API) enables
-    probe mode by itself, so a pinned mutated fixture can't be mistaken for a strict one."""
+    probe mode by itself, so a pinned mutated fixture can't be mistaken for a strict one.
+
+    `sem_strict=True` folds semantic divergence into `ok`: the replayed code must make the
+    same claims, in the same order, as the recording holds. Off by default, so instrumenting
+    an app cannot turn an existing pinned suite red."""
     header, calls = load_session(path)
     if not 0 <= index < len(calls):
         raise ValueError(f"--call {index} out of range: {len(calls)} calls in {path.name}")
     rec = calls[index]
     probe = probe or bool(rec.get("probe"))
     report = ReplayReport(fn=rec["fn"], result_match=False, error_match=False,
-                          events_total=len(rec["events"]), probe=probe)
+                          events_total=len(rec["events"]), probe=probe,
+                          sem_strict=sem_strict,
+                          sems_recorded=_sem_pairs(rec["events"]))
 
     adapter.prewarm()
     feed = Feed(rec["events"], probe=probe)
+    sems = _SemCapture()
 
     boundary = Boundary(effects=adapter.boundary.effects,
                         clock_modules=adapter.boundary.clock_modules,
@@ -424,7 +490,7 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
     _apply_constants(header)
     for module, attr, value in adapter.header_patches(header):
         _patch(module, attr, value)
-    hook.mode, hook.feed = "replay", feed
+    hook.mode, hook.feed, hook.sems = "replay", feed, sems
 
     # From here to the main try, a failure (an adapter that can't resolve, a trace path in
     # a missing directory) must not leave the process armed: hook in replay mode with this
@@ -436,7 +502,7 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
         tracer = Tracer(trace_path, adapter.trace_root, set(adapter.skip_files)) \
             if trace_path else None
     except BaseException:
-        hook.mode, hook.feed, hook.redact = "off", None, {}
+        hook.mode, hook.feed, hook.redact, hook.sems = "off", None, {}, None
         unpatch_all()
         raise
 
@@ -459,14 +525,21 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
         if tracer:
             tracer.stop()
             report.trace_path, report.transitions = tracer.path, tracer.transitions
-        hook.mode, hook.feed, hook.redact = "off", None, {}
+        hook.mode, hook.feed, hook.redact, hook.sems = "off", None, {}, None
         unpatch_all()
+
+    # The sems trailing the last boundary answer — an outermost span's `end`, most often — were
+    # never reached by a pop_expect, and leaving them unread would report a shorter path than
+    # the recorded one on a tape where nothing of the sort happened.
+    feed.skip_sems()
 
     report.events_consumed = feed.consumed
     report.write_divergences = feed.write_divergences
     report.replayed_writes = feed.writes
     report.replayed_error = error
     report.error_match = error == rec.get("error")
+    report.sems_replayed = _sem_pairs(sems)
+    report.sem_divergence = _sem_divergence(report.sems_recorded, report.sems_replayed)
     if probe:
         report.warnings.append(
             f"probe replay: {feed.consumed} event(s) answered, {feed.skipped} skipped, "
@@ -547,6 +620,14 @@ def format_report(rec_index: int, report: ReplayReport) -> str:
                   else "  <-- replayed code took a SHORTER path than recorded"))
     if report.divergence:
         out.append(f"  {report.divergence}")
+    if report.sem_divergence:
+        # Reported whether or not it gates. A signal that only appears when it fails the build
+        # is a signal nobody ever learns to read — and this one is often the interesting half
+        # of a green replay: same answers, different account of what they were for.
+        gate = "" if report.sem_strict else "  (not gating: sem_strict is off)"
+        out.append(f"  {report.sem_divergence}{gate}")
+    elif report.sems_recorded:
+        out.append(f"  semantic trace: {len(report.sems_recorded)} claim(s), unchanged")
     if report.result_diff:
         out.extend("  " + l for l in report.result_diff)
     if report.write_divergences:

@@ -184,6 +184,7 @@
     <li><a href="#regression">Pinned recordings</a></li>
     <li><a href="#mutation">Edit the tape</a></li>
     <li><a href="#invariants">Invariants</a></li>
+    <li><a href="#sem">Semantic spans</a></li>
     <li><a href="#differ">Language differences</a></li>
     <li><a href="#tape">The tape</a></li>
     <li><a href="#limits">Limits</a></li>
@@ -593,6 +594,48 @@ self-consistent output.</p>
   <p>The engine is Python — but <strong>it consumes the tape</strong>, and the tape is shared. A
   recording made by either implementation can be checked against the same invariants.</p>
 </div>
+
+<h2 id="sem">Semantic spans <span class="badge py">Python</span></h2>
+
+<p>A recording answers <strong>“same?”</strong>. An invariant answers <strong>“right?”</strong>. Neither
+answers <strong>“what was this?”</strong> — and that is the question anyone actually opens a tape with.
+So an app may say, in its own words, what a stretch of execution <em>meant</em>, and have the claim
+recorded in-stream, wrapped around the raw events it produced. The library gains no semantics from
+this: the name is free text, nothing validates it, nothing interprets it. A semantic event is the
+app's <em>testimony</em>, written next to the <em>evidence</em>. Recording both, in order, and judging
+neither is what makes the testimony checkable at all — a span claiming to have charged a card, with no
+call to the thing that charges cards beneath it, is a claim a reader can now refute.</p>
+
+<pre data-lang="py"><code>with fr.span("assign_turn", chore=chore_id):     # every boundary event inside is inside the span
+    holder = db.collection("members").document(who).get()
+    fr.note("skipped", reason="absent")          # a moment worth marking, no span</code></pre>
+
+<p>Which makes a tape something you can <strong>read</strong> rather than search. Load the semantic
+skeleton first and descend into the raw JSONL only inside the span that looks wrong:</p>
+
+<pre><code>&gt;&gt;&gt; print(fr.Recording.load(tape).call(0).render_spans())
+enrol  ok  (1 now)
+  enrol  ok
+    load_corpus  ok  (1 db)
+    - corpus_read  rows=3
+    register  ERROR  (2 fx)
+    - registration_failed  why="kaput"</code></pre>
+
+<p>Spans are call-scoped and well-nested by construction (the only way to open one is the context
+manager), so enclosure is derived from order and there are no parent pointers to get wrong. A body that
+raises still closes its span, marked <code>error</code>, and the exception goes on its way untouched — a
+span that vanished when the code inside it failed would hide exactly the execution somebody came to the
+tape to read. And it is all free when the recorder is off: instrumentation lives in production code
+paths, so it must cost nothing and have no failure modes there.</p>
+
+<p>Replay never feeds a recorded claim back — testimony was never an answer. The replayed code re-runs
+its own <code>span()</code> calls and testifies afresh, and the two accounts are compared. A difference
+is a <strong>third signal</strong>, and it is kept separate on purpose: a boundary divergence says the
+<em>recording</em> is stale, an invariant violation says the <em>code</em> is wrong, and a semantic
+divergence says the code's account of what it was doing has changed. That may be a refactor, so it does
+not fail a replay by default — a pinned suite must not go red because somebody added a span.
+<code>replay_call(..., sem_strict=True)</code> opts in, once the vocabulary has settled and changed
+testimony <em>is</em> a finding.</p>
 
 <h2 id="differ">Where the languages differ</h2>
 

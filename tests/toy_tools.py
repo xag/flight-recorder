@@ -7,6 +7,8 @@ from __future__ import annotations
 import random
 from datetime import datetime
 
+import flight_recorder as fr
+
 from tests import toy_effects as fx
 
 
@@ -94,6 +96,92 @@ async def confirm_wipe(email: str) -> dict:
     """A tool whose execution depends on a client-side round-trip it awaits."""
     ans = await fx.SESSION.elicit(f"really wipe {email}?")
     return {"email": email, "confirmed": ans["action"] == "accept", "n": ans["value"]}
+
+
+async def enrol(email: str, password: str = "") -> dict:
+    """The instrumented tool: the same kind of work as the others, but saying what it MEANT.
+
+    Every shape the `sem` event kind can take is exercised here, because this is what the
+    conformance fixture is recorded from — spans nested inside a span, a point note, a span
+    whose body raises (recorded with `outcome: "error"`, and the exception propagates), span
+    data carrying a value marker (a datetime) and a value redaction must reach (a password).
+
+    Note what is NOT here: any claim the library checks. `register` is a span called
+    "register" because the app says so. Nothing in flight-recorder knows or cares whether it
+    registered anything — that judgement is a reader's, made against the raw events the span
+    encloses, and the library's job is only to put the claim and the evidence on the same
+    tape, in order.
+    """
+    with fr.span("enrol", email=email, started=datetime.now()):
+        with fr.span("load_corpus"):
+            rows = list(DB.collection("users").document(email).collection("items")
+                        .where("x", ">", 0).stream())
+        fr.note("corpus_read", rows=len(rows))
+
+        account = None
+        try:
+            with fr.span("register", password=password):
+                account = await fx.create_account(email, password=password)
+                await fx.maybe_fail(99)  # raises: the span ends with outcome "error"
+        except fx.ToyError as e:
+            fr.note("registration_failed", why=e.args[0])
+
+    return {"email": email, "account": account}
+
+
+async def enrol_refactored(email: str, password: str = "") -> dict:
+    """`enrol`, after somebody deleted one span.
+
+    Byte for byte the same questions to the boundary, in the same order — so replay of an
+    `enrol` tape against THIS function is green on every existing signal: same answers, same
+    result, same events consumed. The only thing that changed is the code's account of what it
+    was doing, and that is exactly the change a semantic divergence exists to name. It is not
+    presumed to be a bug: this may be a refactor. The tape says what happened, not what to
+    think about it.
+    """
+    with fr.span("enrol", email=email, started=datetime.now()):
+        rows = list(DB.collection("users").document(email).collection("items")
+                    .where("x", ">", 0).stream())          # the load_corpus span is gone
+        fr.note("corpus_read", rows=len(rows))
+
+        account = None
+        try:
+            with fr.span("register", password=password):
+                account = await fx.create_account(email, password=password)
+                await fx.maybe_fail(99)
+        except fx.ToyError as e:
+            fr.note("registration_failed", why=e.args[0])
+
+    return {"email": email, "account": account}
+
+
+LITERAL_TOKEN = "T" * 64  # a "credential" born inside the code, never passed in
+
+
+async def testify(email: str) -> dict:
+    """Testimony carrying a secret the call's kwargs never saw.
+
+    The distinction matters: a secret arriving as a kwarg is already caught when the call's
+    opening record is written, so it proves nothing about `sem`. Here the tape's only chance to
+    catch it is the semantic event itself — which is precisely the case that shows a span's
+    `data` is guarded like any other payload rather than slipping past on its way out.
+    """
+    with fr.span("register", token=LITERAL_TOKEN):
+        return {"email": email}
+
+
+async def summing(email: str) -> str:
+    """A span whose body raises and does NOT catch it. The `end` is written anyway, carrying
+    `outcome: "error"`, and the exception goes on its way untouched."""
+    with fr.span("summing", email=email):
+        return await fx.maybe_fail(99)
+
+
+async def awaited(email: str) -> dict:
+    """The same context manager, awaited. One object, both protocols — because an app whose
+    domain acts are async should not have to instrument them differently."""
+    async with fr.span("awaited", mode="async"):
+        return await fx.fetch_remote(email)
 
 
 async def remote_sum(email: str, a: str, b: str) -> dict:

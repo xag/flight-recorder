@@ -102,9 +102,26 @@ class _Hook:
     mode: str = "off"   # off | record | replay
     feed: Any = None    # flight_recorder.replay.Feed during replay
     redact: dict = {}   # the active boundary's normalized redact rules
+    # Where the REPLAYED code's own note()/span() calls land. A recorded sem event is never
+    # fed back — it is testimony, and replay serves evidence — so the replayed code makes its
+    # claims afresh and they are captured here, to be compared with the recorded ones.
+    sems: Any = None    # a _SemCapture during replay, None otherwise
 
 
 hook = _Hook()
+
+
+class _SemCapture(list):
+    """The replayed execution's semantic events, in order. Its sids are its own: they name
+    spans within this replay, and nothing pairs them against the recording's."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._sid = 0
+
+    def next_sid(self) -> int:
+        self._sid += 1
+        return self._sid
 
 _active: ContextVar[Optional[list]] = ContextVar("flight_active", default=None)
 # True for the duration of any top-level tool call, recorded or not. `_active` cannot serve:
@@ -113,11 +130,13 @@ _active: ContextVar[Optional[list]] = ContextVar("flight_active", default=None)
 _in_call: ContextVar[bool] = ContextVar("flight_in_call", default=False)
 
 
-# Redaction rewrites event payloads only, never the envelope (k/fn/op/sig/v/idx), so a
-# rule named like an envelope key cannot corrupt the event structure. `err` is scrubbed
-# whole: its `args` carry the exception's values, and a `"repr"` rule lets an app mask
-# the recorded repr too.
-_PAYLOAD_KEYS = ("args", "kwargs", "res", "err")
+# Redaction rewrites event payloads only, never the envelope (k/fn/op/sig/v/idx/name/phase/
+# sid), so a rule named like an envelope key cannot corrupt the event structure. `err` is
+# scrubbed whole: its `args` carry the exception's values, and a `"repr"` rule lets an app mask
+# the recorded repr too. `data` is a semantic event's payload and is scrubbed like any other:
+# testimony is written by the app, about the app's own values, and is exactly as likely to
+# carry a credential as an effect's arguments are.
+_PAYLOAD_KEYS = ("args", "kwargs", "res", "err", "data")
 
 
 def _scrub_event(ev: dict) -> dict:
@@ -331,6 +350,128 @@ class RandomShim:
         return getattr(_random, name)
 
 
+# --- semantic events: the app's testimony, next to the evidence ----------------------
+#
+# A tape records what the world answered. It says nothing about what the execution MEANT —
+# and meaning is what a reader is actually looking for. So an app may declare, in its own
+# free-text vocabulary, that a stretch of execution constituted a domain-level act, and have
+# that declaration recorded in-stream, interleaved with the raw events it encloses.
+#
+# The cardinal rule is untouched: INSTRUMENT, NEVER DUPLICATE. The library gains no semantics.
+# Names and payloads are opaque here; nothing validates them, nothing interprets them, nothing
+# checks that a span called "charge_card" charged anything. A semantic event is the app's
+# *testimony* about its own execution, written down next to the *evidence* — the raw boundary
+# events inside the span. This library records both and judges neither. Whether the testimony
+# is licensed by the evidence is a question for a reader, and it is a question that only has
+# teeth because both are on the same tape, in order.
+#
+# Order is the meaning: enclosure is derived from the sequence of begin/end events, so there
+# are no parent pointers to get wrong. Well-nesting is guaranteed by construction, because the
+# only way to open a span is a context manager.
+#
+# Spans are CALL-SCOPED. A span never crosses a call boundary, and session-level meaning
+# ("this user's whole conversation") is a reader's composition, not a recorder's.
+
+def _sem(name: str, phase: str, data: dict, sid: Optional[int] = None,
+         outcome: Optional[str] = None) -> Optional[int]:
+    """Emit one semantic event, or nothing at all. Returns the sid, or None if nothing was
+    written — which is the ordinary case in production, where the recorder is off.
+
+    Under replay the same calls fire again, from the same code, and are CAPTURED rather than
+    written: the recorded sems are never fed back (they were never answers), so what the
+    replayed code claims this time is a fresh statement, and a reader can compare the two."""
+    if hook.mode == "record":
+        sink = _active.get()
+    elif hook.mode == "replay":
+        sink = hook.sems
+    else:
+        return None
+    if sink is None:
+        return None
+
+    if sid is None:
+        sid = sink.next_sid()
+    ev = {"k": "sem", "name": name, "phase": phase, "sid": sid}
+    if outcome is not None:
+        ev["outcome"] = outcome
+    if data:
+        ev["data"] = {k: to_jsonable(v) for k, v in data.items()}
+
+    if hook.mode == "record":
+        # Through _emit, so `data` meets `redact` (it is in _PAYLOAD_KEYS) and then the
+        # `forbid` tripwire in _CallSink.append. Testimony gets exactly the same treatment as
+        # evidence: an app that names a password in a span's data has leaked it precisely as
+        # hard as one that passed it to an effect.
+        _emit(ev)
+    else:
+        # Scrubbed like the recording was: a replayed sem ends up in a report that gets
+        # printed, and a value the tape was forbidden to hold must not reach a terminal either.
+        sink.append(_scrub_event(ev))
+    return sid
+
+
+def note(name: str, **data: Any) -> None:
+    """Record that something meaningful just happened, at a point: `note("turn_skipped",
+    reason="absent")`.
+
+    A strict no-op when no recording is active for this call — not installed, or the gate said
+    no. That is not an optimisation, it is the contract: this call sits in production code
+    paths, so it must cost nothing and it must have no failure modes when off. Nothing here can
+    raise except the forbidden-value tripwire, which is supposed to."""
+    _sem(name, "point", data)
+
+
+class span:
+    """Record that a stretch of execution constituted a domain act, and enclose the raw events
+    it produced:
+
+        with fr.span("assign_turn", chore=chore_id):
+            ...                          # every boundary event in here is inside the span
+        async with fr.span("assign_turn", chore=chore_id):
+            ...                          # same object, awaited
+
+    A reader can then load the span tree first and descend into raw JSONL only inside the span
+    that looks wrong — which is the difference between reading a tape and searching one.
+
+    If the body raises, the `end` event is still written, carrying `outcome: "error"`, and the
+    exception propagates untouched. A span that vanishes from the tape when the code inside it
+    failed would hide precisely the execution somebody came to the tape to read.
+
+    A no-op when recording is off, in which case the `with` block is an ordinary block."""
+
+    __slots__ = ("_name", "_data", "_sid")
+
+    def __init__(self, name: str, **data: Any):
+        self._name = name
+        self._data = data
+        self._sid: Optional[int] = None
+
+    def _begin(self) -> "span":
+        self._sid = _sem(self._name, "begin", self._data)
+        return self
+
+    def _end(self, exc_type: Optional[type]) -> None:
+        # No sid means the begin was never recorded (recording was off, or the gate declined),
+        # so there is nothing to close. A lone `end` on a tape would be a lie about nesting.
+        if self._sid is not None:
+            _sem(self._name, "end", {}, sid=self._sid,
+                 outcome="error" if exc_type is not None else "ok")
+
+    def __enter__(self) -> "span":
+        return self._begin()
+
+    def __exit__(self, exc_type: Optional[type], exc: Any, tb: Any) -> bool:
+        self._end(exc_type)
+        return False  # never swallow: the recorder observes, it does not intervene
+
+    async def __aenter__(self) -> "span":
+        return self._begin()
+
+    async def __aexit__(self, exc_type: Optional[type], exc: Any, tb: Any) -> bool:
+        self._end(exc_type)
+        return False
+
+
 # --- session file -------------------------------------------------------------------
 
 class _CallSink(list):
@@ -344,6 +485,7 @@ class _CallSink(list):
         super().__init__()
         self._path = path
         self._forbid = forbid or []
+        self._sid = 0
         line = json.dumps(header, ensure_ascii=False, default=repr)
         # Ahead of the open(), and outside the best-effort try below: a sidecar is a file on
         # disk like any other, and a forbidden value must not reach it either. The guard is
@@ -368,6 +510,13 @@ class _CallSink(list):
                 self._f.flush()
             except Exception:
                 pass
+
+    def next_sid(self) -> int:
+        """The next span id. Unique within the call, which is all a `sid` ever has to be:
+        enclosure is derived from the ORDER of the begin/end events, not from a parent
+        pointer, so an id only has to tell one span's end from another's."""
+        self._sid += 1
+        return self._sid
 
     def finalize(self) -> None:
         try:
@@ -684,6 +833,7 @@ def uninstall() -> None:
     hook.mode = "off"
     hook.feed = None
     hook.redact = {}
+    hook.sems = None
     _recorder = None
     _pending = None
     _gate = None

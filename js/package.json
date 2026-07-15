@@ -3,7 +3,7 @@
   "version": "0.10.2",
   "description": "Record an app's tool calls at their nondeterminism boundary; replay them deterministically against the real code. Tape format v1, shared with the Python implementation.",
   "type": "module",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": "Xavier Grehant",
   "homepage": "https://github.com/xag/flight-recorder#readme",
   "repository": {
@@ -44,7 +44,8 @@
   "files": [
     "src",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "test": "node --test",

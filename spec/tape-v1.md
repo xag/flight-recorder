@@ -69,7 +69,9 @@ where behaviour changed.
 
 ## The events inside a call
 
-Each event is `{"k": <kind>, ...}`. Four kinds are defined in v1.
+Each event is `{"k": <kind>, ...}`. Six kinds are defined. The first five record what the
+*world* answered — they are evidence, and they are what replay feeds back. The last, `sem`,
+records what the *app claimed it was doing*, and is never fed back to anything.
 
 ### `k: "fx"` — an effect (a module function: HTTP, storage, anything)
 
@@ -171,6 +173,48 @@ rather than guess.
 
 A separate kind from `now` because it is a separate clock: monotonic, arbitrary origin, not
 a wall time. Feeding a wall time back into it would be a category error.
+
+### `k: "sem"` — a semantic event (the app's own testimony)
+
+Every other event kind records what the *world* answered. This one records what the *app said
+it was doing* — a domain-level act, in the app's own free-text vocabulary, written in-stream
+next to the raw events it encloses.
+
+It is testimony, not evidence, and the distinction is the whole point of putting it here. The
+raw events are ground truth: they are what crossed the boundary. A `sem` event is a **claim**,
+made by the code, about what that stretch of execution *meant*. The recorder writes both down
+and judges neither. Whether a claim is licensed by the evidence beneath it is a question for a
+reader, and it is a question with teeth only because both are on the same tape, in order.
+
+| key | type | meaning |
+|---|---|---|
+| `k` | `"sem"` | |
+| `name` | string | the act, in the app's vocabulary. Opaque: no implementation interprets it. |
+| `phase` | `"begin"` \| `"end"` \| `"point"` | a span opens, a span closes, or a moment is marked. |
+| `sid` | int | unique within the call. An `end` repeats its `begin`'s `sid`; a `point` has its own. |
+| `data` | object | *optional.* Payload, value-encoded and redacted exactly like a boundary value. |
+| `outcome` | `"ok"` \| `"error"` | *optional, `end` only.* `error` iff the span's body raised. |
+
+**Order is the meaning.** Enclosure is derived from the sequence — a span encloses every event
+between its `begin` and its `end` — so there are no parent pointers, and none are needed. A
+`begin`/`end` pair is **well-nested** with respect to every other pair in the same call: spans
+nest, they never straddle. A recorder that cannot guarantee that must not emit `sem` at all.
+
+**Spans are call-scoped.** A span never crosses a call boundary. Meaning that spans a session
+is a reader's composition, not a recorder's, and a tape that claimed otherwise would be making
+a structural promise the format cannot keep.
+
+An `end` with no `begin`, a `begin` with no `end`, or a crossed pair is a malformed tape. A
+span left open by a process that died mid-call is not malformed — it is a call that never
+finished, and it lives in the `inflight` sidecar, where an unclosed span is exactly the
+information wanted.
+
+`sem` events are **not boundary answers**. Replay never feeds one back: the replayed code
+re-runs its own `note()`/`span()` calls and makes its claims afresh, and a reader compares the
+two sequences. Changed testimony is a third signal, independent of a boundary divergence
+(the recording is stale) and of an invariant violation (the code is wrong): it means the code's
+account of what it was doing has changed, which may be a refactor or may be a bug, and the tape
+does not presume to say which.
 
 ## Value encoding
 
