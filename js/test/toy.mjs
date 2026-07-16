@@ -4,6 +4,8 @@
 
 import crypto from 'node:crypto';
 
+import { note, span } from '../src/index.js';
+
 export class ToyError extends Error {
   constructor(msg, n) {
     super(msg);
@@ -81,6 +83,29 @@ export function makeTools(store) {
       await store.set(`user:${email}`, { password });
       const row = { email, password };
       return { account: row, password };
+    },
+
+    // The instrumented tool: the same work as the others, but saying what it MEANT. Every shape
+    // a sem event can take is here — spans nested inside a span, a point note, a span whose body
+    // raises (recorded with outcome "error", the exception caught by the caller), span data
+    // carrying a value marker (a datetime) and a value a redaction must reach (a password).
+    async enrol({ user, password }) {
+      const at = new Date(); // a clock read before the span opens: it belongs to the call
+      return span('enrol', { user, started: at }, async () => {
+        const row = await span('load_corpus', () => store.get(user));
+        note('corpus_read', { found: row != null });
+
+        try {
+          await span('register', { password }, async () => {
+            await store.set(`user:${user}`, { password });
+            await store.boom(user); // raises: the span ends with outcome "error"
+          });
+        } catch (e) {
+          note('registration_failed', { why: e.message });
+        }
+
+        return { user, at: at.getTime(), name: row?.name ?? 'stranger' };
+      });
     },
   };
 }

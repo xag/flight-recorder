@@ -168,6 +168,47 @@ and never emits it, so the marker costs that runtime nothing and buys this one e
 A call that **raised** records `result: null`, which is not the same as a call that returned
 `undefined`. Both runtimes agree on that.
 
+## Tapes that carry meaning
+
+A recording answers **"same?"**. An invariant answers **"right?"**. Neither answers **"what was
+this?"** — which is the question anyone actually opens a tape with. So an app can say, in its own
+words, what a stretch of execution *meant*, and have the claim recorded in-stream, wrapped around
+the raw events it produced:
+
+```js
+await fr.span('assign_turn', { chore }, async () => {   // every boundary event inside is inside the span
+  const holder = await kv.hgetall(`member:${who}`);
+  fr.note('skipped', { reason: 'absent' });             // a moment worth marking, no span
+});
+```
+
+`span(name, data, fn)` runs `fn` (sync or async), returns its result, and writes a `begin`/`end`
+pair around it; the `end` carries `outcome: "error"` when `fn` throws, and the error propagates
+untouched. `data` is optional (`span(name, fn)`). Both cost **nothing** when the recorder is off,
+where the block is just `fn()`.
+
+The library gains no semantics from this — the name is free text, nothing validates it, nothing
+interprets it. A semantic event is the app's **testimony**, recorded next to the **evidence**;
+writing both down, in order, and judging neither is what makes the testimony checkable by someone
+else. The tape becomes something you **read** rather than search — and because the format is
+shared, the skeleton is legible from the Python side too:
+
+```
+>>> print(fr.Recording.load(tape).call(0).render_spans())
+enrol  ok  (1 now)
+  enrol  ok
+    load_corpus  ok  (1 fx)
+    - corpus_read  found=true
+    register  ERROR  (2 fx)
+    - registration_failed  why="no such key: alice"
+```
+
+Replay never feeds a recorded claim back: the replayed code testifies afresh, and the two accounts
+are compared. Changed testimony is a **third signal** — `report.semDivergence`, independent of a
+boundary divergence (the recording is stale) and a wrong result (the code is wrong). It says the
+code's account of what it was doing has changed, which may be a refactor, so it does not fail a
+replay unless you ask it to (`semStrict: true`).
+
 ## What is here, and what is not
 
 Record, replay, divergence detection, tape mutation.
