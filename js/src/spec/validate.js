@@ -20,7 +20,8 @@ const MARKERS = new Set(['__dt__', '__date__', '__undef__', '__opaque__']);
 // Reserved by the trace encoding: a reader must tolerate them even though a v1 recorder
 // never emits them.
 const RESERVED_MARKERS = new Set(['__snap__', '__seq__', '__str__', '__esc__']);
-const EVENT_KINDS = new Set(['fx', 'db', 'now', 'perf', 'rand']);
+const EVENT_KINDS = new Set(['fx', 'db', 'now', 'perf', 'rand', 'sem']);
+const SEM_PHASES = new Set(['begin', 'end', 'point']);
 
 // ISO-8601 as Python's datetime.fromisoformat accepts it, which is what writes these tapes.
 // Deliberately strict about shape and permissive about the offset, because whether an
@@ -144,6 +145,30 @@ function checkEvent(e, path, out) {
     return;
   }
 
+  if (k === 'sem') {
+    // Testimony, not evidence. The checker validates its SHAPE and says nothing about its
+    // content: `name` is the app's own vocabulary and no implementation may interpret it. A
+    // checker that knew what a span name meant would have given the library semantics, which
+    // is the one thing the library is not allowed to have.
+    if (typeof e.name !== 'string' || !e.name) out.push(`${path}: sem needs a non-empty string 'name'`);
+    const phase = e.phase;
+    if (!SEM_PHASES.has(phase)) {
+      out.push(`${path}: sem.phase must be one of begin|end|point, got ${JSON.stringify(phase)}`);
+    }
+    if (!isInt(e.sid)) out.push(`${path}: sem needs an int 'sid', unique within the call`);
+    if ('data' in e) {
+      if (!isPlainObject(e.data)) out.push(`${path}: sem.data must be an object`);
+      else checkValue(e.data, `${path}.data`, out);
+    }
+    if ('outcome' in e) {
+      if (phase !== 'end') out.push(`${path}: sem.outcome belongs to an 'end', not a ${JSON.stringify(phase)}`);
+      if (e.outcome !== 'ok' && e.outcome !== 'error') {
+        out.push(`${path}: sem.outcome must be 'ok' or 'error', got ${JSON.stringify(e.outcome)}`);
+      }
+    }
+    return;
+  }
+
   if (k === 'rand') {
     // Four methods, because a draw's SHAPE is what makes it replayable against an edited
     // tape. 'sample' indexes into a population (Python); 'bytes' IS the value; 'float' and
@@ -177,6 +202,63 @@ function checkEvent(e, path, out) {
     } else {
       out.push(`${path}: rand.m must be one of sample|bytes|float|int, got ${JSON.stringify(e.m)}`);
     }
+  }
+}
+
+/**
+ * The one structural promise `sem` makes: begin/end pairs are well-nested within a call.
+ *
+ * Enclosure is derived from ORDER — a span contains every event between its begin and its end —
+ * so nesting is not decoration, it is the only thing that makes the derivation sound. Two spans
+ * that straddle would put an event inside both and inside neither, and every reader that walks
+ * the stream would build a different tree.
+ *
+ * A span left open by a process that died mid-call is a separate matter and not a violation here:
+ * that call never reached the tape at all. It lives in the `inflight` sidecar, an unknown `ev` to
+ * this checker, where an unclosed span is exactly the information the reader wants.
+ */
+function checkSemNesting(evs, path, out) {
+  const stack = [];
+  const seen = new Set();
+  evs.forEach((e, j) => {
+    if (!isPlainObject(e) || e.k !== 'sem') return;
+    const { sid, phase, name } = e;
+    if (!isInt(sid) || !SEM_PHASES.has(phase)) return; // already reported by checkEvent
+
+    if (phase === 'begin' || phase === 'point') {
+      if (seen.has(sid)) {
+        out.push(
+          `${path}.events[${j}]: sem sid ${sid} is reused — a sid must be unique within the ` +
+            `call, or an 'end' cannot name its 'begin'`,
+        );
+      }
+      seen.add(sid);
+      if (phase === 'begin') stack.push([sid, name]);
+    } else {
+      if (!stack.length) {
+        out.push(`${path}.events[${j}]: sem 'end' (sid ${sid}) with no open span`);
+      } else if (stack[stack.length - 1][0] !== sid) {
+        const [openSid, openName] = stack[stack.length - 1];
+        out.push(
+          `${path}.events[${j}]: sem spans are not well-nested — 'end' closes sid ${sid} while ` +
+            `sid ${openSid} (${JSON.stringify(openName)}) is still open. Spans nest; they never straddle.`,
+        );
+        // Unwind to it if it is open at all, so one crossing is not reported N times.
+        if (stack.some(([s]) => s === sid)) {
+          while (stack.length && stack[stack.length - 1][0] !== sid) stack.pop();
+          stack.pop();
+        }
+      } else {
+        stack.pop();
+      }
+    }
+  });
+
+  for (const [sid, name] of stack) {
+    out.push(
+      `${path}: sem span ${JSON.stringify(name)} (sid ${sid}) is never closed — a completed ` +
+        `call holds no open spans`,
+    );
   }
 }
 
@@ -225,8 +307,12 @@ function validateLine(obj, i, out, { first }) {
     if (!isTzAware(obj.ts)) out.push(`line ${i}: call.ts must be timezone-aware ISO-8601`);
     if (typeof obj.ms !== 'number') out.push(`line ${i}: call.ms must be a number`);
 
-    if (!Array.isArray(obj.events)) out.push(`line ${i}: call.events must be an array`);
-    else obj.events.forEach((e, j) => checkEvent(e, `line ${i}.events[${j}]`, out));
+    if (!Array.isArray(obj.events)) {
+      out.push(`line ${i}: call.events must be an array`);
+    } else {
+      obj.events.forEach((e, j) => checkEvent(e, `line ${i}.events[${j}]`, out));
+      checkSemNesting(obj.events, `line ${i}`, out);
+    }
     return;
   }
 

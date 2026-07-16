@@ -44,7 +44,7 @@ const active = new AsyncLocalStorage();
  * In `record` they ask the world and write down the answer; in `replay` they answer from
  * the tape and never touch the world at all. The app cannot tell the difference.
  */
-export const hook = { mode: null, feed: null };
+export const hook = { mode: null, feed: null, sems: null };
 
 /**
  * True while a wrapped effect is running the REAL client.
@@ -77,7 +77,10 @@ function emit(ev) {
 
 export { scrub, active, patch, isoLocal };
 
-const PAYLOAD_KEYS = ['args', 'kwargs', 'res', 'result'];
+// `data` is a semantic event's payload and is scrubbed like any other: testimony is written
+// by the app, about the app's own values, and is exactly as likely to carry a credential as an
+// effect's arguments are.
+const PAYLOAD_KEYS = ['args', 'kwargs', 'res', 'result', 'data'];
 
 function scrub(ev) {
   const rules = boundary?.redact;
@@ -379,6 +382,105 @@ function errEvent(e) {
     repr: String(e?.stack ?? e).slice(0, 300),
     args: toJsonable(args),
   };
+}
+
+// --- semantic events: the app's testimony, in-stream next to the evidence ------------
+//
+// A tape records what the world answered. It says nothing about what the execution MEANT —
+// and meaning is what a reader is actually looking for. So an app may declare, in its own
+// free-text vocabulary, that a stretch of execution constituted a domain-level act, and have
+// that declaration recorded in-stream, interleaved with the raw events it encloses.
+//
+// The cardinal rule is untouched: INSTRUMENT, NEVER DUPLICATE. The library gains no semantics.
+// Names and payloads are opaque; nothing validates them, nothing interprets them. A semantic
+// event is the app's testimony about its own execution, written down next to the evidence — the
+// raw boundary events inside the span. This library records both and judges neither.
+//
+// Order is the meaning: enclosure is derived from the sequence of begin/end events, so there
+// are no parent pointers, and a sid only has to be unique within the call. Spans are call-scoped.
+//
+// Under replay the same calls fire again, from the same code, and are CAPTURED rather than
+// written: a recorded sem is never fed back (it was never an answer), so the replayed code makes
+// its claims afresh into hook.sems, and a reader compares the two accounts.
+
+// Where a sem goes: the active call's buffer while recording (indicated, as everywhere in this
+// runtime, by an active buffer rather than a mode flag), the replay capture during replay, and
+// nowhere at all when neither is true — which is the ordinary case in production.
+function semSink() {
+  if (hook.mode === 'replay') return hook.sems ?? null;
+  return active.getStore() ?? null;
+}
+
+function emitSem(name, phase, data, sid, outcome) {
+  const sink = semSink();
+  if (!sink) return null;
+  if (sid == null) {
+    sink.sid = (sink.sid ?? 0) + 1;
+    sid = sink.sid;
+  }
+  const ev = { k: 'sem', name, phase, sid };
+  if (outcome != null) ev.outcome = outcome;
+  if (data && Object.keys(data).length) ev.data = toJsonable(data);
+  // Through scrub, so `data` meets `redact`/`scrub` exactly as an effect's arguments do (record),
+  // and a value the tape was forbidden to hold never reaches a printed report (replay).
+  sink.push(scrub(ev));
+  return sid;
+}
+
+/**
+ * Mark that something meaningful just happened, at a point: `note('turn_skipped', { reason })`.
+ *
+ * A strict no-op when no recording is active for this call — not installed, or the gate said no.
+ * That is the contract, not an optimisation: this sits in production code paths, so it must cost
+ * nothing and have no failure modes when off.
+ */
+export function note(name, data = {}) {
+  emitSem(name, 'point', data);
+}
+
+/**
+ * Record that a stretch of execution constituted a domain act, and enclose the raw events it
+ * produced. `fn` runs; every boundary event it emits is inside the span:
+ *
+ *     await fr.span('assign_turn', { chore }, async () => { ... });
+ *     const x = fr.span('compute', () => heavy());   // data is optional
+ *
+ * `fn` may be sync or async; its result is returned. The `end` event carries `outcome: "error"`
+ * when `fn` throws, and the error propagates untouched — a span that vanished from the tape when
+ * the code inside it failed would hide exactly the execution somebody came to read.
+ *
+ * A no-op when recording is off, in which case this is just `fn()`.
+ */
+export function span(name, data, fn) {
+  if (typeof data === 'function') {
+    fn = data;
+    data = {};
+  }
+  const sid = emitSem(name, 'begin', data);
+  if (sid == null) return fn();
+
+  const end = (outcome) => emitSem(name, 'end', null, sid, outcome);
+  let out;
+  try {
+    out = fn();
+  } catch (e) {
+    end('error');
+    throw e;
+  }
+  if (out !== null && typeof out === 'object' && typeof out.then === 'function') {
+    return out.then(
+      (r) => {
+        end('ok');
+        return r;
+      },
+      (e) => {
+        end('error');
+        throw e;
+      },
+    );
+  }
+  end('ok');
+  return out;
 }
 
 // --- the clock and the RNG: the only truly global doors ------------------------------

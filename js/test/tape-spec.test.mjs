@@ -112,6 +112,76 @@ test('rejects rand.idx disagreeing with kk', () => {
   assert.ok(validateTape(tape(SESSION, { ...CALL, events: [ev] })).some((v) => v.includes('kk=')));
 });
 
+// --- sem: parity with spec/validate.py -----------------------------------------------
+
+const semCall = (...events) => ({ ...CALL, events });
+
+test('accepts well-nested spans', () => {
+  const call = semCall(
+    { k: 'sem', name: 'outer', phase: 'begin', sid: 1 },
+    { k: 'sem', name: 'inner', phase: 'begin', sid: 2 },
+    { k: 'sem', name: 'mark', phase: 'point', sid: 3, data: { n: 1 } },
+    { k: 'sem', name: 'inner', phase: 'end', sid: 2, outcome: 'ok' },
+    { k: 'sem', name: 'outer', phase: 'end', sid: 1, outcome: 'error' },
+  );
+  assert.deepEqual(validateTape(tape(SESSION, call)), []);
+});
+
+test('rejects straddling spans', () => {
+  const call = semCall(
+    { k: 'sem', name: 'a', phase: 'begin', sid: 1 },
+    { k: 'sem', name: 'b', phase: 'begin', sid: 2 },
+    { k: 'sem', name: 'a', phase: 'end', sid: 1 },
+    { k: 'sem', name: 'b', phase: 'end', sid: 2 },
+  );
+  assert.ok(validateTape(tape(SESSION, call)).some((v) => v.includes('well-nested')));
+});
+
+test('rejects an unclosed span', () => {
+  const call = semCall({ k: 'sem', name: 'a', phase: 'begin', sid: 1 });
+  assert.ok(validateTape(tape(SESSION, call)).some((v) => v.includes('never closed')));
+});
+
+test('rejects an end with no begin', () => {
+  const call = semCall({ k: 'sem', name: 'a', phase: 'end', sid: 1 });
+  assert.ok(validateTape(tape(SESSION, call)).some((v) => v.includes('no open span')));
+});
+
+test('rejects a reused sid', () => {
+  const call = semCall(
+    { k: 'sem', name: 'a', phase: 'begin', sid: 1 },
+    { k: 'sem', name: 'b', phase: 'point', sid: 1 },
+    { k: 'sem', name: 'a', phase: 'end', sid: 1 },
+  );
+  assert.ok(validateTape(tape(SESSION, call)).some((v) => v.includes('reused')));
+});
+
+test('rejects a bad phase and a misplaced outcome', () => {
+  const badPhase = semCall({ k: 'sem', name: 'a', phase: 'middle', sid: 1 });
+  assert.ok(validateTape(tape(SESSION, badPhase)).some((v) => v.includes('phase')));
+
+  const misplaced = semCall({ k: 'sem', name: 'a', phase: 'point', sid: 1, outcome: 'ok' });
+  assert.ok(validateTape(tape(SESSION, misplaced)).some((v) => v.includes('outcome')));
+});
+
+test('rejects a non-int sid and an empty name', () => {
+  const badSid = semCall({ k: 'sem', name: 'a', phase: 'point', sid: 1.5 });
+  assert.ok(validateTape(tape(SESSION, badSid)).some((v) => v.includes("int 'sid'")));
+
+  const noName = semCall({ k: 'sem', name: '', phase: 'point', sid: 1 });
+  assert.ok(validateTape(tape(SESSION, noName)).some((v) => v.includes("non-empty string 'name'")));
+});
+
+test('a reader from before sem existed still accepts a sem tape (forward compatibility)', () => {
+  // The Node port carries the same guarantee as the Python checker's parametrized twin: an
+  // unknown event kind is ignored, and the tape stays conformant.
+  const call = semCall(
+    { k: 'sem-future', name: 'x', phase: 'whatever', sid: 'nope' },
+    { k: 'fx', fn: 'f', args: [], kwargs: {}, res: 1 },
+  );
+  assert.deepEqual(validateTape(tape(SESSION, call)), []);
+});
+
 test('tolerates unknown ev and unknown keys (this IS the versioning story)', () => {
   const weird = { ev: 'inflight', fn: 't', whatever: 1 };
   const call = { ...CALL, events: [{ k: 'future-kind', payload: 1 }], unknown_key: true };

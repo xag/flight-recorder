@@ -90,7 +90,21 @@ class Feed {
     );
   }
 
+  /**
+   * Step over recorded `sem` events. They are never answers.
+   *
+   * A sem is the app's testimony about what it was doing, not something the world told it, so
+   * there is nothing here to feed back: the replayed code re-runs its own note()/span() calls
+   * and testifies afresh. Stepping over them advances `i`, which counts them as consumed — so
+   * "every event consumed" keeps meaning "the code asked the recording everything it holds", and
+   * instrumenting an app never costs a false replay failure.
+   */
+  skipSems() {
+    while (this.i < this.events.length && this.events[this.i].k === 'sem') this.i += 1;
+  }
+
   popExpect(kind, { fn } = {}) {
+    this.skipSems();
     if (this.exhausted) {
       throw this._diverge(
         `${kind}${fn ? ` ${fn}` : ''}`,
@@ -168,6 +182,32 @@ class Feed {
 }
 
 /**
+ * The semantic trace: what was claimed, and in what order. Names and phases only — payloads are
+ * a reader's business, and comparing them would make an added field to a span's data look like a
+ * change of meaning.
+ */
+function semPairs(events) {
+  return (events ?? []).filter((e) => e.k === 'sem').map((e) => [e.name, e.phase]);
+}
+
+/** The first place two accounts of what the code was doing differ, or null if they agree. */
+function semDivergence(recorded, replayed) {
+  const show = (p) => (p == null ? 'nothing' : `${JSON.stringify(p[0])} ${p[1]}`);
+  const n = Math.max(recorded.length, replayed.length);
+  for (let k = 0; k < n; k += 1) {
+    const a = recorded[k];
+    const b = replayed[k];
+    if (JSON.stringify(a) !== JSON.stringify(b)) {
+      return (
+        `semantic divergence at ${k}: recorded ${show(a)}, replayed ${show(b)} — ` +
+        `the code's account of what it was doing has changed`
+      );
+    }
+  }
+  return null;
+}
+
+/**
  * Re-run one recorded call against the real code.
  *
  * @param {object} o
@@ -175,13 +215,16 @@ class Feed {
  * @param {Function} o.fn       the REAL (unwrapped) tool function
  * @param {object} [o.boundary] the boundary — for its redact rules and error revivers
  * @param {boolean} [o.probe]   the tape was mutated: do not compare arguments
+ * @param {boolean} [o.semStrict] fold semantic divergence into `ok`: the replayed code must make
+ *   the same claims, in the same order, as the recording holds. Off by default, so instrumenting
+ *   an app cannot turn an existing pinned suite red.
  * @param {(string|RegExp)[]} [o.trace] files to observe from the inside — every local, on every
  *   executed line. This is the point of replaying at all: a recording tells you what the world
  *   answered, a trace tells you what the code then believed. Costs a pause per line, so name the
  *   code you are investigating, not the world.
  * @returns {Promise<object>} a report
  */
-export async function replayCall({ call, fn, boundary = {}, probe = false, trace = null }) {
+export async function replayCall({ call, fn, boundary = {}, probe = false, semStrict = false, trace = null }) {
   const feed = new Feed(call.events ?? [], {
     probe: probe || Boolean(call.probe),
     revivers: boundary.errorRevivers ?? {},
@@ -199,8 +242,12 @@ export async function replayCall({ call, fn, boundary = {}, probe = false, trace
   installClock();
   installRandom();
 
+  // Where the replayed code's own note()/span() calls land — a recorded sem is never fed back.
+  const sems = [];
+
   hook.mode = 'replay';
   hook.feed = feed;
+  hook.sems = sems;
 
   let result;
   let error = null;
@@ -229,11 +276,26 @@ export async function replayCall({ call, fn, boundary = {}, probe = false, trace
   } finally {
     hook.mode = null;
     hook.feed = null;
+    hook.sems = null;
     restoreTo(mark);
   }
 
+  // The sems trailing the last boundary answer — an outermost span's `end`, most often — were
+  // never reached by a popExpect, and leaving them unread would report a shorter path than the
+  // recorded one on a tape where nothing of the sort happened.
+  feed.skipSems();
+
+  // A THIRD signal, deliberately not folded into the other two by default: a boundary divergence
+  // says the recording is stale, a wrong result says the code is wrong, and this says the code's
+  // own account of what it was doing has changed — a refactor, or a bug, and the tape does not
+  // presume to know which. `semStrict` opts a suite in, once its vocabulary has settled.
+  const semsRecorded = semPairs(call.events);
+  const semsReplayed = semPairs(sems);
+  const semDiv = semDivergence(semsRecorded, semsReplayed);
+  const semFields = { semsRecorded, semsReplayed, semDivergence: semDiv, semStrict };
+
   if (divergence) {
-    return { ok: false, divergence, trace: traceOf, resultMatch: false, errorMatch: false, unconsumed: feed.events.length - feed.i };
+    return { ok: false, divergence, trace: traceOf, resultMatch: false, errorMatch: false, unconsumed: feed.events.length - feed.i, ...semFields };
   }
 
   // The code asked FEWER questions than the recording holds answers for. That is a
@@ -246,7 +308,7 @@ export async function replayCall({ call, fn, boundary = {}, probe = false, trace
       `the code stopped asking ${unconsumed} question(s) the recording answered — ` +
         `next unconsumed: ${next.k}${next.fn ? ` ${next.fn}` : ''}`,
     );
-    return { ok: false, divergence, trace: traceOf, resultMatch: false, errorMatch: false, unconsumed };
+    return { ok: false, divergence, trace: traceOf, resultMatch: false, errorMatch: false, unconsumed, ...semFields };
   }
 
   // Mirror the recorder exactly: a call that raised has no return value (null), which is not
@@ -256,7 +318,7 @@ export async function replayCall({ call, fn, boundary = {}, probe = false, trace
   const errorMatch = (error ?? null) === (call.error ?? null);
 
   return {
-    ok: resultMatch && errorMatch,
+    ok: resultMatch && errorMatch && (!semStrict || semDiv === null),
     result,
     error,
     trace: traceOf,
@@ -266,6 +328,7 @@ export async function replayCall({ call, fn, boundary = {}, probe = false, trace
     errorMatch,
     divergence: null,
     unconsumed: 0,
+    ...semFields,
   };
 }
 
