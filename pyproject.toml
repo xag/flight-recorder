@@ -2,7 +2,7 @@
 name = "flight-recorder"
 version = "0.8.0"
 description = "Record tool calls at an app's nondeterminism boundary; replay them deterministically with every internal variable observable"
-readme = "README.md"
+readme = "flight_recorder/README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = []
