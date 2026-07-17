@@ -38,3 +38,21 @@ jobs:
           node-version: "22"
       - run: npm run browser
       - run: npm test
+
+  # The .NET port: build, test, and confirm the recorder emits conformant tapes. The Python and
+  # Node conformance suites (which glob spec/fixtures/) validate the checked-in dotnet-*.jsonl on
+  # their own — so a fork of the tape between runtimes fails somebody's build.
+  dotnet:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: csharp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - run: dotnet test tests/FlightRecorder.Tests/FlightRecorder.Tests.csproj -c Release
+      # The generator self-validates what it writes; run it to a temp dir so CI never mutates
+      # the committed fixtures (whose timestamps differ every run).
+      - run: dotnet run --project tools/GenFixtures -c Release -- "${{ runner.temp }}/fixtures"

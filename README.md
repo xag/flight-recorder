@@ -111,10 +111,10 @@ The recording format is a frozen, documented wire contract:
 [`spec/tape-v1.md`](spec/tape-v1.md). **Implementations are welcome** — only record and
 replay must be native to a runtime; everything that *analyzes* a tape works on any tape.
 Conformance is not the prose: it is [`spec/fixtures/`](spec/fixtures/) plus the checker
-in [`spec/validate.py`](spec/validate.py) (mirrored in JS). Every implementation must
+in [`spec/validate.py`](spec/validate.py) (mirrored in JS and .NET). Every implementation must
 validate every fixture, and every fixture must have been produced by an implementation.
-This repo ships two implementations of the spec — Python and Node — reading and writing
-the same tapes.
+This repo ships three implementations of the spec — Python, Node, and .NET — reading and
+writing the same tapes.
 
 ## Tapes that carry meaning
 
@@ -168,6 +168,7 @@ to the human is the decisions.
 |---|---|---|
 | Python | `flight-recorder` — PyPI pending; until then `pip install git+https://github.com/xag/flight-recorder` | [`flight_recorder/`](flight_recorder/) |
 | Node | [`@xag/flight-recorder`](https://www.npmjs.com/package/@xag/flight-recorder) (npm) | [`js/`](js/) |
+| .NET | `flight-recorder` (NuGet) — `dotnet add package flight-recorder` | [`csharp/`](csharp/) |
 
 ## License
 
