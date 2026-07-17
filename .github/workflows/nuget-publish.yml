@@ -39,8 +39,6 @@ jobs:
               <PackageProjectUrl>https://github.com/xag/flight-recorder</PackageProjectUrl>
               <RepositoryUrl>https://github.com/xag/flight-recorder</RepositoryUrl>
               <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
-              <IncludeBuildOutput>false</IncludeBuildOutput>
-              <NoWarn>NU5128</NoWarn>
             </PropertyGroup>
           </Project>
           EOF
