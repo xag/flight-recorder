@@ -11,7 +11,7 @@ difference instead of leaving you to guess.
 ## Quickstart
 
 ```bash
-pip install flight-recorder
+pip install git+https://github.com/xag/flight-recorder
 ```
 
 Say your app is a module of functions, and one of them isn't deterministic:
@@ -154,7 +154,7 @@ to the human is the decisions.
 
 | Language | Package | Source |
 |---|---|---|
-| Python | [`flight-recorder`](https://pypi.org/project/flight-recorder/) (PyPI) | [`flight_recorder/`](flight_recorder/) |
+| Python | `flight-recorder` — PyPI pending; until then `pip install git+https://github.com/xag/flight-recorder` | [`flight_recorder/`](flight_recorder/) |
 | Node | [`@xag/flight-recorder`](https://www.npmjs.com/package/@xag/flight-recorder) (npm) | [`js/`](js/) |
 
 ## License
