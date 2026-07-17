@@ -2,6 +2,7 @@ flight/
 __pycache__/
 *.pyc
 .venv/
+.quern/
 dist/
 
 image.png
