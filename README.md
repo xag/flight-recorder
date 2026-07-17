@@ -3,7 +3,7 @@
 [![tests](https://github.com/xag/flight-recorder/actions/workflows/test.yml/badge.svg)](https://github.com/xag/flight-recorder/actions/workflows/test.yml)
 
 Record what the outside world told your code — every database answer, HTTP response,
-clock read and random draw — as one small JSONL file per request. Replay that file
+clock read and random draw — as one small JSONL file per request: a *tape*. Replay that file
 against your real code later: same inputs, same execution, bit for bit, with every
 internal variable observable. When a replay diverges, the report names the first
 difference instead of leaving you to guess.
@@ -25,8 +25,7 @@ def deal(players: int) -> dict:
     return {"first": order[0], "order": order}
 ```
 
-**1. Declare where the outside world enters.** Here it's just `random`; real apps list
-their storage and HTTP functions, clock and env constants too:
+**1. Declare where the outside world enters.** Here it's just `random`:
 
 ```python
 # record_once.py
@@ -34,6 +33,18 @@ import app
 import flight_recorder as fr
 
 boundary = fr.Boundary(random_modules=[app])
+```
+
+A real app names each function that touches the outside world:
+
+```python
+boundary = fr.Boundary(
+    effects=[(app.storage, ["get", "docs"]),   # functions whose answers get recorded
+             (app.http, ["fetch"])],
+    clock_modules=[app.rota],                  # modules whose datetime is shimmed
+    random_modules=[app.rota],                 # modules whose random is shimmed
+    constants=[(app.config, "PLAN_LIMITS")],   # values captured in the tape header
+)
 ```
 
 **2. Record.** Install the recorder over your module and use the app normally — each
@@ -135,10 +146,11 @@ enrol  ok  (1 now)
 ```
 
 Replay never feeds a recorded claim back: the replayed code speaks afresh, and the two
-accounts are compared. Changed claims are a third signal, independent of a boundary
-divergence (the recording is stale) and an invariant violation (the code is wrong) — off
-by default (`sem_strict=True` to enforce), so instrumenting an app cannot turn an
-existing pinned suite red. See the sem section of [the spec](spec/tape-v1.md).
+accounts are compared. A changed claim is a third signal, independent of a boundary
+divergence (the recording is stale) and an invariant violation (the code is wrong). By
+default it only reports; `sem_strict=True` makes it fail the replay — so instrumenting an
+app cannot turn an existing replay suite red. See the sem section of
+[the spec](spec/tape-v1.md).
 
 ## Why
 
