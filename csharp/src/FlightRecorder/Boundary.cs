@@ -1,0 +1,83 @@
+// The boundary declaration: the one app-specific artifact.
+//
+// A program's execution is fully determined by its code plus its nondeterministic inputs. A
+// Boundary names those inputs and how the tape should treat them — nothing more. The recorder
+// cannot know about an input it was never told crosses the boundary; when an app grows a new
+// one it is added here. That is the whole maintenance contract.
+//
+// Unlike Python (which patches module functions) and like Node (whose module namespace is
+// immutable), .NET declares its boundary by WRAPPING what the app holds — an effect client is
+// `Recorder.Wrap`ped, the clock and RNG are the `Recorder.Clock`/`Recorder.Random` handles the
+// app calls. So a Boundary here carries the tape's TREATMENT rules (redaction, the forbid
+// tripwire, error revival, header constants), not a list of functions to patch.
+
+using System;
+using System.Collections.Generic;
+using System.Text.RegularExpressions;
+
+namespace FlightRecorder
+{
+    public sealed class Boundary
+    {
+        /// <summary>"module.NAME" → value, snapshotted into the session header and available to
+        /// replay. Jsonable.</summary>
+        public Dictionary<string, object?> Constants { get; } = new Dictionary<string, object?>();
+
+        /// <summary>Field-name redaction rules, applied to every recorded payload before it is
+        /// written and re-applied to the replayed side of every comparison, so a redacted
+        /// recording still verifies. A null transform masks as <see cref="Serial.Redacted"/>; a
+        /// transform must be deterministic AND idempotent — replay re-applies it to already-
+        /// transformed values.</summary>
+        public Dictionary<string, RedactTransform?> Redact { get; } = new Dictionary<string, RedactTransform?>();
+
+        /// <summary>The tripwire that backstops <see cref="Redact"/>: patterns matched against the
+        /// fully-redacted line the recorder is about to write. A hit raises
+        /// <see cref="ForbiddenValue"/> and writes nothing. Match shapes, not values — a credential
+        /// you can enumerate you can already redact; it is the one you cannot name this is for.</summary>
+        public List<Regex> Forbid { get; } = new List<Regex>();
+
+        /// <summary>Type name → rebuild an exception from its recorded constructive args. Replay
+        /// must rebuild a recorded error with its real TYPE, because the code very likely branches
+        /// on it (catch + type test); an unlisted type replays as <see cref="ReplayedEffectError"/>.</summary>
+        public Dictionary<string, Func<IReadOnlyList<object?>, Exception>> ErrorRevivers { get; }
+            = new Dictionary<string, Func<IReadOnlyList<object?>, Exception>>();
+
+        /// <summary>Extra key/values for the session header (digests, versions…). Preserved by any
+        /// reader that rewrites the tape.</summary>
+        public Dictionary<string, object?> HeaderExtras { get; } = new Dictionary<string, object?>();
+
+        /// <summary>Mask the named fields (bare rules) — sugar for the common case.</summary>
+        public Boundary MaskFields(params string[] names)
+        {
+            foreach (var n in names) Redact[n] = null;
+            return this;
+        }
+
+        /// <summary>Add a forbid pattern from a regex string.</summary>
+        public Boundary Forbidden(string pattern)
+        {
+            Forbid.Add(new Regex(pattern, RegexOptions.Compiled));
+            return this;
+        }
+
+        internal IReadOnlyDictionary<string, RedactTransform?> RedactRules => Redact;
+
+        /// <summary>Rebuild a recorded effect error. Its type drives which reviver runs; an
+        /// unlisted type, or a reviver that throws, falls back to <see cref="ReplayedEffectError"/>.</summary>
+        public Exception ReviveError(IDictionary<string, object?> err)
+        {
+            var type = err.TryGetValue("type", out var t) ? t as string ?? "" : "";
+            var args = new List<object?>();
+            if (err.TryGetValue("args", out var a) && Serial.FromJsonable(a) is IEnumerable<object?> list)
+                args.AddRange(list);
+
+            if (ErrorRevivers.TryGetValue(type, out var reviver))
+            {
+                try { return reviver(args); }
+                catch { /* fall through */ }
+            }
+            var repr = err.TryGetValue("repr", out var r) ? r as string ?? "" : "";
+            return new ReplayedEffectError($"{type}: {repr}");
+        }
+    }
+}

@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- netstandard2.0 for the widest reach — .NET Framework 4.6.1+, Core, 5-8, Mono, Unity.
+         This library is a "first outside pull" adoption target; reach matters. -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <PackageId>flight-recorder</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>xag</Authors>
+    <Description>Record the answers your code got from the outside world while handling a request, and replay that exact request against the real code. A .NET implementation of the frozen tape-v1 wire format. https://github.com/xag/flight-recorder</Description>
+    <PackageProjectUrl>https://github.com/xag/flight-recorder</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/xag/flight-recorder</RepositoryUrl>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <PackageReference Include="System.Reflection.DispatchProxy" Version="4.7.1" />
+    <None Include="../../README.md" Pack="true" PackagePath="\" Condition="Exists('../../README.md')" />
+  </ItemGroup>
+
+</Project>
