@@ -26,7 +26,18 @@ jobs:
       - name: Build placeholder packages
         run: |
           set -euo pipefail
-          for id in flight-recorder flightrecorder; do
+          for id in flight-recorder flightrecorder quern epure; do
+            case "$id" in
+              flight-recorder|flightrecorder)
+                home="flight-recorder"
+                desc="Name reserved for flight-recorder: record the answers your code got from the outside world while handling a request, and replay that exact request against the real code." ;;
+              quern)
+                home="quern"
+                desc="Name reserved for quern: rules and vocabulary as data, published as versioned, digest-pinned packages." ;;
+              epure)
+                home="epure"
+                desc="Name reserved for epure: prove a design once over a model, then hold every execution to it at the semantic boundary." ;;
+            esac
             mkdir -p "pkg/$id"
             cat > "pkg/$id/$id.csproj" <<EOF
           <Project Sdk="Microsoft.NET.Sdk">
@@ -35,9 +46,9 @@ jobs:
               <PackageId>$id</PackageId>
               <Version>0.0.0</Version>
               <Authors>xag</Authors>
-              <Description>Name reserved for flight-recorder: record the answers your code got from the outside world while handling a request, and replay that exact request against the real code. https://github.com/xag/flight-recorder</Description>
-              <PackageProjectUrl>https://github.com/xag/flight-recorder</PackageProjectUrl>
-              <RepositoryUrl>https://github.com/xag/flight-recorder</RepositoryUrl>
+              <Description>$desc https://github.com/xag/$home</Description>
+              <PackageProjectUrl>https://github.com/xag/$home</PackageProjectUrl>
+              <RepositoryUrl>https://github.com/xag/$home</RepositoryUrl>
               <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
             </PropertyGroup>
           </Project>
