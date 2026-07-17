@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>flight-recorder — record the boundary, replay the real code</title>
-<meta name="description" content="Record an app's tool calls at their nondeterminism boundary; replay them deterministically against the real code. Python and Node, one tape.">
+<meta name="description" content="Record an app's tool calls at their nondeterminism boundary; replay them deterministically against the real code. Python, Node and .NET, one tape.">
 <style>
   /* Library documentation. Plain, legible, unbranded — the reader came for the API, not a
      product. Light by default, because that is what docs are; dark honoured if asked for. */
@@ -122,7 +122,8 @@
 
   [data-lang] { display: none; }
   body[data-show="py"] [data-lang="py"],
-  body[data-show="js"] [data-lang="js"] { display: block; }
+  body[data-show="js"] [data-lang="js"],
+  body[data-show="cs"] [data-lang="cs"] { display: block; }
 
   @media (max-width: 900px) {
     /* minmax(0, 1fr), never a bare 1fr. A grid item's automatic minimum size is its min-content
@@ -163,6 +164,7 @@
     <div class="langs" role="tablist" aria-label="Language">
       <button role="tab" data-set="py" aria-selected="true">Python</button>
       <button role="tab" data-set="js" aria-selected="false">Node</button>
+      <button role="tab" data-set="cs" aria-selected="false">.NET</button>
     </div>
     <nav>
       <a href="slides.html">Slides</a>
@@ -216,8 +218,9 @@ to happen again.</p>
 
 <pre data-lang="py"><code>pip install flight-recorder</code></pre>
 <pre data-lang="js"><code>npm install @xag/flight-recorder</code></pre>
+<pre data-lang="cs"><code>dotnet add package flight-recorder</code></pre>
 
-<p class="muted">Two implementations, <strong>one tape</strong> — format v1, frozen in
+<p class="muted">Three implementations, <strong>one tape</strong> — format v1, frozen in
 <a href="https://github.com/xag/flight-recorder/blob/main/spec/tape-v1.md">spec/tape-v1.md</a>.
 Only <em>record</em> and <em>replay</em> are language-bound: replaying JavaScript means running
 JavaScript. Everything downstream consumes the tape, and a tape is only data.</p>
@@ -275,6 +278,16 @@ export const BOUNDARY = fr.boundaryOf({
 export const store = fr.wrap(storageClient, ['read', 'write'], { prefix: 'kv' });
 export const http  = fr.wrap(httpClient,    ['fetch', 'post'], { prefix: 'http' });</code></pre>
 
+<pre data-lang="cs"><code>using FlightRecorder;
+
+var boundary = new Boundary().MaskFields("password");     // field-name redaction
+boundary.Constants["Config.Limit"] = LIMIT;               // header-captured
+boundary.ErrorRevivers["ApiError"] = args =&gt; new ApiError((string)args[0]!);
+
+// Wrap what the app HOLDS — a transparent proxy over an interface, never a mock.
+// Everything not named passes straight through, untouched and unrecorded.
+IStore store = Recorder.WrapAs(storageClient, "kv", nameof(IStore.Read), nameof(IStore.Write));</code></pre>
+
 <div class="note" data-lang="js">
   <p><strong>Why wrapping, and not patching modules?</strong> An ES module's namespace is immutable:
   there is no way to reach behind an <code>import</code> and swap what a caller already bound. So the
@@ -282,8 +295,14 @@ export const http  = fr.wrap(httpClient,    ['fetch', 'post'], { prefix: 'http' 
   every call to the real thing and writes down what came back.</p>
 </div>
 
-<p>The clock and the RNG are the exception in both, and are shimmed globally: there the app holds
-nothing to wrap.</p>
+<div class="note" data-lang="cs">
+  <p><strong>Why wrapping, and not patching?</strong> .NET can neither patch a module's functions the
+  way Python does nor swap the bindings a compiled assembly already holds. So the boundary is the
+  <em>object</em> the app holds: <code>WrapAs</code> returns a transparent <code>DispatchProxy</code>
+  over the interface, records the named methods, and passes the rest through. Not a mock.</p>
+</div>
+
+<p>The clock and the RNG are the exception in all three: there the app holds nothing to wrap.</p>
 
 <div class="note" data-lang="js">
   <p>Node shims <code>Date.now</code>, <code>new Date()</code>, <code>performance.now</code>,
@@ -292,6 +311,14 @@ nothing to wrap.</p>
   <code>getRandomValues</code>. All of them, not the convenient ones: <strong>a half-shimmed door is
   worse than an open one, because it looks shut</strong> — code reaching for the form you skipped
   re-rolls on replay, silently.</p>
+</div>
+
+<div class="note" data-lang="cs">
+  <p>.NET has no global clock or RNG to shim, so — as with effects — the app holds the recorder's
+  handles instead: <code>Recorder.Clock.Now()</code> / <code>.UtcNow()</code> / <code>.Mono()</code>,
+  and <code>Recorder.Random.NextDouble()</code> / <code>.Bytes(n)</code> / <code>.NextInt(a, b)</code>
+  / <code>.Sample(pop, k)</code>. Under record they ask the world and write it down; under replay they
+  answer from the tape.</p>
 </div>
 
 <h2 id="record">Record</h2>
@@ -304,6 +331,17 @@ nothing to wrap.</p>
 fr.install(BOUNDARY, {
   directory: '.flight',
   enabled: process.env.FLIGHT === '1',
+});</code></pre>
+
+<pre data-lang="cs"><code>Recorder.Install(boundary, directory: ".flight",
+                 enabled: Environment.GetEnvironmentVariable("FLIGHT") == "1");
+
+// Wrap each tool call — that line IS the execution. `RecordAsync` is the Task form.
+object? StudyStatus(string user) =&gt; Recorder.Record("study_status", new { user }, () =&gt;
+{
+    var doc = store.Read(user);            // fx
+    var at = Recorder.Clock.Now();         // now
+    return Compute(doc, at);
 });</code></pre>
 
 <p>Off by default. When enabled, each call writes one line — bound args, ordered boundary events,
@@ -326,6 +364,11 @@ fr.install(BOUNDARY, {
   directory: '.flight',
   gate: (fn, args) =&gt; WRITES.has(fn),   // record what matters, not everything
 });</code></pre>
+
+<pre data-lang="cs"><code>var writes = new HashSet&lt;string&gt; { "set_level", "record_answer" };
+
+Recorder.Install(boundary, directory: ".flight",
+                 gate: (fn, kwargs) =&gt; writes.Contains(fn));   // record what matters</code></pre>
 
 <p class="muted">A gate that never fires leaves no session file at all. A gate that raises is treated
 as a "no": it can never break the call it was asked about.</p>
@@ -365,6 +408,20 @@ fr.install(BOUNDARY, {
   sinkTimeoutMs: 3000,
 });</code></pre>
 
+<pre data-lang="cs"><code>class KvSink : ISink   // one method: handed the WHOLE session text each time
+{
+    public void Publish(string name, string text) =&gt; _kv.Set($"flight:{name}", text, ttl: TimeSpan.FromDays(7));
+}
+
+Recorder.Install(boundary, directory: null, sink: new KvSink());   // the sink IS the tape</code></pre>
+
+<div class="note" data-lang="cs">
+  <p>The sink is handed the whole session — after the header, and after every completed call — so an
+  overwriting store is enough and a tape is never half-published. A sink that throws is swallowed:
+  recording must never be the reason a call fails. Use a client the recorder does <strong>not</strong>
+  wrap, or the sink records itself.</p>
+</div>
+
 <div class="note" data-lang="py">
   <p><code>publish</code> runs synchronously, on the thread that finished the call — in an async
   server, the event-loop thread. A sink that blocks on network I/O therefore stalls <em>every</em>
@@ -402,6 +459,16 @@ redact={"email": lambda v: v if str(v).startswith("tok:") else "tok:" + hmac_hex
   redact: { password: null, ssn: null },      // by FIELD NAME
   scrub: (s) =&gt; s.replace(ADDRESS, hide),     // by VALUE: every string, anywhere
 });</code></pre>
+
+<pre data-lang="cs"><code>var boundary = new Boundary().MaskFields("password", "ssn");   // masked wherever these keys appear
+
+// …or map a field to a deterministic tokenizer, keeping distinctness without the value:
+boundary.Redact["email"] = v =&gt; ((string)v!).StartsWith("tok:") ? v : "tok:" + HmacHex(v);
+
+// `forbid` states what a field rule cannot: THIS TAPE CARRIES NO CREDENTIAL. Each pattern is
+// matched against the fully-redacted line; a hit raises ForbiddenValue and writes nothing.
+boundary.Forbidden(@"\b[a-f0-9]{64}\b")                        // a scrypt digest survived redaction
+        .Forbidden("-----BEGIN [A-Z ]*PRIVATE KEY-----");</code></pre>
 
 <div class="note" data-lang="js">
   <p>Field rules assume secrets live in named fields. Often they do not: an address handed to a store
@@ -486,6 +553,13 @@ const report = await fr.replayCall({ call, fn: studyStatus, boundary: BOUNDARY }
 report.ok           // result and error both reproduce the recording
 report.divergence   // …or the exact point where behaviour changed</code></pre>
 
+<pre data-lang="cs"><code>var tape   = Replay.LoadTape(".flight/flight-….jsonl");
+var call   = Replay.PickCall(tape, fn: "study_status");
+var report = Replay.Call(call, kw =&gt; StudyStatus((string)kw["user"]!), boundary);
+
+report.Ok           // result and error both reproduce the recording
+report.Divergence   // …or the exact point where behaviour changed</code></pre>
+
 <h3>Divergence is the finding</h3>
 
 <p>Replay does two jobs, and the second matters as much as the first: it <strong>answers</strong>, and
@@ -525,6 +599,13 @@ report.trace.render('deck');   // a readable timeline</code></pre>
   <em>replay</em>, never to a request path. Recording stays cheap; understanding is where you spend.</p>
 </div>
 
+<div class="note" data-lang="cs">
+  <p>Variable-level tracing is <strong>not in the .NET port yet</strong>. The CLR has no
+  <code>sys.settrace</code>, so it needs a debugger backend (the way the Node port drives the V8
+  Inspector), and the spec <em>reserves</em> the trace markers for exactly such an addition. Recording
+  and replay do not need it — the divergence report already names where behaviour changed.</p>
+</div>
+
 <h2 id="regression">Pinned recordings</h2>
 
 <p>Record once, replay against every build. <strong>A pinned recording is a regression oracle, not a
@@ -553,6 +634,16 @@ test('the pinned session still behaves', async () =&gt; {
   assert.ok(report.ok);
 });</code></pre>
 
+<pre data-lang="cs"><code>[Fact]
+public void ThePinnedSessionStillBehaves()
+{
+    var tape   = Replay.LoadTape("tests/recordings/status.jsonl");
+    var call   = Replay.PickCall(tape, fn: "study_status");
+    var report = Replay.Call(call, kw =&gt; StudyStatus((string)kw["user"]!), boundary);
+
+    Assert.True(report.Ok, Replay.FormatReport(0, report));
+}</code></pre>
+
 <h2 id="mutation">Edit the tape to visit a world that never happened</h2>
 
 <p>A recording is data, so hostile states are one edit away: empty the result, hand back an absurd
@@ -571,13 +662,22 @@ call.probe = true;           // a mutated upstream answer changes every downstre
 
 const report = await fr.replayCall({ call, fn: greet, boundary: BOUNDARY, probe: true });</code></pre>
 
-<h2 id="invariants">Invariants <span class="badge py">Python engine</span></h2>
+<pre data-lang="cs"><code>var rec  = Recording.Load(tape);
+var call = rec.Call(0);
+call.Read("stream").Result = new List&lt;object?&gt;();   // empty corpus — the store can't answer this
+call.Clock.Reverse();                               // time runs backwards
+
+// Editing a call marks it a probe: arguments are no longer compared, name and order still gate.
+var report = call.Check(kw =&gt; Greet((string)kw["user"]!), invariants);
+rec.Save("tests/recordings/empty-corpus.jsonl");    // pin it: a probe suite member</code></pre>
+
+<h2 id="invariants">Invariants <span class="badge">Python · .NET</span></h2>
 
 <p>An invariant is a claim about <strong>every</strong> execution, written once and checked against any
 recording — so it can condemn the very first observation of a bug, which no recording can. A bug
 replays bit-for-bit forever; only a spec can call it wrong.</p>
 
-<pre><code>@fr.invariant("never claims end-of-corpus while words remain")
+<pre data-lang="py"><code>@fr.invariant("never claims end-of-corpus while words remain")
 def _(t: fr.Trajectory):
     assert not (t.result["done"] and t.result["corpus"] - t.result["deck"] &gt; 0)
 
@@ -586,16 +686,30 @@ def _(t: fr.Trajectory):
     for obs in t.trace.values("level"):
         assert obs.value &gt; 0, f"level={obs.value} at {obs.at}"</code></pre>
 
-<p>The second claim is the reason this exists: the production bug that shaped the library was an
-internal variable (<code>level=0</code>) silently emptying a whole corpus, with a perfectly
+<pre data-lang="cs"><code>var noEmptyClaim = Invariants.Invariant("never claims end-of-corpus while words remain", v =&gt;
+{
+    var r = (IReadOnlyDictionary&lt;string, object?&gt;)v.Result!;
+    if ((bool)r["done"]! &amp;&amp; (long)r["corpus"]! - (long)r["deck"]! &gt; 0)
+        throw new Exception("claimed done with words remaining");
+});
+
+var report = Invariants.CheckInvariants(tape, 0, body, new[] { noEmptyClaim }, boundary);</code></pre>
+
+<p data-lang="py">The second claim is the reason this exists: the production bug that shaped the library
+was an internal variable (<code>level=0</code>) silently emptying a whole corpus, with a perfectly
 self-consistent output.</p>
 
+<p data-lang="cs">.NET invariants assert over the replayed <em>result</em>, the boundary events, and the
+claims the code made. The trace-driven form — asserting over an internal variable on every line — waits
+on variable-level tracing, which the .NET port does not have yet.</p>
+
 <div class="note">
-  <p>The engine is Python — but <strong>it consumes the tape</strong>, and the tape is shared. A
-  recording made by either implementation can be checked against the same invariants.</p>
+  <p>The engines are Python and .NET — and because an invariant <strong>consumes the tape</strong>, and
+  the tape is shared, a recording made by <em>any</em> implementation can be checked against them. (Node
+  consumes the tape too; it just does not ship an invariant runner.)</p>
 </div>
 
-<h2 id="sem">Semantic spans <span class="badge py">Python</span></h2>
+<h2 id="sem">Semantic spans <span class="badge">Python · Node · .NET</span></h2>
 
 <p>A recording answers <strong>“same?”</strong>. An invariant answers <strong>“right?”</strong>. Neither
 answers <strong>“what was this?”</strong> — and that is the question anyone actually opens a tape with.
@@ -610,10 +724,32 @@ call to the thing that charges cards beneath it, is a claim a reader can now ref
     holder = db.collection("members").document(who).get()
     fr.note("skipped", reason="absent")          # a moment worth marking, no span</code></pre>
 
+<pre data-lang="cs"><code>Recorder.Span("assign_turn", new { chore }, () =&gt;    // every boundary event inside is inside the span
+{
+    var holder = store.Get($"member:{who}");
+    Recorder.Note("skipped", new { reason = "absent" });   // a moment worth marking, no span
+});</code></pre>
+
 <p>Which makes a tape something you can <strong>read</strong> rather than search. Load the semantic
 skeleton first and descend into the raw JSONL only inside the span that looks wrong:</p>
 
-<pre><code>&gt;&gt;&gt; print(fr.Recording.load(tape).call(0).render_spans())
+<pre data-lang="py"><code>&gt;&gt;&gt; print(fr.Recording.load(tape).call(0).render_spans())
+enrol  ok  (1 now)
+  enrol  ok
+    load_corpus  ok  (1 db)
+    - corpus_read  rows=3
+    register  ERROR  (2 fx)
+    - registration_failed  why="kaput"</code></pre>
+
+<pre data-lang="js"><code>&gt; console.log(fr.Recording.load(tape).call(0).renderSpans());
+enrol  ok  (1 now)
+  enrol  ok
+    load_corpus  ok  (1 fx)
+    - corpus_read  found=true
+    register  ERROR  (2 fx)
+    - registration_failed  why="no such key: alice"</code></pre>
+
+<pre data-lang="cs"><code>&gt; Console.WriteLine(Recording.Load(tape).Call(0).RenderSpans());
 enrol  ok  (1 now)
   enrol  ok
     load_corpus  ok  (1 db)
@@ -644,12 +780,12 @@ in.</p>
 
 <div class="table-wrap">
 <table>
-  <tr><th></th><th>Python</th><th>Node</th></tr>
-  <tr><td>Boundary</td><td>name module functions; patch in place</td><td>wrap what the app <em>holds</em> — namespaces are immutable</td></tr>
-  <tr><td>Randomness</td><td><code>sample</code> — the <em>positions</em> drawn, so a mutated population still replays</td><td><code>bytes</code>/<code>float</code>/<code>int</code> — the draw <em>is</em> the value</td></tr>
-  <tr><td>Nothing</td><td>one — <code>None</code></td><td>two — <code>undefined</code> earns its own marker</td></tr>
-  <tr><td>The sink</td><td>hand the bytes to a queue</td><td>hand the promise to the host — <code>waitUntil</code></td></tr>
-  <tr><td>Tracing</td><td><code>sys.settrace</code> — every local, every executed line, free</td><td>the same, via the V8 Inspector from a worker thread — slower, and it sees across an <code>await</code></td></tr>
+  <tr><th></th><th>Python</th><th>Node</th><th>.NET</th></tr>
+  <tr><td>Boundary</td><td>name module functions; patch in place</td><td>wrap what the app <em>holds</em> — namespaces are immutable</td><td>wrap what the app <em>holds</em> — a <code>DispatchProxy</code>; bindings can't be swapped</td></tr>
+  <tr><td>Randomness</td><td><code>sample</code> — the <em>positions</em> drawn, so a mutated population still replays</td><td><code>bytes</code>/<code>float</code>/<code>int</code> — the draw <em>is</em> the value</td><td>a handle covering every shape — <code>sample</code> and <code>bytes</code>/<code>int</code>/<code>float</code></td></tr>
+  <tr><td>Nothing</td><td>one — <code>None</code></td><td>two — <code>undefined</code> earns its own marker</td><td>one — <code>null</code></td></tr>
+  <tr><td>The sink</td><td>hand the bytes to a queue</td><td>hand the promise to the host — <code>waitUntil</code></td><td>a synchronous <code>Publish</code>, handed the whole session</td></tr>
+  <tr><td>Tracing</td><td><code>sys.settrace</code> — every local, every executed line, free</td><td>the same, via the V8 Inspector from a worker thread — slower, and it sees across an <code>await</code></td><td>not yet — the CLR has no <code>sys.settrace</code>; it needs a debugger backend</td></tr>
 </table>
 </div>
 
@@ -661,9 +797,9 @@ per traced line, which is why tracing belongs to <em>replay</em> and never to a 
 
 <p>One JSONL line per call. The format is <strong>frozen</strong>
 (<a href="https://github.com/xag/flight-recorder/blob/main/spec/tape-v1.md">spec/tape-v1.md</a>), and
-its conformance checker is written <strong>twice, independently</strong> — neither importing any
-recorder, both run against the same fixtures, each language validating the other's. A disagreement
-means the tape has forked, which is the one failure the arrangement exists to prevent.</p>
+its conformance checker is written <strong>independently in each runtime</strong> — none importing any
+recorder, all run against the same fixtures, each validating the others'. A disagreement means the
+tape has forked, which is the one failure the arrangement exists to prevent.</p>
 
 <pre><code>{"ev":"session","version":1,"node":"24.0.0","constants":{…}}
 {"ev":"call","seq":1,"fn":"study_status","kwargs":{…},
@@ -748,7 +884,7 @@ claim above is a survey result, not a proof.</p>
   <p><a href="https://github.com/xag/flight-recorder">github.com/xag/flight-recorder</a> ·
   <a href="slides.html">Testing as simulation — the slides</a> ·
   <a href="https://github.com/xag/flight-recorder/blob/main/spec/tape-v1.md">the tape format</a> ·
-  MIT</p>
+  Apache-2.0</p>
 </footer>
 
 </main>
@@ -771,7 +907,7 @@ claim above is a survey result, not a proof.</p>
 
   let saved = null;
   try { saved = localStorage.getItem(KEY); } catch {}
-  show(saved === 'js' ? 'js' : 'py');
+  show(['js', 'cs'].includes(saved) ? saved : 'py');
 </script>
 
 </body>
