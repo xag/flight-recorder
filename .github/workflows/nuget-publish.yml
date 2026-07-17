@@ -1,0 +1,65 @@
+name: nuget-publish
+
+# Reserves the flight-recorder name(s) on NuGet.org via Trusted Publishing (OIDC —
+# no stored API key). Publishes 0.0.0 placeholder packages; a real .NET recorder
+# bumps the version later. Trigger from the Actions tab with your NuGet owner name.
+
+on:
+  workflow_dispatch:
+    inputs:
+      owner:
+        description: "NuGet.org package owner (your account username or org)"
+        required: true
+
+permissions:
+  id-token: write   # required: without it the OIDC token request silently fails
+  contents: read
+
+jobs:
+  reserve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build placeholder packages
+        run: |
+          set -euo pipefail
+          for id in flight-recorder flightrecorder; do
+            mkdir -p "pkg/$id"
+            cat > "pkg/$id/$id.csproj" <<EOF
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <TargetFramework>netstandard2.0</TargetFramework>
+              <PackageId>$id</PackageId>
+              <Version>0.0.0</Version>
+              <Authors>xag</Authors>
+              <Description>Name reserved for flight-recorder: record the answers your code got from the outside world while handling a request, and replay that exact request against the real code. https://github.com/xag/flight-recorder</Description>
+              <PackageProjectUrl>https://github.com/xag/flight-recorder</PackageProjectUrl>
+              <RepositoryUrl>https://github.com/xag/flight-recorder</RepositoryUrl>
+              <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+              <IncludeBuildOutput>false</IncludeBuildOutput>
+              <NoWarn>NU5128</NoWarn>
+            </PropertyGroup>
+          </Project>
+          EOF
+            dotnet pack "pkg/$id/$id.csproj" -c Release -o out
+          done
+          ls -l out
+
+      - name: Authenticate to NuGet.org (Trusted Publishing)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ inputs.owner }}
+
+      - name: Push placeholders
+        run: |
+          set -euo pipefail
+          for nupkg in out/*.nupkg; do
+            dotnet nuget push "$nupkg" \
+              --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+              --source https://api.nuget.org/v3/index.json \
+              --skip-duplicate
+          done
