@@ -31,7 +31,16 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
+      # .quern/ is a local cache, gitignored on purpose, so a fresh checkout has no library to
+      # resolve ledger@0.1.0 from and build() dies before a single gate runs. The registry is
+      # cloned OUTSIDE the workspace deliberately: the doc gates rglob the tree for README.md,
+      # and a registry checked out inside it would be scanned as if this repo had written it.
+      # quern.lock pins both packages by sha256, so the clone cannot smuggle in different rules.
+      - name: Fetch the quern registry
+        run: git clone --depth 1 https://github.com/xag/quern-registry "$RUNNER_TEMP/quern-registry"
       - run: uv run --group ledger python -m ledger.check
+        env:
+          QUERN_REGISTRY: ${{ runner.temp }}/quern-registry
 
   # The Node suite, and with it the one test that needs a real browser.
   #
