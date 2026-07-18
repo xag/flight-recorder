@@ -25,15 +25,11 @@ never happened, invariants, semantic spans — in Python, Node and .NET, one tab
 
 ## Install
 
-Pick your runtime. Each package page carries a language-native quickstart; the guide above has
-the depth.
-
-| Language | Package | Quickstart |
-|---|---|---|
-| Python | `flight-recorder` (PyPI) — `pip install flight-recorder` | [`flight_recorder/README.md`](flight_recorder/README.md) |
-| Node | [`@xag/flight-recorder`](https://www.npmjs.com/package/@xag/flight-recorder) (npm) | [`js/README.md`](js/README.md) |
-| .NET | `flight-recorder` (NuGet) — `dotnet add package flight-recorder` | [`csharp/README.md`](csharp/README.md) |
-| Go | `github.com/xag/flight-recorder/go` — `go get github.com/xag/flight-recorder/go` | [`go/README.md`](go/README.md) |
+Install from your runtime's package manager — `pip install flight-recorder` (Python, PyPI),
+`npm install @xag/flight-recorder` (Node, npm), `dotnet add package flight-recorder` (.NET,
+NuGet), or `go get github.com/xag/flight-recorder/go` (Go). There is no per-runtime tutorial to
+drift: the [guide](https://xag.github.io/flight-recorder/) is the documentation — one walkthrough
+across all four runtimes.
 
 ## The tape is a standard
 
