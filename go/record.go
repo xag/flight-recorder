@@ -324,7 +324,14 @@ func Effect[T any](ctx context.Context, name string, args []any, fn func() (T, e
 		"kwargs": map[string]any{},
 	}
 	if err != nil {
-		ev["err"] = map[string]any{"type": errType(err), "repr": truncate(err.Error(), 300), "args": []any{}}
+		errArgs := []any{}
+		// A structured error can carry its own args (an exception's values), the way Python's
+		// err.args and the ToyError in the other fixtures do — recorded so an error reviver can
+		// rebuild it faithfully rather than from a repr.
+		if ae, ok := err.(interface{ Args() []any }); ok {
+			errArgs = jsonableSlice(ae.Args())
+		}
+		ev["err"] = map[string]any{"type": errType(err), "repr": truncate(err.Error(), 300), "args": errArgs}
 	} else {
 		ev["res"] = serial.ToJsonable(res)
 	}
