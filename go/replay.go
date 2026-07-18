@@ -5,10 +5,14 @@ package flightrecorder
 // the same order (anything else is a divergence naming the first difference) and gets handed the
 // recorded answers. Writes are compared, never executed.
 //
-// This is the strict half of the Python replay engine. Probe replay (matching a mutated tape by
-// shape) and the sys.settrace variable-level tracer have no port here: Go has no settrace, and
-// probe is a later brick. What ports cleanly is the Feed and the verdict — result/error match,
-// boundary divergence, and the independent semantic-divergence signal.
+// This is the strict half of the Python replay engine. What ports cleanly is the Feed and the
+// verdict — result/error match, boundary divergence, and the independent semantic-divergence
+// signal.
+//
+// Variable-level tracing ports too, by a different road: Go has no sys.settrace, so the traced
+// replay runs inside an instrumented copy of the module (see trace.go for why, and what was
+// rejected). A replay running there carries the trace of its own execution back in the report;
+// one running in an ordinary build carries an empty one, and every query answers "never observed".
 
 import (
 	"context"
@@ -21,6 +25,7 @@ import (
 	"time"
 
 	"github.com/xag/flight-recorder/go/serial"
+	"github.com/xag/flight-recorder/go/tracehook"
 )
 
 // ReplayedEffectError stands in for a recorded effect exception when it is re-raised on replay.
@@ -297,6 +302,10 @@ type ReplayReport struct {
 	Kwargs         map[string]any   // the call's kwargs, revived
 	Probe          bool
 	Unanswerable   string // probe only: the mutation redirected onto a path the tape can't serve
+	// Trace is what the replayed code BELIEVED while it ran — every local, on every executed
+	// line — and it is the one thing a tape alone can never give you. Empty unless this process
+	// is running instrumented (see RunTraced).
+	Trace *Trace
 }
 
 // OK is a strict match: same result, same error, no boundary divergence, no write divergence,
@@ -361,6 +370,9 @@ func replayRecordedCall(rec map[string]any, resolve Resolver, probe bool) (*Repl
 	}
 
 	ctx := context.WithValue(context.Background(), ctxKey{}, &ambient{replay: rs})
+	// Mark the tracer's tape before the code runs, so the report carries the trace of THIS
+	// replay and not of everything the process has done since it started.
+	mark := tracehook.Count()
 	var result any
 	var runErr error
 	func() {
@@ -379,6 +391,8 @@ func replayRecordedCall(rec map[string]any, resolve Resolver, probe bool) (*Repl
 		}()
 		result, runErr = fn(ctx)
 	}()
+
+	report.Trace = LiveTrace(mark)
 
 	// Sems trailing the last boundary answer (an outermost span's end, most often) were never
 	// reached by a popExpect; leaving them unread would report a shorter path than recorded.

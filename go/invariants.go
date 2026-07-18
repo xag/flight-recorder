@@ -18,6 +18,12 @@ type Trajectory struct {
 	Writes []map[string]any // every write the replayed code performed (op/sig/args)
 	Sems   []SemPair        // the replayed semantic claims, in order
 	Kwargs map[string]any   // the call's kwargs, revived
+	// Trace is the execution seen from the inside: every local, on every executed line. It is
+	// what makes "level never excludes the whole corpus" a lookup rather than an inference, and
+	// it is the only way to condemn an output that is wrong while being entirely self-consistent
+	// with itself. Empty outside an instrumented run — a claim that reads it should say so
+	// rather than pass vacuously.
+	Trace *Trace
 }
 
 // An Invariant is a named claim. Check returns an error (or panics) to condemn the trajectory.
@@ -81,6 +87,7 @@ func runInvariants(rep *ReplayReport, invariants []Invariant) *InvariantReport {
 		Writes: rep.Writes,
 		Sems:   rep.SemsReplayed,
 		Kwargs: rep.Kwargs,
+		Trace:  rep.Trace,
 	}
 	out := &InvariantReport{Replay: rep}
 	for _, inv := range invariants {
