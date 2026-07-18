@@ -576,7 +576,7 @@ _DISTRIBUTIONS = {
     "go":   {"registry": "Go modules", "id": "github.com/xag/flight-recorder/go",
              "status": "published",   "version": "v0.8.0"},
     "cs":   {"registry": "NuGet",      "id": "flight-recorder",
-             "status": "unpublished", "version": None},
+             "status": "published",   "version": "0.1.0"},
     "java": {"registry": "Maven Central", "id": "io.github.xag:flight-recorder",
              "status": "unpublished", "version": None},
     "php":  {"registry": "Packagist",  "id": "xag/flight-recorder",
