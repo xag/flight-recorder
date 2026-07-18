@@ -56,3 +56,21 @@ jobs:
       # The generator self-validates what it writes; run it to a temp dir so CI never mutates
       # the committed fixtures (whose timestamps differ every run).
       - run: dotnet run --project tools/GenFixtures -c Release -- "${{ runner.temp }}/fixtures"
+
+  # The Go port: vet, test, and confirm the recorder emits conformant tapes and replays them.
+  # The fixture generator is env-gated (FR_REGEN_FIXTURES), so `go test` never mutates the
+  # committed go-*.jsonl; the ungated scenario test validates them in a temp dir instead. As with
+  # the others, the Python and Node conformance suites (which glob spec/fixtures/) validate the
+  # checked-in go-*.jsonl on their own — so a fork of the tape between runtimes fails a build.
+  go:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - run: go vet ./...
+      - run: go test ./...

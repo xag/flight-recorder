@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>flight-recorder — record the boundary, replay the real code</title>
-<meta name="description" content="Record an app's tool calls at their nondeterminism boundary; replay them deterministically against the real code. Python, Node and .NET, one tape.">
+<meta name="description" content="Record an app's tool calls at their nondeterminism boundary; replay them deterministically against the real code. Python, Node, .NET and Go, one tape.">
 <style>
   /* Library documentation. Plain, legible, unbranded — the reader came for the API, not a
      product. Light by default, because that is what docs are; dark honoured if asked for. */
@@ -256,8 +256,10 @@ to happen again.</p>
 <pre data-lang="js"><code>npm install @xag/flight-recorder</code></pre>
 <pre data-lang="cs"><code>dotnet add package flight-recorder</code></pre>
 
-<p class="muted">Three implementations, <strong>one tape</strong> — format v1, frozen in
-<a href="https://github.com/xag/flight-recorder/blob/main/spec/tape-v1.md">spec/tape-v1.md</a>.
+<p class="muted">Four implementations, <strong>one tape</strong> — format v1, frozen in
+<a href="https://github.com/xag/flight-recorder/blob/main/spec/tape-v1.md">spec/tape-v1.md</a>. The
+walkthrough below is shown in Python, Node and .NET; the
+<a href="https://github.com/xag/flight-recorder/tree/main/go">Go</a> quickstart lives in the repo.
 Only <em>record</em> and <em>replay</em> are language-bound: replaying JavaScript means running
 JavaScript. Everything downstream consumes the tape, and a tape is only data.</p>
 

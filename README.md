@@ -33,6 +33,7 @@ the depth.
 | Python | `flight-recorder` (PyPI) — `pip install flight-recorder` | [`flight_recorder/README.md`](flight_recorder/README.md) |
 | Node | [`@xag/flight-recorder`](https://www.npmjs.com/package/@xag/flight-recorder) (npm) | [`js/README.md`](js/README.md) |
 | .NET | `flight-recorder` (NuGet) — `dotnet add package flight-recorder` | [`csharp/README.md`](csharp/README.md) |
+| Go | `github.com/xag/flight-recorder/go` — `go get github.com/xag/flight-recorder/go` | [`go/README.md`](go/README.md) |
 
 ## The tape is a standard
 
@@ -40,9 +41,9 @@ The recording format is a frozen, documented wire contract: [`spec/tape-v1.md`](
 **Implementations are welcome** — only *record* and *replay* must be native to a runtime;
 everything that *analyzes* a tape works on any tape. Conformance is not the prose: it is
 [`spec/fixtures/`](spec/fixtures/) plus the checker in [`spec/validate.py`](spec/validate.py)
-(mirrored in JS and .NET). Every implementation must validate every fixture, and every fixture
-must have been produced by an implementation. This repo ships three implementations — Python,
-Node, and .NET — reading and writing the same tapes.
+(mirrored in JS, .NET, and Go). Every implementation must validate every fixture, and every fixture
+must have been produced by an implementation. This repo ships four implementations — Python,
+Node, .NET, and Go — reading and writing the same tapes.
 
 ## Why
 
