@@ -73,7 +73,8 @@ def build() -> Quern:
     quern = lib.effective(quern)
     quern.root.children = [_DECISION, _no_privileged_language(), _no_doc_duplication(),
                            _PARITY_DECISION, _feature_parity(), _JAVA_DECISION,
-                           _PYPI_NAME_DECISION, _PHP_DECISION]
+                           _PYPI_NAME_DECISION, _PHP_DECISION,
+                           _DISTRIBUTION_DECISION, _install_claims_match_reality()]
     return quern
 
 
@@ -556,5 +557,150 @@ _PHP_DECISION = Node(
                       "recorder knows which of ITS positions are objects and can say so with an "
                       "explicit stdClass; it cannot know that about a value it was handed. Guess "
                       "where you have knowledge, not where the caller does."}),
+    ],
+)
+
+
+# --- distribution: what the guide promises vs what a registry will actually serve -------
+
+# The audited state of every shipped runtime's package, as of 2026-07-19. `status` is the
+# claim; the guide's install block is checked against it below. A runtime moves to
+# "published" here only after its release is real on the registry — a name reservation is
+# not a release, which is exactly the trap .NET fell into (a 0.0.0 placeholder sitting under
+# the very id the guide told people to install).
+_DISTRIBUTIONS = {
+    "py":   {"registry": "PyPI",       "id": "xag-flight-recorder",
+             "status": "published",   "version": "0.8.0"},
+    "js":   {"registry": "npm",        "id": "@xag/flight-recorder",
+             "status": "published",   "version": "0.10.2"},
+    "go":   {"registry": "Go modules", "id": "github.com/xag/flight-recorder/go",
+             "status": "published",   "version": "v0.8.0"},
+    "cs":   {"registry": "NuGet",      "id": "flight-recorder",
+             "status": "unpublished", "version": None},
+    "java": {"registry": "Maven Central", "id": "io.github.xag:flight-recorder",
+             "status": "unpublished", "version": None},
+    "php":  {"registry": "Packagist",  "id": "xag/flight-recorder",
+             "status": "unpublished", "version": None},
+}
+
+
+def _install_block() -> str:
+    """The Install section of the guide - from its heading to the next one."""
+    guide = _GUIDE.read_text(encoding="utf-8") if _GUIDE.exists() else ""
+    m = re.search(r'<h2 id="install">.*?(?=<h2 )', guide, re.S)
+    return m.group(0) if m else ""
+
+
+def _install_claims_match_reality() -> Node:
+    block = _install_block()
+    # Every install snippet in the block, with the attributes it carries.
+    advertised = {tab: attrs for tab, attrs in
+                  re.findall(r'<pre data-lang="(\w+)"([^>]*)>', block)}
+
+    findings = []
+    for tab, dist in _DISTRIBUTIONS.items():
+        if tab not in advertised:
+            findings.append(f"{dist['registry']}: the guide shows no install snippet for {tab}")
+            continue
+        flagged = 'data-status="unpublished"' in advertised[tab]
+        if dist["status"] == "unpublished" and not flagged:
+            findings.append(
+                f"{dist['registry']}: the guide advertises {dist['id']} as installable, but it is "
+                f"not published there - mark the snippet data-status=\"unpublished\", or ship it")
+        elif dist["status"] == "published" and flagged:
+            findings.append(
+                f"{dist['registry']}: {dist['id']} {dist['version']} IS published, but the guide "
+                f"still warns readers away from it - drop the data-status attribute")
+
+    # A runtime the guide shows but the manifest has never heard of: unaudited, so unproven.
+    for tab in advertised:
+        if tab not in _DISTRIBUTIONS:
+            findings.append(f"the guide has an install snippet for {tab}, which no entry in "
+                            f"_DISTRIBUTIONS accounts for - audit its registry and record it")
+
+    if not findings:
+        live = [f"{d['registry']} {d['version']}" for d in _DISTRIBUTIONS.values()
+                if d["status"] == "published"]
+        pending = [d["registry"] for d in _DISTRIBUTIONS.values()
+                   if d["status"] == "unpublished"]
+        q = Quantity(
+            value=0, unit="finding", provenance="measured", grounded=True,
+            source=f"install block agrees with the audited manifest: live on {', '.join(live)}"
+                   + (f"; named as pending on {', '.join(pending)}" if pending else ""))
+    else:
+        q = Quantity(value=len(findings), unit="finding", provenance="measured", grounded=False,
+                     source="; ".join(findings))
+
+    return Node(
+        id="install-claims-match-registries",
+        kind="gate",
+        name="Every install command the guide prints either works, or says plainly that it does "
+             "not yet - no runtime is advertised as installable before its package is real",
+        params={"mismatches": q},
+        # Same fitting as the other gates: the gate admits its own measurement, so an
+        # ungrounded quantity (a mismatch the scan could not clear) turns it red. Without
+        # this link the gate admits nothing, and a gate that admits nothing can never fail.
+        links={"admits": ["install-claims-match-registries"]},
+        payload={"note":
+                 "The guide told readers to `dotnet add package flight-recorder`. That command "
+                 "succeeded and installed a 0.0.0 name-reservation stub containing no code - the "
+                 "worst kind of wrong, because it does not fail. Maven Central and Packagist "
+                 "simply 404'd. Six runtimes at feature parity shipped as three. Discharge this "
+                 "by publishing the package and flipping its manifest entry - never by deleting "
+                 "the warning from the guide."},
+    )
+
+
+_DISTRIBUTION_DECISION = Node(
+    id="distribution-parity-is-checked-offline",
+    kind="decision",
+    name="Distribution parity is a gate over a hand-audited manifest checked against the guide's "
+         "own install block, not a live query against six package registries",
+    payload={
+        "rationale":
+            "Feature parity had a gate; distribution parity had nothing, and the gap was not "
+            "theoretical: the guide advertised installs for .NET, Java and PHP that no registry "
+            "would honour, and the .NET one resolved to a placeholder rather than failing. So the "
+            "claim needs teeth. But the obvious implementation - ask NuGet, Maven Central, "
+            "Packagist, npm, PyPI and the Go proxy on every run - would make ledger.check require "
+            "the network, fail on a plane, and go red on someone else's outage; a rule that cries "
+            "wolf is one people learn to skip, and this ledger's whole premise is that a red gate "
+            "means something. The manifest splits the difference: a human audits the registries, "
+            "records what they saw, and the gate enforces the thing that actually drifted - the "
+            "DOC disagreeing with what was shipped. The audit is the expensive part and it is "
+            "rare (it changes when you publish); the disagreement is the frequent part and it is "
+            "now mechanical.",
+        "consequence":
+            "The gate is only as honest as its last audit: a stale manifest claiming something is "
+            "published keeps the guide's install line unmarked and the check green. That is a "
+            "real hole, bounded by the fact that publishing is the only thing that changes an "
+            "entry, and whoever publishes is the person editing it. The cost is one more place to "
+            "touch at release time; the benefit is that the check stays deterministic and "
+            "offline, like every other gate here.",
+    },
+    children=[
+        Node(id="alt-dist-live-registry-query", kind="alternative",
+             name="Query each registry's API during the check and ground the gate on the response",
+             payload={"why":
+                      "Strictly more truthful, and unusable as a gate: six network calls on every "
+                      "run, so the check fails offline and flakes on any registry's bad day. It "
+                      "would also be measuring someone else's uptime and reporting it as this "
+                      "repo's doc being wrong. Kept as an idea for a scheduled CI job, where a "
+                      "red is a signal to re-audit rather than a blocked commit."}),
+        Node(id="alt-dist-trust-the-guide", kind="alternative",
+             name="Treat the guide's install block as the source of truth and check nothing",
+             payload={"why":
+                      "The status quo that produced the bug. A doc is a claim, and an unchecked "
+                      "claim about a system that changes underneath it (a package published, a "
+                      "name reserved, a runtime added) drifts silently - the same argument the "
+                      "no-doc-duplication gate already won."}),
+        Node(id="alt-dist-drop-unshipped-runtimes", kind="alternative",
+             name="Delete the install snippets for runtimes that are not published yet",
+             payload={"why":
+                      "It would make the guide true, and it would hide the state of the project "
+                      "from the person best placed to care - a reader evaluating whether the .NET "
+                      "port exists at all. The snippet plus an honest 'not yet' says more than "
+                      "silence, and it leaves something for the gate to hold to account: silence "
+                      "cannot go red."}),
     ],
 )

@@ -20,6 +20,19 @@ jobs:
       - run: uv sync
       - run: uv run pytest tests/ -q
 
+  # The docs ledger's own rules. Every gate in ledger/tree.py measures the real tree and exits 1
+  # while any is red — but until this job existed the check only ran when somebody remembered to
+  # run it, which makes "a red gate stops a release" a thing the ledger asserted about itself and
+  # never had to honour. The gates are cheap (they read files; no network) so they run everywhere.
+  ledger:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv run --group ledger python -m ledger.check
+
   # The Node suite, and with it the one test that needs a real browser.
   #
   # Playwright is an OPTIONAL peer: the library imports no browser automation library, and nobody
