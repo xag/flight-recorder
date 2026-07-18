@@ -20,7 +20,8 @@ string RecordScenario(Action<IStore> scenario, IReadOnlyDictionary<string, objec
         foreach (var kv in constants) boundary.Constants[kv.Key] = kv.Value;
 
     var store = Recorder.WrapAs<IStore>(new ToyStore(), "store",
-        nameof(IStore.Get), nameof(IStore.Set), nameof(IStore.CreateAccount), nameof(IStore.MaybeFail));
+        nameof(IStore.Get), nameof(IStore.Set), nameof(IStore.CreateAccount), nameof(IStore.MaybeFail),
+                nameof(IStore.Boom));
 
     var tmp = Path.Combine(Path.GetTempPath(), $"fr-fixture-{Guid.NewGuid():N}");
     var path = Recorder.Install(boundary, directory: tmp)!;
@@ -39,7 +40,7 @@ var toy = RecordScenario(store =>
 File.WriteAllText(Path.Combine(outDir, "dotnet-toy.jsonl"), toy);
 
 // --- dotnet-sem-toy.jsonl: sem spans + db + fx + now, with a caught failure ------------
-var sem = RecordScenario(store => ToyTools.Enrol(store, "t@example.com", "hunter2"));
+var sem = RecordScenario(store => ToyTools.Enrol(store, "alice", "hunter2"));
 File.WriteAllText(Path.Combine(outDir, "dotnet-sem-toy.jsonl"), sem);
 
 // Validate what we just wrote against our own checker, so a broken fixture never lands.

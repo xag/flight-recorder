@@ -59,7 +59,10 @@ class SemTest {
 
         Recording.SpanNode loadCorpus = enrol.children.get(0);
         assertEquals(1, loadCorpus.events.size(), "load_corpus encloses exactly its one read");
-        assertEquals("store.get", loadCorpus.events.get(0).get("fn"));
+        // A chained read enclosed by a span — the enclosure a reader most wants to see, and the
+        // one an fx-only span never demonstrates.
+        assertEquals("db", loadCorpus.events.get(0).get("k"));
+        assertEquals("get", loadCorpus.events.get(0).get("op"));
 
         Recording.SpanNode register = enrol.children.stream()
                 .filter(c -> c.name.equals("register")).findFirst().orElseThrow();
@@ -126,8 +129,10 @@ class SemTest {
             String password = String.valueOf(kwargs.get("password"));
             Recorder.now();
             return Recorder.span("signup", () -> {           // was "enrol"
-                Map<String, Object> row = Recorder.span("load_corpus", () -> Toy.storeGet(user));
-                Recorder.note("corpus_read", Map.of("found", true));
+                Snapshot row = Recorder.span("load_corpus", () -> Recorder.queryOne(
+                        "get", "collection(\"users\").document(\"" + user + "\")",
+                        () -> new Snapshot(user, true, Map.of("name", "Alice", "x", 3L))));
+                Recorder.note("corpus_read", Map.of("found", row.exists));
                 try {
                     Recorder.span("register", () -> {
                         Toy.storeSet("user:" + user, Map.of("password", password));
@@ -141,7 +146,7 @@ class SemTest {
                 }
                 Map<String, Object> out = new java.util.LinkedHashMap<>();
                 out.put("user", user);
-                out.put("name", row.get("name"));
+                out.put("name", Json.asMap(row.data).get("name"));
                 return out;
             });
         };
@@ -158,7 +163,7 @@ class SemTest {
         String rendered = recordEnrol(tmp).call(0).renderSpans();
         String[] lines = rendered.split("\n");
         assertTrue(lines[0].startsWith("enrol  ok"), lines[0]);
-        assertTrue(rendered.contains("load_corpus  ok  (1 fx)"), rendered);
+        assertTrue(rendered.contains("load_corpus  ok  (1 db)"), rendered);
         assertTrue(rendered.contains("register  ERROR  (2 fx)"), rendered);
         assertTrue(rendered.contains("- corpus_read  found=true"), rendered);
     }

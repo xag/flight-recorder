@@ -20,7 +20,7 @@
 //
 //   fr.install(BOUNDARY, { directory: '.flight', enabled: process.env.FLIGHT === '1' });
 
-export { boundaryOf, install, uninstall, tool, wrap, note, span, tapePath, FORMAT_VERSION } from './record.js';
+export { boundaryOf, install, uninstall, tool, wrap, query, queryOne, exec, sampleIndices, snapshot, missing, note, span, tapePath, FORMAT_VERSION } from './record.js';
 export { toJsonable, fromJsonable, redactJsonable, REDACTED } from './serial.js';
 export { validateTape, VERSION } from './spec/validate.js';
 export { loadTape, pickCall, replayCall } from './replay.js';

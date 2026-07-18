@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import * as fr from '../src/index.js';
-import { ToyStore, makeTools } from './toy.mjs';
+import { ToyStore, makeTools, makeCanonicalTools } from './toy.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(HERE, '..', '..', 'spec', 'fixtures');
@@ -334,10 +334,17 @@ test('uninstall restores the clock and the RNG', async () => {
 test('regenerate the node fixture (FR_REGEN_FIXTURES=1)', async (t) => {
   if (!process.env.FR_REGEN_FIXTURES) return t.skip('set FR_REGEN_FIXTURES=1 to regenerate');
 
-  setup({ redact: { password: null }, constants: { 'toy.LIMIT': 3 } });
-  await tools.greet({ user: 'alice' });
-  await assert.rejects(() => tools.explode({ user: 'ghost' }));
-  await tools.signup({ email: 'a@b.c', password: 'hunter2' });
+  // The CANONICAL scenario, not this suite's own toy: the fixture's job is to be the same tape
+  // every runtime writes, so it is recorded from the shape all six share.
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flight-'));
+  const raw = new ToyStore();
+  const canonStore = fr.wrap(raw, ['get', 'set', 'boom'], { prefix: 'store' });
+  fr.install(fr.boundaryOf({ redact: { password: null }, constants: { 'toy.LIMIT': 3 } }), { directory: dir });
+  const canon = Object.fromEntries(
+    Object.entries(makeCanonicalTools(canonStore)).map(([name, fn]) => [name, fr.tool(name, fn)]),
+  );
+  await canon.greet({ user: 'alice' });
+  await assert.rejects(() => canon.explode({ user: 'ghost' }));
 
   const text = readTape();
   assert.deepEqual(fr.validateTape(text), []);

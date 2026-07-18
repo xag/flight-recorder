@@ -24,7 +24,8 @@ from flight_recorder.boundary import (
     Boundary, ChainTarget, DEFAULT_TERMINAL_READS, DEFAULT_TERMINAL_WRITES,
 )
 from flight_recorder.record import (
-    ChainNode, DatetimeShim, ForbiddenValue, Gate, RandomShim, SessionSink, FORMAT_VERSION,
+    ChainNode, DatetimeShim, ForbiddenValue, Gate, RandomShim, SessionSink, TimeShim,
+    FORMAT_VERSION,
     hook, install, install_mcp, note, session_path, span, uninstall,
 )
 from flight_recorder.replay import (
@@ -54,6 +55,7 @@ from flight_recorder.serial import (
 __all__ = [
     "Boundary", "ChainTarget", "DEFAULT_TERMINAL_READS", "DEFAULT_TERMINAL_WRITES",
     "ChainNode", "DatetimeShim", "ForbiddenValue", "Gate", "RandomShim", "SessionSink",
+    "TimeShim",
     "FORMAT_VERSION", "hook", "install", "install_mcp", "note", "session_path", "span",
     "uninstall",
     "Feed", "PlaybackChain", "ProbeUnanswerable", "Recording", "ReplayAdapter",

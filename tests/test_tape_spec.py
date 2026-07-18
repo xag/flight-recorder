@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 import flight_recorder as fr
-from tests import toy_effects, toy_tools
+from tests import canonical, toy_effects, toy_tools
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from spec.validate import validate_tape, VERSION  # noqa: E402
@@ -64,10 +64,14 @@ def make_sem_boundary() -> fr.Boundary:
 
 
 def _record_a_sem_tape(tmp_path) -> str:
-    """Drive the real recorder over every shape a `sem` event can take."""
-    fr.install(make_sem_boundary(), toy_tools, directory=str(tmp_path), enabled=True)
+    """Drive the real recorder over every shape a `sem` event can take.
+
+    Records the CANONICAL scenario, not this suite's own toy: the fixture's job is to be the
+    same tape every runtime writes, so it is recorded from the shape all six share.
+    """
+    fr.install(canonical.sem_boundary(), canonical, directory=str(tmp_path), enabled=True)
     try:
-        asyncio.run(toy_tools.enrol("t@example.com", password="hunter2"))
+        asyncio.run(canonical.enrol("alice", password="hunter2"))
     finally:
         fr.uninstall()
 
@@ -82,14 +86,18 @@ def _sems(text: str) -> list:
 
 
 def _record_a_tape(tmp_path) -> str:
-    """Drive the real recorder over every event kind the format defines."""
-    fr.install(make_boundary(), toy_tools, directory=str(tmp_path), enabled=True)
+    """Drive the real recorder over every event kind the format defines.
+
+    Records the CANONICAL scenario, not this suite's own toy: the fixture's job is to be the
+    same tape every runtime writes, so it is recorded from the shape all six share.
+    """
+    fr.install(canonical.plain_boundary(), canonical, directory=str(tmp_path), enabled=True)
     try:
-        # greet: chained client read + write (db), random.sample (rand), datetime.now (now)
-        toy_tools.greet("t@example.com", count=2)
-        # remote_sum: effects (fx) — and maybe_fail raises ToyError, giving us the fx.err
-        # branch, which is a different shape from fx.res and must be in the frozen tape.
-        asyncio.run(toy_tools.remote_sum("t@example.com", "abc", "wxyz"))
+        asyncio.run(canonical.greet("alice"))
+        try:
+            asyncio.run(canonical.explode("ghost"))
+        except canonical.ToyError:
+            pass  # recorded, then re-raised exactly as it was: the point of the scenario
     finally:
         fr.uninstall()
 
@@ -179,7 +187,7 @@ def test_the_fixture_puts_evidence_underneath_the_testimony(tmp_path):
                   if e.get("k") == "sem" and e.get("name") == "register"
                   and e["phase"] == "end")
     inside = [e for e in evs[opened + 1:closed] if e.get("k") == "fx"]
-    assert [e["fn"].rsplit(".", 1)[-1] for e in inside] == ["create_account", "maybe_fail"], \
+    assert [e["fn"].rsplit(".", 1)[-1] for e in inside] == ["store_set", "store_boom"], \
         "the register span does not enclose the effects it claims to be made of"
 
 

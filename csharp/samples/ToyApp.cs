@@ -35,6 +35,7 @@ namespace FlightRecorder.Toy
         string Set(string key, IDictionary<string, object?> value);
         Account CreateAccount(string email, IDictionary<string, object?> fields);
         void MaybeFail(int n);
+        void Boom(string key);
     }
 
     public sealed class ToyStore : IStore
@@ -56,6 +57,10 @@ namespace FlightRecorder.Toy
             new Account { Id = "acct-13", Email = email, Password = (string)(fields["password"] ?? "") };
 
         public void MaybeFail(int n) => throw new ToyError("kaput");
+
+        // The canonical scenario's failing effect: the message names the key, so every runtime's
+        // `registration_failed` note reads the same.
+        public void Boom(string key) => throw new ToyError($"no such key: {key}");
     }
 
     /// <summary>The recorded tools. Each `Recorder.Record` envelope is one tape line.</summary>
@@ -73,14 +78,32 @@ namespace FlightRecorder.Toy
             return new string(c);
         }
 
+        /// <summary>The canonical plain scenario: an effect, a chained read, all four random
+        /// shapes, both clocks, and a chained write — every event kind the format defines, on
+        /// one tape, in the same order every runtime writes them.</summary>
         public static object? Greet(IStore store, string user) =>
             Recorder.Record("greet", new { user }, () =>
             {
                 var doc = store.Get(user);                     // fx store.get
-                var token = Hex(Recorder.Random.Bytes(4));     // rand bytes
+
+                Recorder.DbRead("stream", "collection(\"users\").where(\"x\", \">\", 0)",
+                    () => new List<Snapshot>
+                    {
+                        Snapshot.Of("0", new Dictionary<string, object?> { ["name"] = "alpha", ["x"] = 1 }),
+                        Snapshot.Of("1", new Dictionary<string, object?> { ["name"] = "beta", ["x"] = 2 }),
+                    });
+
+                Recorder.Random.Sample(new[] { 0, 1, 2 }, 2);  // rand sample
+                Recorder.Random.Bytes(4);                      // rand bytes
+                Recorder.Random.NextDouble();                  // rand float
+                Recorder.Random.NextInt(100);                  // rand int
                 var at = Recorder.Clock.Now();                 // now
-                store.Set($"greeted:{user}", new Dictionary<string, object?> { ["at"] = at, ["token"] = token });
-                return new Dictionary<string, object?> { ["name"] = doc.Name, ["token"] = token };
+                Recorder.Clock.Mono();                         // perf
+
+                Recorder.DbWrite("set", $"store.set(greeted:{user})",
+                    new object?[] { new Dictionary<string, object?> { ["at"] = at } }, () => { });
+
+                return new Dictionary<string, object?> { ["name"] = doc.Name };
             });
 
         public static object? Explode(IStore store, string user) =>
@@ -97,32 +120,33 @@ namespace FlightRecorder.Toy
                 };
             });
 
-        public static object? Enrol(IStore store, string email, string password, bool note = true) =>
-            Recorder.Record("enrol", new { email, password }, () =>
+        /// <summary>The canonical `enrol` scenario, identical across all six runtimes so a reader
+        /// recovers the same account whoever wrote the tape.</summary>
+        public static object? Enrol(IStore store, string user, string password, bool note = true) =>
+            Recorder.Record("enrol", new { user, password }, () =>
             {
                 var started = Recorder.Clock.Now();
-                return Recorder.Span("enrol", new { email, started }, () =>
+                return Recorder.Span("enrol", new { user, started, password }, () =>
                 {
-                    var rows = Recorder.Span("load_corpus", () =>
+                    // A chained read, not an effect: the canonical scenario puts a `db` event
+                    // inside a span, which is the one enclosure a reader most wants to see and
+                    // the one an fx-only span never demonstrates.
+                    var snap = Recorder.Span("load_corpus", () =>
                     {
-                        var sig = $"collection(\"users\").document(\"{email}\").collection(\"items\").where(\"x\", \">\", 0)";
-                        var snaps = Recorder.DbRead("stream", sig, () => new List<Snapshot>
+                        var sig = $"collection(\"users\").document(\"{user}\")";
+                        return Recorder.DbRead("get", sig, () => new List<Snapshot>
                         {
-                            Snapshot.Of("0", new Dictionary<string, object?> { ["name"] = "alpha", ["x"] = 1 }),
-                            Snapshot.Of("1", new Dictionary<string, object?> { ["name"] = "beta", ["x"] = 2 }),
-                            Snapshot.Of("2", new Dictionary<string, object?> { ["name"] = "gamma", ["x"] = 3 }),
-                        });
-                        return snaps.Count;
+                            Snapshot.Of(user, new Dictionary<string, object?> { ["name"] = "Alice", ["x"] = 3 }),
+                        })[0];
                     });
-                    if (note) Recorder.Note("corpus_read", new { rows });
+                    if (note) Recorder.Note("corpus_read", new { found = snap.Exists });
 
-                    Account? account = null;
                     try
                     {
                         Recorder.Span("register", new { password }, () =>
                         {
-                            account = store.CreateAccount(email, new Dictionary<string, object?> { ["password"] = password });
-                            store.MaybeFail(99);
+                            store.Set($"user:{user}", new Dictionary<string, object?> { ["password"] = password });
+                            store.Boom(user);
                         });
                     }
                     catch (ToyError e)
@@ -130,13 +154,11 @@ namespace FlightRecorder.Toy
                         Recorder.Note("registration_failed", new { why = e.Message });
                     }
 
+                    var data = snap.Data as IDictionary<string, object?>;
                     return new Dictionary<string, object?>
                     {
-                        ["email"] = email,
-                        ["account"] = account == null ? null : new Dictionary<string, object?>
-                        {
-                            ["id"] = account.Id, ["email"] = account.Email, ["password"] = account.Password,
-                        },
+                        ["user"] = user,
+                        ["name"] = data == null ? null : data["name"],
                     };
                 });
             });

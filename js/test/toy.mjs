@@ -4,7 +4,7 @@
 
 import crypto from 'node:crypto';
 
-import { note, span } from '../src/index.js';
+import { note, span, query, queryOne, exec, sampleIndices, snapshot } from '../src/index.js';
 
 export class ToyError extends Error {
   constructor(msg, n) {
@@ -91,9 +91,16 @@ export function makeTools(store) {
     // carrying a value marker (a datetime) and a value a redaction must reach (a password).
     async enrol({ user, password }) {
       const at = new Date(); // a clock read before the span opens: it belongs to the call
-      return span('enrol', { user, started: at }, async () => {
-        const row = await span('load_corpus', () => store.get(user));
-        note('corpus_read', { found: row != null });
+      return span('enrol', { user, started: at, password }, async () => {
+        // A chained read, not an effect: the canonical scenario puts a `db` event inside a span,
+        // which is the one enclosure a reader most wants to see and the one an fx-only span
+        // never demonstrates.
+        const row = await span('load_corpus', () =>
+          queryOne('get', `collection("users").document("${user}")`, () =>
+            snapshot(user, { name: 'Alice', x: 3 }),
+          ),
+        );
+        note('corpus_read', { found: row.exists });
 
         try {
           await span('register', { password }, async () => {
@@ -104,8 +111,49 @@ export function makeTools(store) {
           note('registration_failed', { why: e.message });
         }
 
-        return { user, at: at.getTime(), name: row?.name ?? 'stranger' };
+        return { user, name: row.data?.name ?? 'stranger' };
       });
+    },
+  };
+}
+
+/**
+ * The canonical fixture scenario — the same shape every runtime records into
+ * `spec/fixtures/*-toy.jsonl`, so the six tapes differ only in the runtime key and the
+ * timestamps.
+ *
+ * Kept apart from `makeTools` on purpose. That one is Node's own app toy, shaped by what this
+ * suite needs to test; this one is shaped by what the CROSS-RUNTIME fixture has to prove, and
+ * the two pull in different directions. Conflating them is how a fixture quietly drifts to suit
+ * a local test.
+ */
+export function makeCanonicalTools(store) {
+  return {
+    // An effect, a chained read, all four random shapes, both clocks, and a chained write:
+    // every event kind the format defines, on one tape.
+    async greet({ user }) {
+      const row = await store.get(user);
+
+      await query('stream', 'collection("users").where("x", ">", 0)', () => [
+        snapshot('0', { name: 'alpha', x: 1 }),
+        snapshot('1', { name: 'beta', x: 2 }),
+      ]);
+
+      sampleIndices(3, 2);
+      crypto.randomBytes(4);
+      Math.random();
+      crypto.randomInt(100);
+      const at = new Date();
+      performance.now();
+
+      await exec('set', `store.set(greeted:${user})`, [{ at }], async () => {});
+
+      return { name: row?.name ?? 'stranger' };
+    },
+
+    // A raising effect produces both an fx.err and a non-null call.error.
+    async explode({ user }) {
+      await store.boom(user);
     },
   };
 }

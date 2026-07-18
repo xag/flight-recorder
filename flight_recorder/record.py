@@ -347,8 +347,83 @@ class RandomShim:
             _emit({"k": "rand", "m": "sample", "n": len(population), "kk": k, "idx": idx})
         return [population[i] for i in idx]
 
+    def random(self) -> float:
+        """A uniform draw in [0, 1). The draw IS the value, so the value is what is recorded."""
+        if hook.mode == "replay":
+            return float(_expect_rand("float")["v"])
+        v = _random.random()
+        if hook.mode == "record":
+            _emit({"k": "rand", "m": "float", "v": v})
+        return v
+
+    def randbytes(self, n: int) -> bytes:
+        """Raw entropy. There is no population to index into: the bytes are the answer."""
+        if hook.mode == "replay":
+            return bytes.fromhex(_expect_rand("bytes")["hex"])
+        b = _random.randbytes(n)
+        if hook.mode == "record":
+            _emit({"k": "rand", "m": "bytes", "n": n, "hex": b.hex()})
+        return b
+
+    def randint(self, a: int, b: int) -> int:
+        if hook.mode == "replay":
+            return int(_expect_rand("int")["v"])
+        v = _random.randint(a, b)
+        if hook.mode == "record":
+            _emit({"k": "rand", "m": "int", "v": v})
+        return v
+
+    def randrange(self, *args: Any, **kwargs: Any) -> int:
+        if hook.mode == "replay":
+            return int(_expect_rand("int")["v"])
+        v = _random.randrange(*args, **kwargs)
+        if hook.mode == "record":
+            _emit({"k": "rand", "m": "int", "v": v})
+        return v
+
     def __getattr__(self, name: str) -> Any:
+        # Everything else delegates to the real module — and is therefore NOT recorded. Each
+        # draw shape has to be shimmed by hand, because each records differently: positions for
+        # a sample, bytes for entropy, the value for a scalar. An unshimmed draw re-rolls on
+        # replay, so the shapes above are the ones an app may use inside a recorded call.
         return getattr(_random, name)
+
+
+class TimeShim:
+    """Stands in for the `time` module inside boundary modules. Everything delegates to the real
+    module except perf_counter(), which is recorded / replayed.
+
+    A separate event kind from `now` because it is a separate clock: monotonic, arbitrary
+    origin, not a wall time. Feeding a wall time back into it would be a category error."""
+
+    def perf_counter(self) -> float:
+        if hook.mode == "replay":
+            # The tape carries MILLISECONDS (the format fixes that, so every runtime's `perf`
+            # is comparable); Python's perf_counter answers in SECONDS. Convert on the way back
+            # out, or the replayed code sees a number a thousand times too large.
+            return float(hook.feed.pop_expect("perf")["v"]) / 1000.0
+        v = time.perf_counter()
+        if hook.mode == "record":
+            _emit({"k": "perf", "v": round(v * 1000, 2)})
+        return v
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(time, name)
+
+
+def _expect_rand(method: str) -> dict:
+    """Pop a `rand` event, asserting the replayed code drew the same SHAPE it recorded.
+
+    The shapes are not interchangeable and none is a special case of another, so serving a
+    recorded `bytes` draw to a call asking for a float would be answering a different question.
+    """
+    ev = hook.feed.pop_expect("rand")
+    if ev.get("m") != method:
+        from flight_recorder.replay import ReplayDivergence
+        raise ReplayDivergence(
+            f'random divergence: replayed code drew "{method}" but the recording holds a '
+            f'"{ev.get("m")}" draw here')
+    return ev
 
 
 # --- semantic events: the app's testimony, next to the evidence ----------------------
@@ -750,6 +825,12 @@ def patch_boundary(boundary: Boundary) -> None:
             _patch(target.holder, target.attr, ChainNode(real, "", target))
     for module in boundary.clock_modules:
         _patch(module, "datetime", DatetimeShim)
+        # Only if the module actually holds the name. A boundary declares `clock_modules` to
+        # have its clock reads recorded, and most such modules import `datetime` and not
+        # `time` — patching a name that is not there would raise on a declaration that was
+        # correct before this shim existed.
+        if hasattr(module, "time"):
+            _patch(module, "time", TimeShim())
     for module in boundary.random_modules:
         _patch(module, "random", RandomShim())
 

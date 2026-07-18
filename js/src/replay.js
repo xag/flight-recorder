@@ -74,6 +74,9 @@ class Feed {
     this.revivers = revivers;
     this.redact = redact;
     this.scrub = scrub;
+    /** What the code WOULD have written — writes are compared, never executed. */
+    this.writes = [];
+    this.writeDivs = [];
   }
 
   get exhausted() {
@@ -103,25 +106,62 @@ class Feed {
     while (this.i < this.events.length && this.events[this.i].k === 'sem') this.i += 1;
   }
 
-  popExpect(kind, { fn } = {}) {
+  popExpect(kind, { fn, op, sig } = {}) {
     this.skipSems();
+    const want = `${kind}${fn ? ` ${fn}` : ''}${op ? ` ${op} ${sig ?? ''}` : ''}`;
     if (this.exhausted) {
-      throw this._diverge(
-        `${kind}${fn ? ` ${fn}` : ''}`,
-        '(nothing — the recording had no more answers to give)',
-      );
+      throw this._diverge(want, '(nothing — the recording had no more answers to give)');
     }
     const ev = this.events[this.i];
 
-    if (ev.k !== kind || (fn != null && ev.fn !== fn)) {
+    // Under mutation a query's CONTENT changes — it flows from mutated data — but its SHAPE
+    // does not. So probe matching compares shapes: `collection("u").where("x",">",0)` becomes
+    // `collection.where`.
+    const skeleton = (s) => String(s ?? '').replace(/\([^()]*\)/g, '');
+    const sigMatches =
+      sig == null || (this.probe ? skeleton(ev.sig) === skeleton(sig) : ev.sig === sig);
+
+    if (ev.k !== kind || (fn != null && ev.fn !== fn) || (op != null && ev.op !== op) || !sigMatches) {
       throw this._diverge(
-        `${kind}${fn ? ` ${fn}` : ''}`,
-        `${ev.k}${ev.fn ? ` ${ev.fn}` : ''}`,
+        want,
+        `${ev.k}${ev.fn ? ` ${ev.fn}` : ''}${ev.op ? ` ${ev.op} ${ev.sig ?? ''}` : ''}`,
       );
     }
 
     this.i += 1;
     return ev;
+  }
+
+  /** A chained read returning many documents. */
+  answerQuery(op, sig) {
+    const ev = this.popExpect('db', { op, sig });
+    const res = ev.res ?? [];
+    return (Array.isArray(res) ? res : [res]).map((s) => fromJsonable(s));
+  }
+
+  /** A chained read returning one document. */
+  answerQueryOne(op, sig) {
+    const ev = this.popExpect('db', { op, sig });
+    const res = ev.res ?? null;
+    return fromJsonable(Array.isArray(res) ? (res[0] ?? { id: null, exists: false, data: null }) : res);
+  }
+
+  /**
+   * A chained write: compared, never executed.
+   *
+   * A mismatch is recorded rather than thrown, so one wrong write does not stop the replay from
+   * reporting everything after it.
+   */
+  expectWrite(op, sig, args) {
+    const redacted = redactJsonable(args, this.redact, this.scrub);
+    this.writes.push({ op, sig, args: redacted });
+    const ev = this.popExpect('db', { op, sig });
+    if (!this.probe && JSON.stringify(ev.args ?? []) !== JSON.stringify(redacted)) {
+      this.writeDivs.push(
+        `write ${op} ${sig}: recorded ${JSON.stringify(ev.args ?? [])}, replayed ${JSON.stringify(redacted)}`,
+      );
+    }
+    return undefined;
   }
 
   /** Answer an effect from the tape, having first checked it is the effect being asked. */
@@ -295,7 +335,7 @@ export async function replayCall({ call, fn, boundary = {}, probe = false, semSt
   const semFields = { semsRecorded, semsReplayed, semDivergence: semDiv, semStrict };
 
   if (divergence) {
-    return { ok: false, divergence, trace: traceOf, resultMatch: false, errorMatch: false, unconsumed: feed.events.length - feed.i, ...semFields };
+    return { ok: false, divergence, trace: traceOf, resultMatch: false, errorMatch: false, unconsumed: feed.events.length - feed.i, writes: feed.writes, writeDivs: feed.writeDivs, ...semFields };
   }
 
   // The code asked FEWER questions than the recording holds answers for. That is a
@@ -318,7 +358,7 @@ export async function replayCall({ call, fn, boundary = {}, probe = false, semSt
   const errorMatch = (error ?? null) === (call.error ?? null);
 
   return {
-    ok: resultMatch && errorMatch && (!semStrict || semDiv === null),
+    ok: resultMatch && errorMatch && feed.writeDivs.length === 0 && (!semStrict || semDiv === null),
     result,
     error,
     trace: traceOf,
@@ -328,6 +368,10 @@ export async function replayCall({ call, fn, boundary = {}, probe = false, semSt
     errorMatch,
     divergence: null,
     unconsumed: 0,
+    // What the code WOULD have written. Writes are compared, never executed, so this is the
+    // record of the questions it asked the store rather than of anything that happened to it.
+    writes: feed.writes,
+    writeDivs: feed.writeDivs,
     ...semFields,
   };
 }

@@ -9,9 +9,11 @@ import java.util.Map;
 /**
  * The toy application the cross-runtime fixtures are recorded from.
  *
- * <p>Every runtime ships this same shape, so {@code java-toy.jsonl} and {@code go-toy.jsonl} differ
- * only in the runtime key and the timestamps. That is what makes the fixture sweep meaningful: a
- * reader that can recover one runtime's account must recover every runtime's.
+ * <p>All six runtimes ship this same shape, so the six fixtures tell the same story. That is what
+ * makes the fixture sweep meaningful: a reader that can recover one runtime's account must recover
+ * every runtime's. It is CHECKED, not asserted — each suite renders the other runtimes' tapes and
+ * compares them character for character, so a scenario that drifts to suit one local test fails a
+ * build that is not its own.
  */
 final class Toy {
 
@@ -114,8 +116,13 @@ final class Toy {
         spanData.put("password", password); // redaction must reach INTO span data too
 
         return Recorder.span("enrol", spanData, () -> {
-            Map<String, Object> row = Recorder.span("load_corpus", () -> storeGet(user));
-            Recorder.note("corpus_read", Map.of("found", true));
+            // A chained read, not an effect: the canonical scenario puts a `db` event inside a
+            // span, which is the one enclosure a reader most wants to see and the one an
+            // fx-only span never demonstrates.
+            Snapshot row = Recorder.span("load_corpus", () -> Recorder.queryOne(
+                    "get", "collection(\"users\").document(\"" + user + "\")",
+                    () -> new Snapshot(user, true, Map.of("name", "Alice", "x", 3L))));
+            Recorder.note("corpus_read", Map.of("found", row.exists));
 
             Map<String, Object> regData = new LinkedHashMap<>();
             regData.put("password", password);
@@ -136,7 +143,7 @@ final class Toy {
 
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("user", user);
-            out.put("name", row.get("name"));
+            out.put("name", Json.asMap(row.data).get("name"));
             return out;
         });
     }

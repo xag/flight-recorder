@@ -198,18 +198,16 @@ final class RecordReplayTest extends TestCase
     /**
      * The whole point of freezing the format.
      *
-     * Compared against the runtimes shipping the current `enrol` scenario. The Python and .NET
-     * fixtures still carry an older variant of it — a chained read where these use an effect,
-     * and a different failure message — so their tapes render a different *story*, which is a
-     * fact about those fixtures and not about the format. Every checker still accepts every
-     * tape; that is the claim this repo actually makes, and `ValidateTest` is where it is made.
+     * All six runtimes record the same canonical scenario, so all six tapes must render
+     * character for character alike. This is the property the fixtures exist to make checkable:
+     * a reader that can recover one runtime's account recovers every runtime's.
      */
     public function testATapeFromAnotherRuntimeReadsIdentically(): void
     {
         $dir = $this->fixturesDir();
         $mine = Recording::load($dir . '/php-sem-toy.jsonl')->call(0)->renderSpans();
 
-        foreach (['java', 'go', 'node'] as $runtime) {
+        foreach (['python', 'node', 'dotnet', 'go', 'java'] as $runtime) {
             $theirs = Recording::load($dir . "/$runtime-sem-toy.jsonl")->call(0)->renderSpans();
             self::assertSame(
                 $theirs,

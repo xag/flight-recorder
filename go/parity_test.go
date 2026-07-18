@@ -134,7 +134,7 @@ func TestReaderRecoversAndRendersSpanTree(t *testing.T) {
 	}
 
 	rendered := cv.RenderSpans()
-	for _, line := range []string{"register  ERROR  (2 fx)", "load_corpus  ok  (1 fx)"} {
+	for _, line := range []string{"register  ERROR  (2 fx)", "load_corpus  ok  (1 db)"} {
 		if !strings.Contains(rendered, line) {
 			t.Errorf("render missing %q:\n%s", line, rendered)
 		}

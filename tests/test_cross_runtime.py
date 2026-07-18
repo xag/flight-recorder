@@ -46,7 +46,7 @@ def test_a_node_recorded_sem_tape_reads_through_python_spans():
     # Each span encloses exactly the evidence it claims — the property the whole event kind
     # exists for, recovered from a tape the other runtime wrote.
     load, _, register, _ = enrol["children"]
-    assert [e["k"] for e in load["events"]] == ["fx"]
+    assert [e["k"] for e in load["events"]] == ["db"]
     assert [e["fn"] for e in register["events"]] == ["store.set", "store.boom"]
 
 
@@ -54,4 +54,4 @@ def test_a_node_recorded_sem_tape_reads_through_python_spans():
 def test_the_node_tape_renders_top_down_like_a_python_one():
     rendered = fr.Recording.load(FIXTURE).call(0).render_spans()
     assert "register  ERROR  (2 fx)" in rendered
-    assert "load_corpus  ok  (1 fx)" in rendered
+    assert "load_corpus  ok  (1 db)" in rendered
