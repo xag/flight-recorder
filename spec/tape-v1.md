@@ -1,7 +1,7 @@
 # The tape — format v1 (FROZEN)
 
-This is the wire contract of a flight-recorder recording. It is **frozen**: the Python
-recorder emits it, the Node recorder emits it, and one analysis engine reads both.
+This is the wire contract of a flight-recorder recording. It is **frozen**: six recorders
+emit it — Python, Node, .NET, Go, Java and PHP — and one analysis engine reads them all.
 
 The point of freezing the format is that only *record* and
 *replay* must be native to a runtime — replay has to re-run the real code, so JavaScript
@@ -9,7 +9,7 @@ must be replayed by JavaScript. But **invariants and mutation consume the tape, 
 is only data.** Freeze the data and the analysis engine is written once, for every runtime.
 
 Conformance is not this document; conformance is `spec/fixtures/*.jsonl` plus the checker
-in `spec/validate.py` (mirrored by `js/src/spec/validate.js`). Every implementation must
+in `spec/validate.py` (mirrored in JS, .NET, Go, Java and PHP). Every implementation must
 validate every fixture, and every fixture must have been produced by an implementation.
 Prose drifts; fixtures do not.
 
@@ -40,7 +40,7 @@ forward-compatibility story, and it is why new event kinds do not need a version
 | `version` | `1` | the format version. A reader MUST refuse a version it does not implement. |
 | `started` | string | ISO-8601, **timezone-aware**. |
 | `constants` | object | `"module.NAME" → value`, the boundary's declared constants, jsonable. |
-| `python` \| `node` \| `dotnet` \| `go` \| `java` | string | the runtime version. Exactly one, naming the runtime that produced the tape. Adding a runtime name is additive (a new key readers ignore); the conformance checkers carry the recognized set. |
+| `python` \| `node` \| `dotnet` \| `go` \| `java` \| `php` | string | the runtime version. Exactly one, naming the runtime that produced the tape. Adding a runtime name is additive (a new key readers ignore); the conformance checkers carry the recognized set. |
 
 Additional keys may be added by the boundary (`header_extras`) and MUST be preserved by a
 reader that rewrites the tape.

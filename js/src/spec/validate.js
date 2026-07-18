@@ -285,9 +285,9 @@ function validateLine(obj, i, out, { first }) {
     if (!isPlainObject(obj.constants)) out.push(`line ${i}: session.constants must be an object`);
     else checkValue(obj.constants, `line ${i}.constants`, out);
 
-    const runtimes = ['python', 'node', 'dotnet', 'go', 'java'].filter((k) => k in obj);
+    const runtimes = ['python', 'node', 'dotnet', 'go', 'java', 'php'].filter((k) => k in obj);
     if (runtimes.length !== 1) {
-      out.push(`line ${i}: session must name exactly one runtime (python|node|dotnet|go|java), got [${runtimes}]`);
+      out.push(`line ${i}: session must name exactly one runtime (python|node|dotnet|go|java|php), got [${runtimes}]`);
     }
     return;
   }

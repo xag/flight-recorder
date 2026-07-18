@@ -1,6 +1,6 @@
 """The docs ledger — the documentation architecture as data a check can go red on.
 
-flight-recorder ships one library in five runtimes, and its docs have exactly one failure
+flight-recorder ships one library in six runtimes, and its docs have exactly one failure
 mode worth a rule: they drift, and they play favourites. The root README was a Python tutorial
 (it doubled as the PyPI page), the guide is bilingual-turned-trilingual, and adding .NET meant
 editing the guide and three READMEs at once. So two rules, recorded here and — this is the point
@@ -32,13 +32,17 @@ from quern import Node, Quantity, Quern
 
 _ROOT = Path(__file__).resolve().parents[1]
 
-# Directories that are not source: vendored deps, virtualenvs, build output.
+# Directories that are not source: vendored deps, virtualenvs, build output. `vendor` and
+# `target` are Composer's and Maven's; both fill with third-party READMEs full of code fences,
+# and a gate that read them would go red over documentation nobody here wrote and nobody here
+# can fix.
 _SKIP = {".git", "node_modules", ".venv", "bin", "obj", ".dotnet", "dist",
-         "__pycache__", ".pytest_cache"}
+         "__pycache__", ".pytest_cache", "vendor", "target"}
 
 # The runtimes flight-recorder ships, and the guide tab each must have. A runtime that ships
 # without a tab here is a privileged-language violation by omission.
-_RUNTIME_TABS = {"Python": "py", "Node": "js", ".NET": "cs", "Go": "go", "Java": "java"}
+_RUNTIME_TABS = {"Python": "py", "Node": "js", ".NET": "cs", "Go": "go", "Java": "java",
+                 "PHP": "php"}
 
 _GUIDE = _ROOT / "docs" / "index.html"
 _ROOT_README = _ROOT / "README.md"
@@ -69,7 +73,7 @@ def build() -> Quern:
     quern = lib.effective(quern)
     quern.root.children = [_DECISION, _no_privileged_language(), _no_doc_duplication(),
                            _PARITY_DECISION, _feature_parity(), _JAVA_DECISION,
-                           _PYPI_NAME_DECISION]
+                           _PYPI_NAME_DECISION, _PHP_DECISION]
     return quern
 
 
@@ -186,12 +190,12 @@ def _no_doc_duplication() -> Node:
     )
 
 
-# --- feature parity: the five runtimes are one library -----------------------------------
+# --- feature parity: the six runtimes are one library -----------------------------------
 
 _PARITY_DECISION = Node(
     id="feature-parity",
     kind="decision",
-    name="Every runtime ships every feature. The five implementations are one library, not a lead "
+    name="Every runtime ships every feature. The six implementations are one library, not a lead "
          "implementation with ports trailing it: the guide shows the same feature set in all tabs, "
          "no badge restricts a feature to some languages, and no 'not yet' note stands in for a "
          "feature a runtime is missing.",
@@ -206,7 +210,7 @@ _PARITY_DECISION = Node(
             "a badge that names only some runtimes, or a 'not yet' note, IS a feature that has not "
             "reached parity, and it goes red until the feature lands in every runtime.",
         "consequence":
-            "A feature is not shipped until it is shipped in all five runtimes; the guide then "
+            "A feature is not shipped until it is shipped in all six runtimes; the guide then "
             "gains a tab, never a badge. The disparity is the finding, not an accepted asterisk. "
             "This is the strictest gate in the ledger, and deliberately so — and it has now been "
             "paid once, which is the evidence it works. Variable-level tracing was the hard case: "
@@ -216,8 +220,9 @@ _PARITY_DECISION = Node(
             "of the module in Go — because the gate refused the footnote long enough for someone "
             "to look for the third option. A gap documented honestly would have shipped the "
             "asterisk and never found it. Java later took the same road a third time, with javac's "
-            "own com.sun.source, which is now three runtimes the 'it needs a debugger' reading was "
-            "wrong about. "
+            "own com.sun.source, and PHP a fourth with token_get_all, which is now FOUR runtimes the "
+            "'it needs a debugger' reading was wrong about — at which point it is not a lucky run of "
+            "third options, it is the answer. "
             "AND THE GATE ITSELF WAS CAUGHT: the note claiming .NET lacked tracing sat in the guide "
             "through the whole of the Go port, reporting green, because the gap-phrase pattern was "
             "written [^<.] and so could never match the one runtime name containing a dot. A guard "
@@ -446,5 +451,110 @@ _PYPI_NAME_DECISION = Node(
                       "github.com/xag/flight-recorder, and is called the flight recorder in every "
                       "document that describes the practice — a rename to dodge one registry would "
                       "cost the identity everywhere to buy consistency in one place."}),
+    ],
+)
+
+
+# --- the PHP port: what the language forced, and what it made free -----------------------
+
+_PHP_DECISION = Node(
+    id="php-port-mechanisms",
+    kind="decision",
+    name="PHP reaches parity with a __call decorator at the boundary, the core JSON codec with "
+         "two of its defaults overridden, and variable-level tracing by rewriting sources with "
+         "PHP's own tokenizer and including the copy in-process",
+    payload={
+        "rationale":
+            "Three forced choices, and one that only PHP has to make. "
+            "(1) THE BOUNDARY. A PHP function name is not a rebindable binding — you cannot point "
+            "file_get_contents somewhere else without runkit or uopz, which are extensions, and a "
+            "library that needs an extension in someone else's php.ini has dictated their "
+            "deployment. So the boundary is the OBJECT, as it is in Node, .NET, Go and Java. PHP "
+            "then makes this the cheapest of the six: __call intercepts undefined methods at run "
+            "time, so the decorator needs no interface (Java's reflect.Proxy does, .NET's "
+            "DispatchProxy does) and no code generation. "
+            "(2) JSON. PHP ships a codec, so unlike Java and .NET there was none to hand-roll — "
+            "but both disciplines those ports implemented by hand still had to be CHOSEN, because "
+            "PHP's defaults get both wrong. Integer-vs-float: json_encode(1.0) is '1' by default, "
+            "which would let a seq that had become a float sail past a checker built to reject it; "
+            "JSON_PRESERVE_ZERO_FRACTION fixes it. Float round-tripping: serialize_precision = -1 "
+            "gives the shortest exactly-reversible form, which is what makes a PHP tape compare "
+            "equal to the one another runtime wrote for the same value — and because that is an "
+            "ini setting a host can change, the suite ASSERTS it rather than assuming it. "
+            "(3) TRACING, the hard one everywhere. Xdebug was rejected for the reason above: an "
+            "extension is not a library's to require. declare(ticks=1) with register_tick_function "
+            "needs nothing installed, but a tick handler cannot read the locals of the frame that "
+            "triggered it, so it can say a statement ran and nothing about what it did — a "
+            "profiler, not a trace. That leaves rewriting, which is where .NET, Go and Java "
+            "already are, and PHP ships the parts: token_get_all is the engine's own lexer, in "
+            "core, so the parse guiding the splice is the same one PHP performs. The copy is "
+            "included in-process, sharing this package and therefore the same boundary and the "
+            "same tape. "
+            "(4) THE ONE ONLY PHP FACES: an empty array. PHP has a single array type that is both "
+            "sequence and map, so an empty one is genuinely ambiguous where it is not in any other "
+            "runtime — and the tape distinguishes them (fx.kwargs must be an object, fx.args an "
+            "array). The encoder follows PHP's own convention: array_is_list of an empty array is "
+            "true, so it writes as a JSON array. Where the tape REQUIRES an object the recorder "
+            "passes an empty stdClass, and a caller who needs an empty map inside a value does the "
+            "same. Guessing 'map' was the other choice and it is worse: it would silently turn "
+            "every empty list an app returns into an object.",
+        "consequence":
+            "The costs, stated plainly. The __call decorator does not satisfy a type declaration "
+            "for the class it wraps — there is no interface being implemented — so code that "
+            "declares a parameter type needs unwrap(); Java's proxy has no such gap because it IS "
+            "the interface. A traced class must not have been loaded from its original source "
+            "first, since PHP has no class-loader isolation to hide a second definition behind; "
+            "the tracer says so plainly rather than letting a redeclaration fatal take the process "
+            "down, and the suite keeps its subject in a namespace no PSR-4 rule maps. A sink runs "
+            "on the request that triggered it with no background thread to hide the latency in, "
+            "which is weaker than Python's queue or Node's waitUntil and is documented at the "
+            "point of use. "
+            "AND ONE PLACE PHP IS SIMPLY EASIER, worth recording because the ledger has spent four "
+            "runtimes' worth of words on the opposite: get_defined_vars() returns every local in "
+            "scope, so the rewriter never names a variable and never reasons about whether one is "
+            "assigned. The definite-assignment problem that .NET solves by asking Roslyn's "
+            "AnalyzeDataFlow, and that Java and Go approximate syntactically and conservatively, "
+            "has no counterpart here at all.",
+    },
+    children=[
+        Node(id="alt-php-xdebug-tracing", kind="alternative",
+             name="Drive variable tracing through Xdebug, which already has per-line hooks and "
+                  "full access to locals",
+             payload={"why":
+                      "It is the obvious answer and it is the -javaagent mistake in another "
+                      "costume: Xdebug is a compiled extension the host must install and enable in "
+                      "php.ini. A library cannot require that of the application it was supposed "
+                      "to be observing quietly, and a tracer nobody can switch on is not a tracer. "
+                      "It also hands back a debugger's rendering of a value, when the whole point "
+                      "of trace version 2 is that a value is data an invariant can do arithmetic "
+                      "on."}),
+        Node(id="alt-php-tick-functions", kind="alternative",
+             name="Use declare(ticks=1) with register_tick_function for a per-statement hook",
+             payload={"why":
+                      "Needs no extension, and that is its only virtue. A tick handler runs in its "
+                      "own frame and PHP exposes no way to read the locals of the frame that "
+                      "triggered it, so it can report that a statement executed and nothing about "
+                      "what changed. It also requires a declare() in every traced file, which is "
+                      "an edit to the user's source either way — so it costs what rewriting costs "
+                      "and buys a profiler instead of a trace."}),
+        Node(id="alt-php-parser-dependency", kind="alternative",
+             name="Rewrite with nikic/php-parser, a real AST rather than a token stream",
+             payload={"why":
+                      "A better parser, and a runtime dependency. A recorder is a thing you "
+                      "install into someone else's app, and every package it drags in is a version "
+                      "conflict it can cause in a codebase it was meant to observe silently — the "
+                      "same reason Java hand-rolled a JSON codec rather than taking Jackson. "
+                      "token_get_all is in core, is the engine's own lexer, and the rewriter needs "
+                      "statement boundaries and the function bodies containing them, which is a "
+                      "token-stream question rather than an AST one."}),
+        Node(id="alt-php-empty-array-is-map", kind="alternative",
+             name="Encode an empty PHP array as an object rather than an array, since object "
+                  "positions are the ones that most often turn up empty",
+             payload={"why":
+                      "It would fix the recorder's own empty-kwargs case and break every "
+                      "application's empty-list case, silently, in a value the app returned. The "
+                      "recorder knows which of ITS positions are objects and can say so with an "
+                      "explicit stdClass; it cannot know that about a value it was handed. Guess "
+                      "where you have knowledge, not where the caller does."}),
     ],
 )

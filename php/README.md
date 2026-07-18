@@ -1,6 +1,6 @@
-# flight-recorder (Go)
+# flight-recorder (PHP)
 
-The Go implementation of **flight-recorder** — record an app's tool calls at their
+The PHP implementation of **flight-recorder** — record an app's tool calls at their
 nondeterminism boundary, replay them deterministically against the real code.
 
 One guide covers install and every feature, in all six languages:

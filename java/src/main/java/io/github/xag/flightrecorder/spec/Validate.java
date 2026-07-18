@@ -50,7 +50,7 @@ public final class Validate {
             new HashSet<>(Arrays.asList("begin", "end", "point"));
     // Adding a runtime is an additive change (the spec's own "add a key, no version bump" rule):
     // existing tapes still validate, and a further recorder's tapes now validate too.
-    private static final String[] RUNTIMES = {"python", "node", "dotnet", "go", "java"};
+    private static final String[] RUNTIMES = {"python", "node", "dotnet", "go", "java", "php"};
 
     // Deliberately a regex rather than java.time: the reference checker accepts whatever Python's
     // datetime.fromisoformat accepts, which is a shape, not one of java.time's named formats.
@@ -430,7 +430,7 @@ public final class Validate {
             for (String rk : RUNTIMES) if (has(obj, rk)) runtimes.add(rk);
             if (runtimes.size() != 1) {
                 out.add("line " + i + ": session must name exactly one runtime "
-                        + "(python|node|dotnet|go|java), got " + runtimes);
+                        + "(python|node|dotnet|go|java|php), got " + runtimes);
             }
             return;
         }
