@@ -29,9 +29,9 @@ The recording format is a frozen, documented wire contract: [`spec/tape-v1.md`](
 **Implementations are welcome** — only *record* and *replay* must be native to a runtime;
 everything that *analyzes* a tape works on any tape. Conformance is not the prose: it is
 [`spec/fixtures/`](spec/fixtures/) plus the checker in [`spec/validate.py`](spec/validate.py)
-(mirrored in JS, .NET, and Go). Every implementation must validate every fixture, and every fixture
-must have been produced by an implementation. This repo ships four implementations — Python,
-Node, .NET, and Go — reading and writing the same tapes.
+(mirrored in JS, .NET, Go, and Java). Every implementation must validate every fixture, and every
+fixture must have been produced by an implementation. This repo ships five implementations —
+Python, Node, .NET, Go, and Java — reading and writing the same tapes.
 
 ## Why
 

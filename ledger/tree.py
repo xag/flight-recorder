@@ -1,6 +1,6 @@
 """The docs ledger — the documentation architecture as data a check can go red on.
 
-flight-recorder ships one library in four runtimes, and its docs have exactly one failure
+flight-recorder ships one library in five runtimes, and its docs have exactly one failure
 mode worth a rule: they drift, and they play favourites. The root README was a Python tutorial
 (it doubled as the PyPI page), the guide is bilingual-turned-trilingual, and adding .NET meant
 editing the guide and three READMEs at once. So two rules, recorded here and — this is the point
@@ -38,7 +38,7 @@ _SKIP = {".git", "node_modules", ".venv", "bin", "obj", ".dotnet", "dist",
 
 # The runtimes flight-recorder ships, and the guide tab each must have. A runtime that ships
 # without a tab here is a privileged-language violation by omission.
-_RUNTIME_TABS = {"Python": "py", "Node": "js", ".NET": "cs", "Go": "go"}
+_RUNTIME_TABS = {"Python": "py", "Node": "js", ".NET": "cs", "Go": "go", "Java": "java"}
 
 _GUIDE = _ROOT / "docs" / "index.html"
 _ROOT_README = _ROOT / "README.md"
@@ -68,7 +68,7 @@ def build() -> Quern:
     quern = Quern(packages=[next(r for r in refs if r.name == "ledger")])
     quern = lib.effective(quern)
     quern.root.children = [_DECISION, _no_privileged_language(), _no_doc_duplication(),
-                           _PARITY_DECISION, _feature_parity()]
+                           _PARITY_DECISION, _feature_parity(), _JAVA_DECISION]
     return quern
 
 
@@ -185,12 +185,12 @@ def _no_doc_duplication() -> Node:
     )
 
 
-# --- feature parity: the four runtimes are one library -----------------------------------
+# --- feature parity: the five runtimes are one library -----------------------------------
 
 _PARITY_DECISION = Node(
     id="feature-parity",
     kind="decision",
-    name="Every runtime ships every feature. The four implementations are one library, not a lead "
+    name="Every runtime ships every feature. The five implementations are one library, not a lead "
          "implementation with ports trailing it: the guide shows the same feature set in all tabs, "
          "no badge restricts a feature to some languages, and no 'not yet' note stands in for a "
          "feature a runtime is missing.",
@@ -205,7 +205,7 @@ _PARITY_DECISION = Node(
             "a badge that names only some runtimes, or a 'not yet' note, IS a feature that has not "
             "reached parity, and it goes red until the feature lands in every runtime.",
         "consequence":
-            "A feature is not shipped until it is shipped in all four runtimes; the guide then "
+            "A feature is not shipped until it is shipped in all five runtimes; the guide then "
             "gains a tab, never a badge. The disparity is the finding, not an accepted asterisk. "
             "This is the strictest gate in the ledger, and deliberately so — and it has now been "
             "paid once, which is the evidence it works. Variable-level tracing was the hard case: "
@@ -283,3 +283,95 @@ def _feature_parity() -> Node:
         links={"admits": ["all-runtimes-same-features"]},
         payload={"note": q.source},
     )
+
+
+# --- the Java port: three forced choices, and what each cost -----------------------------
+
+_JAVA_DECISION = Node(
+    id="java-port-mechanisms",
+    kind="decision",
+    name="Java reaches parity with a reflective proxy at the boundary, a hand-rolled JSON codec, "
+         "and variable-level tracing by rewriting sources with javac's own parser and compiling "
+         "them to memory in-process",
+    payload={
+        "rationale":
+            "Three mechanisms had to be chosen, and each was forced by the language rather than "
+            "preferred. (1) THE BOUNDARY. Java can patch a loaded class, but only through a "
+            "-javaagent — a launch flag, and a library has no business dictating the command line "
+            "that starts someone's app. So the boundary is the object the app holds: "
+            "java.lang.reflect.Proxy over an interface, as Node and .NET already do. (2) JSON. "
+            "Java ships none in the platform, and this library ships no dependencies, because a "
+            "recorder is installed into someone else's app and every jar it drags in is a version "
+            "conflict it can cause in a codebase it was supposed to observe silently. .NET made "
+            "the same call in Json.cs even though it had System.Text.Json, because the thing "
+            "actually needed is not a general parser: it is a codec with two disciplines the "
+            "general ones get wrong — integer-vs-float preserved on the way in (so the checker can "
+            "reject `seq: 1.0`), and comparison by canonical form (so 30 and 30.0 compare equal "
+            "across the file/live-object divide). (3) TRACING, the hard one. The JVM exposes no "
+            "per-line hook, so the choice was JDI, a bytecode agent, or a source rewriter. JDI was "
+            "rejected for the reasons Go rejected Delve: an out-of-process debug agent, a socket "
+            "round trip per variable per line, and values arriving as the DEBUGGER's renderings "
+            "when trace version 2 exists precisely so values are data an invariant can do "
+            "arithmetic on. A bytecode agent was rejected because it needs -javaagent (so a test "
+            "cannot start a traced run from inside itself) and reads locals by slot, making a "
+            "variable's NAME depend on the consumer having compiled with -g. What is left is "
+            ".NET's road, and the JDK happens to ship the parts: com.sun.source is javac's own "
+            "parser and position table, exported and supported, so the rewriter is stdlib-only and "
+            "the traced copy compiles and runs IN PROCESS — sharing this jar, and therefore "
+            "sharing the hook statics and the tape.",
+        "consequence":
+            "Java is the second runtime to trace in-process rather than out (with .NET), and the "
+            "first to do it with no third-party compiler library. The costs, stated plainly: "
+            "tracing needs a JDK at run time, not a JRE — a JRE-only deployment loses Tracer and "
+            "nothing else. The ambient rides on an InheritableThreadLocal, which does NOT follow "
+            "work handed to a pooled executor, so a fan-out needs Recorder.propagate; this is "
+            "weaker than .NET's AsyncLocal and is documented at the point of use rather than "
+            "hidden, because the failure mode is silent under-recording. And definite assignment "
+            "had to be approximated: .NET asks Roslyn's own AnalyzeDataFlow, javac exposes no "
+            "equivalent, so the rewriter tracks scope syntactically as Go's does and observes a "
+            "local only from the statement after an initialised declaration. Conservative in the "
+            "safe direction — it may miss a variable; it can never emit one javac would reject, "
+            "and a traced copy that does not compile is not a degraded trace but no trace at all.",
+    },
+    children=[
+        Node(id="alt-java-jdi-tracing", kind="alternative",
+             name="Drive variable tracing through JDI/JDWP, the debugger protocol",
+             payload={"why":
+                      "The structural analogue of what Node does over the V8 Inspector, and the "
+                      "same trap Go found with Delve: it needs the traced code launched under a "
+                      "debug agent in a separate process, costs a round trip per variable per "
+                      "line, and hands back the debugger's own truncated strings — which would "
+                      "silently demote trace version 2 back to version 1's reprs, the exact "
+                      "regression both readers now refuse outright."}),
+        Node(id="alt-java-bytecode-agent", kind="alternative",
+             name="Instrument bytecode with a java.lang.instrument agent and ASM",
+             payload={"why":
+                      "Genuinely the most powerful option, and it would sidestep definite "
+                      "assignment entirely since the local variable table carries each slot's live "
+                      "range. Rejected on two counts a library cannot pay: it requires -javaagent "
+                      "on the launch command, so a test cannot begin a traced run once it is "
+                      "already running; and it reads locals by slot, so a variable's name survives "
+                      "only if the consumer compiled with -g — making the trace's usefulness "
+                      "depend on someone else's build flags."}),
+        Node(id="alt-java-json-dependency", kind="alternative",
+             name="Depend on Jackson or Gson instead of hand-rolling the codec",
+             payload={"why":
+                      "Less code, and the wrong trade for this library. A recorder is installed "
+                      "into an app that did not ask for it; Jackson is among the most "
+                      "version-conflicted jars on the JVM, so the instrument would become a "
+                      "cause of the breakages it exists to explain. It also would not give the "
+                      "two behaviours actually needed — an integral/fractional distinction the "
+                      "checker can reject on, and canonical comparison — both of which would have "
+                      "to be built on top regardless."}),
+        Node(id="alt-java-explicit-context", kind="alternative",
+             name="Thread an explicit context parameter through every boundary call, as Go does",
+             payload={"why":
+                      "Honest across executors, and what Go had to do because it has no ambient at "
+                      "all. Rejected for Java because Java DOES have one, and forcing a context "
+                      "parameter through every signature is a change to the app's own API that the "
+                      "recorder has no right to demand — the library's promise is that a recorded "
+                      "run looks like an unrecorded one. The residual risk (a pooled executor "
+                      "silently dropping events) is met with Recorder.propagate and a note in the "
+                      "guide, not with a redesign of the caller's code."}),
+    ],
+)

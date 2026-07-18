@@ -292,9 +292,9 @@ def validate_line(obj: Any, i: int, out: list, *, first: bool) -> None:
             out.append(f"line {i}: session.constants must be an object")
         else:
             _check_value(obj["constants"], f"line {i}.constants", out)
-        runtimes = [k for k in ("python", "node", "dotnet", "go") if k in obj]
+        runtimes = [k for k in ("python", "node", "dotnet", "go", "java") if k in obj]
         if len(runtimes) != 1:
-            out.append(f"line {i}: session must name exactly one runtime (python|node|dotnet|go), got {runtimes}")
+            out.append(f"line {i}: session must name exactly one runtime (python|node|dotnet|go|java), got {runtimes}")
         return
 
     if ev == "call":

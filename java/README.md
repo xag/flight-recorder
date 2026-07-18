@@ -1,6 +1,6 @@
-# flight-recorder (Go)
+# flight-recorder (Java)
 
-The Go implementation of **flight-recorder** — record an app's tool calls at their
+The Java implementation of **flight-recorder** — record an app's tool calls at their
 nondeterminism boundary, replay them deterministically against the real code.
 
 One guide covers install and every feature, in all five languages:

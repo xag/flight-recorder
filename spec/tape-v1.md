@@ -40,7 +40,7 @@ forward-compatibility story, and it is why new event kinds do not need a version
 | `version` | `1` | the format version. A reader MUST refuse a version it does not implement. |
 | `started` | string | ISO-8601, **timezone-aware**. |
 | `constants` | object | `"module.NAME" → value`, the boundary's declared constants, jsonable. |
-| `python` \| `node` \| `dotnet` \| `go` | string | the runtime version. Exactly one, naming the runtime that produced the tape. Adding a runtime name is additive (a new key readers ignore); the conformance checkers carry the recognized set. |
+| `python` \| `node` \| `dotnet` \| `go` \| `java` | string | the runtime version. Exactly one, naming the runtime that produced the tape. Adding a runtime name is additive (a new key readers ignore); the conformance checkers carry the recognized set. |
 
 Additional keys may be added by the boundary (`header_extras`) and MUST be preserved by a
 reader that rewrites the tape.

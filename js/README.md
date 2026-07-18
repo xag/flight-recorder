@@ -3,7 +3,7 @@
 The Node implementation of **flight-recorder** — record an app's tool calls at their
 nondeterminism boundary, replay them deterministically against the real code.
 
-One guide covers install and every feature, in all four languages:
+One guide covers install and every feature, in all five languages:
 
 **→ [xag.github.io/flight-recorder](https://xag.github.io/flight-recorder/)**
 

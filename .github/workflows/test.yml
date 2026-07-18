@@ -74,3 +74,26 @@ jobs:
           go-version: "1.22"
       - run: go vet ./...
       - run: go test ./...
+
+  # The Java port: build, test, and confirm the recorder emits conformant tapes. The fixture
+  # generator is env-gated (FR_REGEN_FIXTURES), so `mvn test` never mutates the committed
+  # java-*.jsonl; the ungated scenario test records to a temp dir and validates there instead. As
+  # with the others, the Python and Node conformance suites glob spec/fixtures/ and validate the
+  # checked-in java-*.jsonl on their own — so a fork of the tape between runtimes fails a build
+  # that is not this one, which is the whole point of the arrangement.
+  #
+  # A JDK, not a JRE: variable-level tracing compiles an instrumented copy of the sources in
+  # process, so it needs javac and com.sun.source at run time.
+  java:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: java
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - run: mvn -B --no-transfer-progress test
