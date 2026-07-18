@@ -805,7 +805,7 @@ call.MarkProbe()                       // a mutated answer changes every downstr
 report, _ := fr.CheckInvariantsCall(call, resolve, true, invariants)
 rec.Save("tests/recordings/empty-corpus.jsonl")   // pin it: a probe suite member</code></pre>
 
-<h2 id="invariants">Invariants <span class="badge">Python · .NET · Go</span></h2>
+<h2 id="invariants">Invariants <span class="badge">Python · Node · .NET · Go</span></h2>
 
 <p>An invariant is a claim about <strong>every</strong> execution, written once and checked against any
 recording — so it can condemn the very first observation of a bug, which no recording can. A bug
@@ -819,6 +819,20 @@ def _(t: fr.Trajectory):
 def _(t: fr.Trajectory):
     for obs in t.trace.values("level"):
         assert obs.value &gt; 0, f"level={obs.value} at {obs.at}"</code></pre>
+
+<pre data-lang="js"><code>const noEmptyClaim = fr.invariant('never claims end-of-corpus while words remain', (t) =&gt; {
+  assert.ok(!(t.result.done &amp;&amp; t.result.corpus - t.result.deck &gt; 0));
+});
+
+const levelNeverEmpties = fr.invariant('level never excludes the whole corpus', (t) =&gt; {
+  for (const obs of t.trace.values('level')) assert.ok(obs.value &gt; 0, `level=${obs.value} at ${obs.at}`);
+});
+
+const report = await fr.checkInvariants({
+  tape, fnName: 'deal', fn: deal, boundary,
+  trace: ['deck.js'],                  // the trace-driven form needs the files it may watch
+  invariants: [noEmptyClaim, levelNeverEmpties],
+});</code></pre>
 
 <pre data-lang="cs"><code>var noEmptyClaim = Invariants.Invariant("never claims end-of-corpus while words remain", v =&gt;
 {
@@ -849,9 +863,9 @@ claims the code made. The trace-driven form — asserting over an internal varia
 on variable-level tracing, which the .NET port does not have yet.</p>
 
 <div class="note">
-  <p>The engines are Python, .NET and Go — and because an invariant <strong>consumes the tape</strong>,
-  and the tape is shared, a recording made by <em>any</em> implementation can be checked against them.
-  (Node consumes the tape too; it just does not ship an invariant runner.)</p>
+  <p>Every runtime ships an engine — and because an invariant <strong>consumes the tape</strong>, and
+  the tape is shared, a recording made by <em>any</em> implementation can be checked against
+  <em>any</em> of them. A tape written by Go can be judged by a claim written in Node.</p>
 </div>
 
 <h2 id="sem">Semantic spans <span class="badge">Python · Node · .NET · Go</span></h2>
