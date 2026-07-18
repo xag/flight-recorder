@@ -580,7 +580,7 @@ _DISTRIBUTIONS = {
              "status": "published",   "version": "0.1.0"},
     "java": {"registry": "Maven Central", "id": "io.github.xag:flight-recorder",
              "status": "unpublished", "version": None},
-    "php":  {"registry": "Packagist",  "id": "xag/flight-recorder",
+    "php":  {"registry": "Packagist",  "id": "poietic/flight-recorder",
              "status": "unpublished", "version": None},
 }
 

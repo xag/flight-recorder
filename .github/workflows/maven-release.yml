@@ -1,0 +1,73 @@
+name: maven-release
+
+# Publishes the Java artifact to Maven Central through the Central Portal.
+#
+# This is the only runtime here that needs long-lived secrets. NuGet and npm both support
+# OIDC trusted publishing, so their workflows carry no credentials at all; Maven Central has
+# no equivalent, so a Portal user token and a GPG private key live in this repo's secrets:
+#
+#   CENTRAL_TOKEN_USERNAME / CENTRAL_TOKEN_PASSWORD  minted at central.sonatype.com/usertoken
+#   MAVEN_GPG_PRIVATE_KEY / MAVEN_GPG_PASSPHRASE     signing key AEFAD614...5D425E52
+#
+# Central rejects unsigned bundles, and it rejects bundles missing sources or javadoc — the
+# release profile in java/pom.xml supplies all three.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build, sign and verify the bundle without publishing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: java
+    steps:
+      - uses: actions/checkout@v4
+
+      # setup-java writes the settings.xml server entry for us, so the token never has to be
+      # templated into a file by hand. The id must match publishingServerId in the pom.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          server-id: central
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      - name: Test
+        run: mvn -B test
+
+      # Proves the bundle Central would receive: jar + sources + javadoc, each with a .asc
+      # signature. A dry run that stopped before signing would prove nothing about the part
+      # most likely to be misconfigured.
+      - name: Build and sign
+        run: mvn -B -P release verify
+        env:
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+
+      - name: Show what would be published
+        run: |
+          set -euo pipefail
+          ls -l target/*.jar target/*.asc
+          for f in target/*.asc; do
+            gpg --verify "$f" "${f%.asc}" 2>&1 | grep -E "Good signature|BAD" || true
+          done
+
+      - name: Publish to Maven Central
+        if: ${{ !inputs.dry_run }}
+        run: mvn -B -P release deploy -DskipTests
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}

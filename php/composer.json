@@ -1,5 +1,5 @@
 {
-  "name": "xag/flight-recorder",
+  "name": "poietic/flight-recorder",
   "description": "Record the answers your code got from the outside world while handling a request, and replay that exact request against the real code. A PHP implementation of the frozen tape-v1 wire format.",
   "type": "library",
   "license": "Apache-2.0",

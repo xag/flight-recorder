@@ -29,6 +29,7 @@
   <scm>
     <url>https://github.com/xag/flight-recorder</url>
     <connection>scm:git:https://github.com/xag/flight-recorder.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/xag/flight-recorder.git</developerConnection>
   </scm>
 
   <properties>
@@ -63,4 +64,86 @@
       </plugin>
     </plugins>
   </build>
+
+  <!-- Everything Maven Central demands beyond a jar, kept in a profile so it runs at release
+       time and never during `mvn test`. Central rejects a bundle that is missing sources, or
+       javadoc, or a signature — unlike NuGet and npm, it has no OIDC trusted publishing, so
+       this is the one runtime whose release needs real long-lived secrets. -->
+  <profiles>
+    <profile>
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-source-plugin</artifactId>
+            <version>3.4.0</version>
+            <executions>
+              <execution>
+                <id>attach-sources</id>
+                <goals><goal>jar-no-fork</goal></goals>
+              </execution>
+            </executions>
+          </plugin>
+
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-javadoc-plugin</artifactId>
+            <version>3.12.0</version>
+            <configuration>
+              <!-- Central requires a javadoc jar; it does not require the javadoc to be
+                   pedantically complete. doclint would fail the release over a missing @param
+                   in code that compiles and passes its tests — a documentation lint has no
+                   business blocking a publish. -->
+              <doclint>none</doclint>
+              <quiet>true</quiet>
+            </configuration>
+            <executions>
+              <execution>
+                <id>attach-javadocs</id>
+                <goals><goal>jar</goal></goals>
+              </execution>
+            </executions>
+          </plugin>
+
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>3.2.8</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals><goal>sign</goal></goals>
+                <configuration>
+                  <!-- The passphrase arrives as an env var, so gpg must not try to open a
+                       pinentry dialog on a runner with no terminal. -->
+                  <gpgArguments>
+                    <arg>--pinentry-mode</arg>
+                    <arg>loopback</arg>
+                  </gpgArguments>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+
+          <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>0.11.0</version>
+            <extensions>true</extensions>
+            <configuration>
+              <publishingServerId>central</publishingServerId>
+              <!-- Uploaded and released in one step. The alternative is a staged deployment
+                   that waits in the Portal for a human to click Publish; this repo's other
+                   five runtimes publish on a trigger, and a release that needs a second
+                   manual act is a release that gets half-done. -->
+              <autoPublish>true</autoPublish>
+              <waitUntil>published</waitUntil>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>
