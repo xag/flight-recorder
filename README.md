@@ -23,14 +23,6 @@ The full walkthrough — declare the boundary, record, replay, edit the tape to 
 never happened, invariants, semantic spans — in Python, Node and .NET, one tab away.
 [Slides — Testing as Simulation](https://xag.github.io/flight-recorder/slides.html).
 
-## Install
-
-Install from your runtime's package manager — `pip install flight-recorder` (Python, PyPI),
-`npm install @xag/flight-recorder` (Node, npm), `dotnet add package flight-recorder` (.NET,
-NuGet), or `go get github.com/xag/flight-recorder/go` (Go). There is no per-runtime tutorial to
-drift: the [guide](https://xag.github.io/flight-recorder/) is the documentation — one walkthrough
-across all four runtimes.
-
 ## The tape is a standard
 
 The recording format is a frozen, documented wire contract: [`spec/tape-v1.md`](spec/tape-v1.md).
