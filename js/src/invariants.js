@@ -26,10 +26,12 @@ import { fromJsonable } from './serial.js';
  * `null`, so guard those with `t.error`.
  */
 export class Trajectory {
-  constructor({ result = null, error = null, kwargs = {}, events = [], sems = [], trace = null }) {
+  constructor({ result = null, error = null, kwargs = {}, events = [], sems = [], trace = null, writes = [] }) {
     this.result = result;
     this.error = error;
     this.kwargs = kwargs;
+    /** What the replayed code WOULD have written — writes are compared, never executed. */
+    this.writes = writes;
     /** The recorded boundary events — what the world answered, in order. */
     this.events = events;
     /** The claims the replayed code made, in order: `[name, phase]` pairs. */
@@ -97,6 +99,7 @@ export async function checkInvariants({
     events: target.events ?? [],
     sems: report.semsReplayed ?? [],
     trace: report.trace ?? null,
+    writes: report.writes ?? [],
   });
 
   const violations = [];

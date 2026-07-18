@@ -79,7 +79,14 @@ namespace FlightRecorder.Tests
         [Fact]
         public void SelectingAMissingEventFailsHelpfully()
         {
-            var rec = Recording.Load(RecordGreet());
+            // A call that genuinely holds no chained read. `greet` records one as part of the
+            // canonical scenario, so asking IT for a missing read would prove nothing.
+            var b = TestSupport.ToyBoundary();
+            var path = TestSupport.RecordToTape(b, store =>
+            {
+                try { ToyTools.Explode(store, "ghost"); } catch (ToyError) { /* recorded, then re-raised */ }
+            });
+            var rec = Recording.Load(path);
             var ex = Assert.Throws<System.Collections.Generic.KeyNotFoundException>(() => rec.Call(0).Read());
             Assert.Contains("no read", ex.Message);
         }

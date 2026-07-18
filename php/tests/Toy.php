@@ -12,9 +12,11 @@ use Xag\FlightRecorder\Snapshot;
 /**
  * The shared scenario.
  *
- * Every runtime ships this same shape, so `php-toy.jsonl` and `go-toy.jsonl` differ only in the
- * runtime key and the timestamps. That is what makes the fixture sweep meaningful: a reader that
- * can recover one runtime's account must recover every runtime's.
+ * All six runtimes ship this same shape, so the six fixtures tell the same story. That is what
+ * makes the fixture sweep meaningful: a reader that can recover one runtime's account must recover
+ * every runtime's. It is CHECKED, not asserted — `RecordReplayTest` renders the other five
+ * runtimes' tapes and compares them character for character, so a scenario that drifts to suit one
+ * local test fails a build that is not its own.
  */
 final class Toy
 {
@@ -80,8 +82,15 @@ final class Toy
             'enrol',
             ['user' => $user, 'started' => $started, 'password' => $kwargs['password'] ?? null],
             static function () use ($user): array {
-                $row = Recorder::span('load_corpus', [], static fn (): array => self::storeGet($user));
-                Recorder::note('corpus_read', ['found' => true]);
+                // A chained read, not an effect: the canonical scenario puts a `db` event
+                // inside a span, which is the one enclosure a reader most wants to see and
+                // the one an `fx`-only span never demonstrates.
+                $snap = Recorder::span('load_corpus', [], static fn (): Snapshot => Recorder::queryOne(
+                    'get',
+                    "collection(\"users\").document(\"$user\")",
+                    static fn (): Snapshot => new Snapshot($user, true, ['name' => 'Alice', 'x' => 3])
+                ));
+                Recorder::note('corpus_read', ['found' => $snap->exists]);
 
                 try {
                     Recorder::span('register', ['password' => 'hunter2'], static function () use ($user): void {
@@ -98,7 +107,7 @@ final class Toy
                     Recorder::note('registration_failed', ['why' => $e->getMessage()]);
                 }
 
-                return ['user' => $user, 'name' => $row['name']];
+                return ['user' => $user, 'name' => $snap->get('name')];
             }
         );
     }

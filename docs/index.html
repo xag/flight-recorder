@@ -1192,6 +1192,13 @@ call to the thing that charges cards beneath it, is a claim a reader can now ref
     holder = db.collection("members").document(who).get()
     fr.note("skipped", reason="absent")          # a moment worth marking, no span</code></pre>
 
+<pre data-lang="js"><code>await fr.span('assign_turn', { chore }, async () =&gt; {   // every boundary event inside the span
+  const holder = await store.read(`member:${who}`);
+  fr.note('skipped', { reason: 'absent' });             // a moment worth marking, no span
+});
+
+const n = fr.span('compute', () =&gt; heavy());            // data is optional; sync or async</code></pre>
+
 <pre data-lang="cs"><code>Recorder.Span("assign_turn", new { chore }, () =&gt;    // every boundary event inside is inside the span
 {
     var holder = store.Get($"member:{who}");
@@ -1289,8 +1296,8 @@ in.</p>
 <div class="table-wrap">
 <table>
   <tr><th></th><th>Python</th><th>Node</th><th>.NET</th><th>Go</th><th>Java</th><th>PHP</th></tr>
-  <tr><td>Boundary</td><td>name module functions; patch in place</td><td>wrap what the app <em>holds</em> — namespaces are immutable</td><td>wrap what the app <em>holds</em> — a <code>DispatchProxy</code>; bindings can't be swapped</td><td>explicit primitives on a <code>context.Context</code> — no patch, no proxy</td><td>wrap what the app <em>holds</em> — a <code>java.lang.reflect.Proxy</code>; patching would cost a <code>-javaagent</code></td><td>wrap what the app <em>holds</em> — a <code>__call</code> decorator, so no interface and no code generation</td></tr>
-  <tr><td>Randomness</td><td><code>sample</code> — the <em>positions</em> drawn, so a mutated population still replays</td><td><code>bytes</code>/<code>float</code>/<code>int</code> — the draw <em>is</em> the value</td><td>a handle covering every shape — <code>sample</code> and <code>bytes</code>/<code>int</code>/<code>float</code></td><td>primitives for every shape — the <em>positions</em>, and <code>bytes</code>/<code>float</code>/<code>int</code></td><td>primitives for every shape — the <em>positions</em>, and <code>bytes</code>/<code>float</code>/<code>int</code></td><td>primitives for every shape, over <code>random_int</code>/<code>random_bytes</code></td></tr>
+  <tr><td>Boundary</td><td>name module functions; patch in place</td><td>wrap what the app <em>holds</em> — namespaces are immutable; chained clients go through <code>query</code>/<code>exec</code></td><td>wrap what the app <em>holds</em> — a <code>DispatchProxy</code>; bindings can't be swapped</td><td>explicit primitives on a <code>context.Context</code> — no patch, no proxy</td><td>wrap what the app <em>holds</em> — a <code>java.lang.reflect.Proxy</code>; patching would cost a <code>-javaagent</code></td><td>wrap what the app <em>holds</em> — a <code>__call</code> decorator, so no interface and no code generation</td></tr>
+  <tr><td>Randomness</td><td><code>sample</code> — the <em>positions</em> drawn, so a mutated population still replays</td><td>the global draws are shimmed (<code>bytes</code>/<code>float</code>/<code>int</code>); <code>sampleIndices</code> for the <em>positions</em></td><td>a handle covering every shape — <code>sample</code> and <code>bytes</code>/<code>int</code>/<code>float</code></td><td>primitives for every shape — the <em>positions</em>, and <code>bytes</code>/<code>float</code>/<code>int</code></td><td>primitives for every shape — the <em>positions</em>, and <code>bytes</code>/<code>float</code>/<code>int</code></td><td>primitives for every shape, over <code>random_int</code>/<code>random_bytes</code></td></tr>
   <tr><td>Nothing</td><td>one — <code>None</code></td><td>two — <code>undefined</code> earns its own marker</td><td>one — <code>null</code></td><td>one — <code>nil</code></td><td>one — <code>null</code></td><td>one — <code>null</code></td></tr>
   <tr><td>The clock's shape</td><td>naive or aware, and the difference is preserved</td><td>one <code>Date</code></td><td><code>DateTime</code>/<code>DateTimeOffset</code></td><td>always located</td><td><code>LocalDateTime</code> or <code>OffsetDateTime</code> — preserved, because they do not compare</td><td>one <code>DateTimeImmutable</code>, always zoned — so there is no awareness to preserve</td></tr>
   <tr><td>The sink</td><td>hand the bytes to a queue</td><td>hand the promise to the host — <code>waitUntil</code></td><td>a synchronous <code>Publish</code>, handed the whole session</td><td>a <code>Publish([]byte)</code> handed the whole session — hand off and return</td><td>a <code>publish(name, text)</code> handed the whole session — hand off and return</td><td>a <code>publish(name, text)</code> handed the whole session; no background thread to hide latency in</td></tr>

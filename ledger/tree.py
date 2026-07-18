@@ -74,7 +74,8 @@ def build() -> Quern:
     quern.root.children = [_DECISION, _no_privileged_language(), _no_doc_duplication(),
                            _PARITY_DECISION, _feature_parity(), _JAVA_DECISION,
                            _PYPI_NAME_DECISION, _PHP_DECISION,
-                           _DISTRIBUTION_DECISION, _install_claims_match_reality()]
+                           _DISTRIBUTION_DECISION, _install_claims_match_reality(),
+                           _CANONICAL_DECISION, _fixture_parity()]
     return quern
 
 
@@ -702,5 +703,159 @@ _DISTRIBUTION_DECISION = Node(
                       "port exists at all. The snippet plus an honest 'not yet' says more than "
                       "silence, and it leaves something for the gate to hold to account: silence "
                       "cannot go red."}),
+    ],
+)
+
+
+# --- fixture parity: the six tapes tell the same story -----------------------------------
+
+_FIXTURES = _ROOT / "spec" / "fixtures"
+
+
+def _fixture_kinds() -> dict:
+    """Which event kinds each runtime's fixtures actually exercise."""
+    import json
+
+    out: dict[str, set] = {}
+    if not _FIXTURES.exists():
+        return out
+    for p in sorted(_FIXTURES.glob("*.jsonl")):
+        runtime = p.name.split("-", 1)[0]
+        kinds = out.setdefault(runtime, set())
+        for line in p.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            for e in obj.get("events") or []:
+                if isinstance(e, dict) and e.get("k"):
+                    kinds.add(e["k"])
+    return out
+
+
+def _fixture_parity() -> Node:
+    """Every runtime's fixtures exercise the same event kinds.
+
+    The gate that catches what the badge scan structurally cannot. A feature can be missing from
+    a runtime without any badge saying so and without any note admitting it — Node shipped for
+    five releases with no chained-client support at all, so it could not emit a `db` event, and
+    nothing anywhere went red. The guide never claimed per-runtime `db` support, so there was no
+    claim to falsify; the absence was invisible precisely because it was total.
+
+    Fixtures cannot hide it. A tape either carries a `db` event or it does not, and the whole
+    point of six runtimes recording one scenario is that the six tapes should differ only in the
+    runtime key and the timestamps. So: compare the event kinds, and go red on a runtime that
+    cannot produce one its peers can.
+    """
+    kinds = _fixture_kinds()
+    runtimes = sorted(kinds)
+    union: set = set()
+    for ks in kinds.values():
+        union |= ks
+
+    missing = {r: sorted(union - kinds[r]) for r in runtimes if union - kinds[r]}
+
+    if runtimes and not missing:
+        q = Quantity(
+            value=0, unit="disparity", provenance="measured", grounded=True,
+            source=f"all {len(runtimes)} runtimes' fixtures exercise the same event kinds "
+                   f"({', '.join(sorted(union))})")
+    elif not runtimes:
+        q = Quantity(
+            value=1, unit="disparity", provenance="measured", grounded=False,
+            source="no fixtures found — the sweep would pass vacuously, which is not the same "
+                   "thing as passing")
+    else:
+        detail = "; ".join(f"{r} emits no {', '.join(ks)}" for r, ks in sorted(missing.items()))
+        q = Quantity(
+            value=len(missing), unit="disparity", provenance="measured", grounded=False,
+            source="a runtime cannot record an event kind its peers can: " + detail
+                   + " — implement the primitive, then record the canonical scenario again")
+
+    return Node(
+        id="all-runtimes-record-the-same-kinds",
+        kind="gate",
+        name="Every runtime's fixtures exercise the same event kinds: no implementation is "
+             "missing a door the others have",
+        params={"disparities": q},
+        links={"admits": ["all-runtimes-record-the-same-kinds"]},
+        payload={"note":
+                 "Discharge this by implementing the missing primitive in the runtime that "
+                 "lacks it and regenerating its fixtures - never by trimming the canonical "
+                 "scenario until every runtime can record it."},
+    )
+
+
+_CANONICAL_DECISION = Node(
+    id="one-canonical-fixture-scenario",
+    kind="decision",
+    name="All six runtimes record ONE canonical scenario into spec/fixtures, and each suite "
+         "checks the others' tapes render character for character alike",
+    payload={
+        "rationale":
+            "The fixtures existed to prove the tape is one format, and they proved it: every "
+            "checker accepted every tape. But they had quietly split into two families - Python "
+            "and .NET recorded a chained read, an email user and a 'kaput' failure; Node, Go, "
+            "Java and PHP recorded an effect, a named user and 'no such key: alice'. Both "
+            "families were conformant, so nothing was red, and Java's own Toy javadoc asserted "
+            "the property the fixtures no longer had: that they differ only in the runtime key "
+            "and the timestamps. An unchecked claim about a system that changes underneath it "
+            "drifts, which is the argument the no-doc-duplication gate already won. "
+            "So the scenario is now one shape, chosen as the UNION rather than the intersection: "
+            "the canonical `enrol` keeps family B's naming and takes family A's chained read, "
+            "because a `db` event enclosed by a span is the enclosure a reader most wants to see "
+            "and an fx-only span never demonstrates it. Converging on the simpler family would "
+            "have cost that coverage to save work, which is the wrong trade for the artifact "
+            "every other runtime's suite trusts.",
+        "consequence":
+            "What it cost, and it was not the fixture edit. Porting one scenario to six runtimes "
+            "meant IMPLEMENTING what a runtime could not express, and Node could not express "
+            "most of it: it had no chained-client support at all - no query, no queryOne, no "
+            "exec, no snapshot - so it could not emit a `db` event, and no `sampleIndices`, so "
+            "it could not emit a `sample` draw. Five runtimes had both. Nothing was red, because "
+            "the parity gate reads the guide for badges and gap-phrases, and a feature nobody "
+            "ever claimed is a feature nobody can catch you lacking. That is the same shape as "
+            "the [^<.] hole this ledger already confesses: a check is evidence about what it can "
+            "see. The new fixture-parity gate closes it from the other side - it reads the tapes "
+            "rather than the prose, and a tape cannot omit a `db` event tactfully. "
+            "Python was the other one, and worse: it had no `perf` clock at all, and its "
+            "RandomShim implemented only `sample` while `__getattr__` passed every other draw "
+            "through to the real random module UNRECORDED. That is not a missing feature, it is "
+            "a nondeterminism LEAK - an app calling random.random() inside a recorded call got a "
+            "value the tape never held, and replay re-rolled it. Both are now shimmed, which is "
+            "the uncomfortable part of this whole exercise: the lead implementation was the "
+            "least complete, and only a fixture nobody could satisfy made it visible. "
+            "One disparity remains, recorded rather than papered over: Python qualifies effect "
+            "names with the defining module (`tests.canonical.store_set` where the others write "
+            "`store.set`), because the qualname is built as f\"{module.__name__}.{name}\" with no "
+            "prefix option. So the six tapes agree on structure, on event kinds, and on what "
+            "they render - but not yet byte for byte.",
+    },
+    children=[
+        Node(id="alt-canon-converge-on-the-simpler-family", kind="alternative",
+             name="Converge on the four-runtime family, changing only Python and .NET",
+             payload={"why":
+                      "Half the work and it loses the one thing the other family uniquely "
+                      "proves: a chained read enclosed by a span. The fixtures are the evidence "
+                      "every runtime's suite trusts, and buying convergence by deleting coverage "
+                      "from the evidence is exactly backwards - it would make the tapes agree by "
+                      "making them say less."}),
+        Node(id="alt-canon-leave-the-families-and-correct-the-claim", kind="alternative",
+             name="Leave both families and reword the comment that overclaims",
+             payload={"why":
+                      "Honest, cheap, and it would have left Node's missing db and sample "
+                      "undiscovered - they surfaced only because porting one scenario to six "
+                      "runtimes forced each one to actually express it. A scenario that every "
+                      "runtime must record is a parity test the badge scan cannot be; softening "
+                      "the claim would have retired the only instrument that found the gap."}),
+        Node(id="alt-canon-live-registry-of-features", kind="alternative",
+             name="Declare a per-runtime feature matrix in the ledger and gate on that",
+             payload={"why":
+                      "A hand-maintained matrix is a claim about the code, and this ledger's "
+                      "whole premise is that claims drift while measurements do not. The matrix "
+                      "would have said Node supports db for as long as somebody believed it. The "
+                      "fixtures are already the measurement; gate on those."}),
     ],
 )

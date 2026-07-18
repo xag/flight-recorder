@@ -11,6 +11,7 @@ use Xag\FlightRecorder\Recording;
 use Xag\FlightRecorder\Replay;
 use Xag\FlightRecorder\ReplayedEffectError;
 use Xag\FlightRecorder\Serial;
+use Xag\FlightRecorder\Snapshot;
 
 /** Semantic spans: the app's own testimony, written next to the evidence. */
 final class SemTest extends TestCase
@@ -55,9 +56,12 @@ final class SemTest extends TestCase
     {
         $enrol = $this->record()->spans()->children[0];
 
+        // A chained read enclosed by a span — the enclosure a reader most wants to see, and
+        // the one an fx-only span never demonstrates.
         $loadCorpus = $enrol->children[0];
         self::assertCount(1, $loadCorpus->events);
-        self::assertSame('store.get', $loadCorpus->events[0]['fn']);
+        self::assertSame('db', $loadCorpus->events[0]['k']);
+        self::assertSame('get', $loadCorpus->events[0]['op']);
 
         self::assertCount(2, $enrol->children[2]->events);
     }
@@ -126,8 +130,12 @@ final class SemTest extends TestCase
                 $user = (string) $kwargs['user'];
                 $started = Recorder::now();
                 return Recorder::span('signup', ['user' => $user, 'started' => $started], static function () use ($user): array {
-                    $row = Recorder::span('load_corpus', [], static fn (): array => Toy::storeGet($user));
-                    Recorder::note('corpus_read', ['found' => true]);
+                    $snap = Recorder::span('load_corpus', [], static fn (): Snapshot => Recorder::queryOne(
+                        'get',
+                        "collection(\"users\").document(\"$user\")",
+                        static fn (): Snapshot => new Snapshot($user, true, ['name' => 'Alice', 'x' => 3])
+                    ));
+                    Recorder::note('corpus_read', ['found' => $snap->exists]);
                     try {
                         Recorder::span('register', ['password' => 'hunter2'], static function () use ($user): void {
                             Recorder::effect('store.set', ["user:$user", ['password' => 'hunter2']], static fn (): string => 'OK');
@@ -136,7 +144,7 @@ final class SemTest extends TestCase
                     } catch (ToyError | ReplayedEffectError $e) {
                         Recorder::note('registration_failed', ['why' => $e->getMessage()]);
                     }
-                    return ['user' => $user, 'name' => $row['name']];
+                    return ['user' => $user, 'name' => $snap->get('name')];
                 });
             };
         };
@@ -153,7 +161,7 @@ final class SemTest extends TestCase
         $lines = explode("\n", $render);
 
         self::assertStringStartsWith('enrol  ok', $lines[0]);
-        self::assertStringContainsString('load_corpus  ok  (1 fx)', $render);
+        self::assertStringContainsString('load_corpus  ok  (1 db)', $render);
         self::assertStringContainsString('register  ERROR  (2 fx)', $render);
         self::assertStringContainsString('- corpus_read  found=true', $render);
     }

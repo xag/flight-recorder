@@ -94,15 +94,22 @@ func fixturePlainToy(t *testing.T) string {
 func toyEnrol(ctx context.Context) (any, error) {
 	at := Now(ctx) // read while the span's args are evaluated — it belongs to the call
 	var result any
-	err := Span(ctx, "enrol", map[string]any{"user": "alice", "started": at}, func(ctx context.Context) error {
-		var row map[string]any
+	err := Span(ctx, "enrol", map[string]any{"user": "alice", "started": at, "password": "hunter2"},
+		func(ctx context.Context) error {
+		// A chained read, not an effect: the canonical scenario puts a `db` event inside a span,
+		// which is the one enclosure a reader most wants to see and the one an fx-only span
+		// never demonstrates.
+		var snap Snapshot
 		_ = Span(ctx, "load_corpus", nil, func(ctx context.Context) error {
-			row, _ = Effect(ctx, "store.get", []any{"alice"}, func() (map[string]any, error) {
-				return map[string]any{"name": "Alice", "x": 3}, nil
-			})
+			id := "alice"
+			snap, _ = QueryOne(ctx, "get", `collection("users").document("alice")`,
+				func() (Snapshot, error) {
+					return Snapshot{ID: &id, Exists: true,
+						Data: map[string]any{"name": "Alice", "x": 3}}, nil
+				})
 			return nil
 		})
-		Note(ctx, "corpus_read", map[string]any{"found": row != nil})
+		Note(ctx, "corpus_read", map[string]any{"found": snap.Exists})
 
 		regErr := Span(ctx, "register", map[string]any{"password": "hunter2"}, func(ctx context.Context) error {
 			if _, e := Effect(ctx, "store.set", []any{"user:alice", map[string]any{"password": "hunter2"}},
@@ -118,7 +125,8 @@ func toyEnrol(ctx context.Context) (any, error) {
 			Note(ctx, "registration_failed", map[string]any{"why": regErr.Error()})
 		}
 
-		name, _ := row["name"].(string)
+		data, _ := snap.Data.(map[string]any)
+		name, _ := data["name"].(string)
 		result = map[string]any{"user": "alice", "name": name}
 		return nil
 	})

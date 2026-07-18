@@ -94,11 +94,11 @@ test('a span encloses the raw events it produced, in order', async () => {
   assert.deepEqual(stream[1], ['sem', 'enrol']);
   assert.deepEqual(stream[stream.length - 1], ['sem', 'enrol']);
 
-  // The store.get sits INSIDE load_corpus; the store.set and store.boom inside register.
+  // The chained read sits INSIDE load_corpus; the store.set and store.boom inside register.
   const names = stream.map(([, n]) => n);
   const lo = names.indexOf('load_corpus');
   const hi = names.lastIndexOf('load_corpus');
-  assert.ok(stream.slice(lo, hi).some(([k, n]) => k === 'fx' && n === 'store.get'));
+  assert.ok(stream.slice(lo, hi).some(([k]) => k === 'db'));
 });
 
 test('begin/end pair by sid and nest; sids are unique within the call', async () => {
@@ -236,9 +236,12 @@ test('a changed account is named but does not fail the replay by default', async
   const store = fr.wrap(new ToyStore(), ['get', 'set', 'boom'], { prefix: 'store' });
   const refactored = async ({ user, password }) => {
     const at = new Date();
-    return fr.span('enrol', { user, started: at }, async () => {
-      const row = await store.get(user); // the load_corpus span is gone
-      fr.note('corpus_read', { found: row != null });
+    return fr.span('enrol', { user, started: at, password }, async () => {
+      // the load_corpus span is gone; the question it asked is unchanged
+      const row = await fr.queryOne('get', `collection("users").document("${user}")`, () =>
+        fr.snapshot(user, { name: 'Alice', x: 3 }),
+      );
+      fr.note('corpus_read', { found: row.exists });
       try {
         await fr.span('register', { password }, async () => {
           await store.set(`user:${user}`, { password });
@@ -247,7 +250,7 @@ test('a changed account is named but does not fail the replay by default', async
       } catch (e) {
         fr.note('registration_failed', { why: e.message });
       }
-      return { user, at: at.getTime(), name: row?.name ?? 'stranger' };
+      return { user, name: row.data?.name ?? 'stranger' };
     });
   };
 

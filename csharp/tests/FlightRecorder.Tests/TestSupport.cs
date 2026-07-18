@@ -41,7 +41,8 @@ namespace FlightRecorder.Tests
 
         public static IStore WrapStore() =>
             Recorder.WrapAs<IStore>(new ToyStore(), "store",
-                nameof(IStore.Get), nameof(IStore.Set), nameof(IStore.CreateAccount), nameof(IStore.MaybeFail));
+                nameof(IStore.Get), nameof(IStore.Set), nameof(IStore.CreateAccount), nameof(IStore.MaybeFail),
+                nameof(IStore.Boom));
 
         /// <summary>Record a scenario to a fresh tape and return its path.</summary>
         public static string RecordToTape(Boundary boundary, Action<IStore> scenario)

@@ -29,6 +29,7 @@ import { ReplayDivergence, ProbeUnanswerable, ForbiddenValue } from './errors.js
 const RealDate = globalThis.Date;
 const realPerfNow = performance.now.bind(performance);
 const realRandomBytes = crypto.randomBytes.bind(crypto);
+const realMathRandom = Math.random.bind(Math);
 
 export const FORMAT_VERSION = 1;
 
@@ -450,6 +451,141 @@ export function wrap(target, methods, { prefix = '' } = {}) {
       };
     },
   });
+}
+
+// --- chained clients: the `db` event kind -------------------------------------------
+//
+// A Firestore-shaped client is not a function whose arguments are the question — the question is
+// the CHAIN (`collection('users').where('age','>',3).get()`), and only the terminal call has an
+// answer. `wrap` above cannot express that: it records one method's arguments, and a chain's
+// arguments are spread across a dozen intermediate objects that answer nothing.
+//
+// So the app renders the chain it built and hands over the terminal operation. Nothing here
+// parses the signature or knows what it means — the cardinal rule holds: INSTRUMENT, NEVER
+// DUPLICATE. `sig` is opaque text that replay compares and a reader reads.
+
+/**
+ * A document snapshot: identity, existence, data.
+ *
+ * Deliberately only these three. They are the only surface a well-behaved consumer reads, and
+ * recording more would tie the tape to one client library's snapshot object — exactly the
+ * coupling a frozen wire format exists to avoid.
+ */
+export function snapshot(id, data) {
+  return { id: id == null ? null : String(id), exists: true, data: data ?? null };
+}
+
+/** A document that is not there. An answer, not an absence of one. */
+export function missing(id = null) {
+  return { id: id == null ? null : String(id), exists: false, data: null };
+}
+
+function snapJsonable(s) {
+  const exists = s?.exists !== false;
+  return {
+    id: s?.id == null ? null : String(s.id),
+    exists,
+    // A snapshot that does not exist has no data, and writing whatever the client happened to
+    // leave in the field would record a value the app could not legitimately have read.
+    data: exists ? toJsonable(s?.data ?? null) : null,
+  };
+}
+
+/** Shared by query/queryOne/exec: reserve the slot in ASK order, settle when the answer lands. */
+function dbEvent(base, run, patchOf) {
+  if (!recorder || !active.getStore()) return run();
+
+  const buf = active.getStore();
+  const slot = buf.push(scrub(base)) - 1;
+  const settle = (patch) => {
+    buf[slot] = scrub({ ...base, ...patch });
+  };
+
+  let res;
+  try {
+    res = insideEffect.run(true, run);
+  } catch (e) {
+    // A db event carries `res` or `args`, never an error field — the format has no shape for
+    // one. The slot keeps the question it reserved and the exception propagates untouched.
+    throw e;
+  }
+  if (res && typeof res.then === 'function') {
+    return res.then((r) => {
+      settle(patchOf(r));
+      return r;
+    });
+  }
+  settle(patchOf(res));
+  return res;
+}
+
+/**
+ * A chained read returning many documents.
+ *
+ *     const rows = await fr.query('stream', `collection("users").where("x", ">", 0)`,
+ *                                 () => db.collection('users').where('x', '>', 0).get());
+ */
+export function query(op, sig, fn) {
+  if (hook.mode === 'replay') return hook.feed.answerQuery(op, sig);
+  return dbEvent({ k: 'db', op, sig }, fn, (rows) => ({
+    res: (rows ?? []).map(snapJsonable),
+  }));
+}
+
+/** A chained read returning one document. */
+export function queryOne(op, sig, fn) {
+  if (hook.mode === 'replay') return hook.feed.answerQueryOne(op, sig);
+  return dbEvent({ k: 'db', op, sig }, fn, (row) => ({ res: snapJsonable(row) }));
+}
+
+/**
+ * A chained write.
+ *
+ * Under replay this is **not executed** — the question is compared against the tape and the body
+ * is skipped. Replaying a run must not charge the card twice.
+ */
+export function exec(op, sig, args, fn) {
+  if (hook.mode === 'replay') return hook.feed.expectWrite(op, sig, (args ?? []).map(toJsonable));
+  return dbEvent({ k: 'db', op, sig, args: (args ?? []).map(toJsonable) }, fn, () => ({}));
+}
+
+/**
+ * Draw `k` positions from a population of `n`.
+ *
+ * The other draw shapes are shims — `Math.random` and `crypto.*` are global doors, so an app
+ * that opens them is recorded without asking. Drawing MEMBERS from a collection is not a door:
+ * there is no global to patch, because the collection is the app's own. So this is a primitive,
+ * as it is in .NET, Go, Java and PHP.
+ *
+ * It records POSITIONS, not members, and that is the whole point of its existing separately:
+ * replay can then pick the same members from a population a mutation has since changed, which a
+ * recording of the members themselves could never do.
+ */
+export function sampleIndices(n, k) {
+  if (hook.mode === 'replay') {
+    const ev = hook.feed.popExpect('rand');
+    const idx = ev.idx ?? [];
+    for (const i of idx) {
+      if (i >= n) {
+        throw new ProbeUnanswerable(
+          `the recording drew position ${i} from a population of ${n} — the population shrank ` +
+            'under a recorded draw, so this tape cannot answer the mutated path',
+        );
+      }
+    }
+    return idx;
+  }
+
+  const take = Math.max(0, Math.min(k, n));
+  const pool = Array.from({ length: n }, (_, i) => i);
+  const idx = [];
+  for (let c = 0; c < take; c += 1) {
+    // The REAL Math.random, not the shim: this draw records itself as one `sample` event, and
+    // going through the shim would additionally write a `float` the app never asked for.
+    idx.push(...pool.splice(Math.floor(realMathRandom() * pool.length), 1));
+  }
+  emit({ k: 'rand', m: 'sample', n, kk: take, idx });
+  return idx;
 }
 
 /**
