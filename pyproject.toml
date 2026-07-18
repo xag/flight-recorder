@@ -1,5 +1,8 @@
 [project]
-name = "flight-recorder"
+# PyPI has no scopes, so the npm scope becomes a prefix: @xag/flight-recorder -> xag-flight-recorder.
+# The bare name is not available — PyPI collapses hyphens, colliding with `flightrecorder` (2014,
+# paragliding GPS loggers). The import name stays `flight_recorder` on every runtime.
+name = "xag-flight-recorder"
 version = "0.8.0"
 description = "Record tool calls at an app's nondeterminism boundary; replay them deterministically with every internal variable observable"
 readme = "README.md"
@@ -35,3 +38,21 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["flight_recorder"]
+
+# The sdist ships the Python distribution, not the repo. The other five runtimes (csharp, go,
+# java, js, php) live in the tree beside this one, and their build outputs — 157 files, 2.6MB of
+# compiled .NET under bin/ and obj/ — were being swept in by the default "everything tracked"
+# rule. A PyPI version is write-once, so the scope is stated explicitly rather than inherited.
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "flight_recorder",
+    "spec",
+    "tests",
+    "conftest.py",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+]
+exclude = ["**/__pycache__"]
