@@ -841,7 +841,14 @@ const report = await fr.checkInvariants({
         throw new Exception("claimed done with words remaining");
 });
 
-var report = Invariants.CheckInvariants(tape, 0, body, new[] { noEmptyClaim }, boundary);</code></pre>
+var levelNeverEmpties = Invariants.Invariant("level never excludes the whole corpus", v =&gt;
+{
+    foreach (var obs in v.Trace.Values("level"))
+        if (Convert.ToInt64(obs.Value) &lt;= 0) throw new Exception($"level={obs.Value} at {obs.At}");
+});
+
+var report = Invariants.CheckInvariants(tape, 0, body,
+    new[] { noEmptyClaim, levelNeverEmpties }, boundary);</code></pre>
 
 <pre data-lang="go"><code>noEmptyClaim := fr.NewInvariant("never claims end-of-corpus while words remain",
 	func(t *fr.Trajectory) error {
@@ -852,15 +859,25 @@ var report = Invariants.CheckInvariants(tape, 0, body, new[] { noEmptyClaim }, b
 		return nil
 	})
 
-report, _ := fr.CheckInvariants(tape, 0, resolve, []fr.Invariant{noEmptyClaim})</code></pre>
+levelNeverEmpties := fr.NewInvariant("level never excludes the whole corpus",
+	func(t *fr.Trajectory) error {
+		for _, obs := range t.Trace.Values("level") {
+			if n, _ := obs.Value.(float64); n &lt;= 0 {
+				return fmt.Errorf("level=%v at %s", obs.Value, obs.At)
+			}
+		}
+		return nil
+	})
+
+report, _ := fr.CheckInvariants(tape, 0, resolve,
+	[]fr.Invariant{noEmptyClaim, levelNeverEmpties})</code></pre>
 
 <p data-lang="py">The second claim is the reason this exists: the production bug that shaped the library
 was an internal variable (<code>level=0</code>) silently emptying a whole corpus, with a perfectly
 self-consistent output.</p>
 
-<p data-lang="cs">.NET invariants assert over the replayed <em>result</em>, the boundary events, and the
-claims the code made. The trace-driven form — asserting over an internal variable on every line — waits
-on variable-level tracing, which the .NET port does not have yet.</p>
+<p data-lang="cs">.NET invariants assert over the replayed <em>result</em>, the boundary events, the
+claims the code made, and — through <code>v.Trace</code> — every local on every executed line.</p>
 
 <div class="note">
   <p>Every runtime ships an engine — and because an invariant <strong>consumes the tape</strong>, and
@@ -960,7 +977,7 @@ in.</p>
   <tr><td>Randomness</td><td><code>sample</code> — the <em>positions</em> drawn, so a mutated population still replays</td><td><code>bytes</code>/<code>float</code>/<code>int</code> — the draw <em>is</em> the value</td><td>a handle covering every shape — <code>sample</code> and <code>bytes</code>/<code>int</code>/<code>float</code></td><td>primitives for every shape — the <em>positions</em>, and <code>bytes</code>/<code>float</code>/<code>int</code></td></tr>
   <tr><td>Nothing</td><td>one — <code>None</code></td><td>two — <code>undefined</code> earns its own marker</td><td>one — <code>null</code></td><td>one — <code>nil</code></td></tr>
   <tr><td>The sink</td><td>hand the bytes to a queue</td><td>hand the promise to the host — <code>waitUntil</code></td><td>a synchronous <code>Publish</code>, handed the whole session</td><td>a <code>Publish([]byte)</code> handed the whole session — hand off and return</td></tr>
-  <tr><td>Tracing</td><td><code>sys.settrace</code> — every local, every executed line, free</td><td>the same, via the V8 Inspector from a worker thread — slower, and it sees across an <code>await</code></td><td>not yet — the CLR has no <code>sys.settrace</code>; it needs a debugger backend</td><td>not yet — Go has no <code>sys.settrace</code>; it needs a debugger backend (Delve)</td></tr>
+  <tr><td>Tracing</td><td><code>sys.settrace</code> — every local, every executed line, free</td><td>the same, via the V8 Inspector from a worker thread — slower, and it sees across an <code>await</code></td><td>no runtime hook exists, so the code is rewritten: Roslyn instruments the sources, compiles to memory, and the traced copy runs in-process</td><td>no runtime hook either — <code>go/ast</code> instruments a copy of the module, so the traced run costs a compile and happens in its own process</td></tr>
 </table>
 </div>
 
