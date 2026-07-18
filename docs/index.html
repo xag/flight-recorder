@@ -798,11 +798,52 @@ report.trace.render('deck');   // a readable timeline</code></pre>
   <em>replay</em>, never to a request path. Recording stays cheap; understanding is where you spend.</p>
 </div>
 
+<pre data-lang="cs"><code>var (result, trace) = Tracer.Run(new[] { "src/Tools.cs" },   // the files to observe
+                                 "App.Tools", "StudyStatus", user);
+
+trace.Values("level");   // [{ Value = 0, At = "Tools.cs:12", Fn = "StudyStatus" }]
+trace.Render("deck");    // a readable timeline</code></pre>
+
+<pre data-lang="go"><code>run, _ := fr.RunTraced(fr.TraceSpec{
+	Include: []string{"tools.go"},                     // the files to observe
+	Command: []string{"test", "-run", "^TestReplay$", "-count=1", "."},
+})
+
+run.Trace.Values("level")   // [{Value: 0, At: "tools.go:12", Fn: "studyStatus"}]
+run.Trace.Render("deck")    // a readable timeline</code></pre>
+
+<pre data-lang="java"><code>Tracer.Run run = Tracer.run(List.of("src/main/java/app/Tools.java"),   // the files to observe
+                            "app.Tools", "studyStatus", user);
+
+run.trace().values("level");   // [level=0 at Tools.java:12 in Tools.studyStatus]
+run.trace().render("deck");    // a readable timeline</code></pre>
+
 <div class="note" data-lang="cs">
-  <p>Variable-level tracing is <strong>not in the .NET port yet</strong>. The CLR has no
-  <code>sys.settrace</code>, so it needs a debugger backend (the way the Node port drives the V8
-  Inspector), and the spec <em>reserves</em> the trace markers for exactly such an addition. Recording
-  and replay do not need it — the divergence report already names where behaviour changed.</p>
+  <p>The CLR has no <code>sys.settrace</code> and no per-line hook, so the code is <strong>rewritten
+  rather than debugged</strong>: Roslyn instruments the sources, compiles them to memory, and the
+  traced copy runs in-process. It shares <code>FlightRecorder.dll</code>, so it reaches the world
+  through the same boundary and gets the same answers off the tape — a recompiled copy, still the
+  same execution.</p>
+</div>
+
+<div class="note" data-lang="go">
+  <p>Go has no per-line hook either, and no way to load a compiled copy into a running process. So
+  <code>go/ast</code> instruments a copy of the module in a temp tree and runs it as a <strong>child
+  process</strong>; the original tree is never touched and the trace comes back as a file. More
+  moving parts than a callback, and unavoidable in a language with no line hook — what could be
+  chosen was to keep every part stdlib, and it was.</p>
+</div>
+
+<div class="note" data-lang="java">
+  <p>The JVM exposes no per-line hook a library can install, so Java takes .NET's road:
+  <code>com.sun.source</code> — javac's own parser and position table, shipped in the JDK —
+  instruments the sources, and they compile to memory and run <strong>in-process</strong>, sharing
+  this jar and therefore the same boundary and the same tape. It needs a JDK at run time rather than
+  a JRE; that is the whole cost. JDI was rejected for the reasons Go rejected Delve, and a
+  <code>-javaagent</code> because a library has no business dictating your launch command.</p>
+  <p>One consequence worth knowing: javac exposes no definite-assignment analysis (Roslyn does), so
+  the rewriter tracks scope syntactically and observes a local only from the statement after an
+  initialised declaration. It may miss a variable; it can never emit one javac would reject.</p>
 </div>
 
 <h2 id="regression">Pinned recordings</h2>

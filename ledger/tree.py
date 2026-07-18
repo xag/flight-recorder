@@ -214,7 +214,16 @@ _PARITY_DECISION = Node(
             "debugger. Both got a rewriter — Roslyn over the sources in .NET, go/ast over a copy "
             "of the module in Go — because the gate refused the footnote long enough for someone "
             "to look for the third option. A gap documented honestly would have shipped the "
-            "asterisk and never found it.",
+            "asterisk and never found it. Java later took the same road a third time, with javac's "
+            "own com.sun.source, which is now three runtimes the 'it needs a debugger' reading was "
+            "wrong about. "
+            "AND THE GATE ITSELF WAS CAUGHT: the note claiming .NET lacked tracing sat in the guide "
+            "through the whole of the Go port, reporting green, because the gap-phrase pattern was "
+            "written [^<.] and so could never match the one runtime name containing a dot. A guard "
+            "with a hole shaped like the thing it guards is worse than no guard, because it is "
+            "believed. Found by reading the guide rather than by trusting the gate, which is the "
+            "uncomfortable lesson: a check is evidence about what it can see, never about what it "
+            "cannot.",
     },
     children=[
         Node(id="alt-lead-and-ports", kind="alternative",
@@ -239,7 +248,12 @@ _BADGE = re.compile(r'<span class="badge">([^<]*)</span>')
 # Notes that stand in for a missing feature. These are the shapes a "this runtime lacks X" note
 # takes; each is a parity violation to be discharged by implementing the feature, not reworded.
 _GAP_PHRASES = [
-    r'not in the [^<.]{0,30}?port',
+    # `[^<]`, not `[^<.]`: the character class used to exclude the dot, which meant this pattern
+    # could never match ".NET" — the one runtime name that contains one. A stale "not in the .NET
+    # port yet" note sat in the guide, through the whole of the Go port, invisible to the gate that
+    # exists to forbid exactly it. A guard with a hole shaped like one of the things it guards is
+    # worse than no guard, because it reports green.
+    r'not in the [^<]{0,30}?port',
     r'not yet',
     r'does not have[^.<]{0,40}?yet',
     r'does not ship an?[^.<]{0,40}?runner',
