@@ -543,7 +543,10 @@ personal data is the problem.</p>
 
 <pre data-lang="py"><code>BOUNDARY = fr.Boundary(
     effects=[...],
-    redact={"password", "ssn"},     # masked wherever these keys appear
+    redact={"password", "ssn"},                      # by FIELD NAME
+    scrub=lambda s: ADDRESS.sub(hide, s),            # by VALUE: every string, anywhere
+    forbid=[r"\b[a-f0-9]{64}\b",                     # THIS TAPE CARRIES NO CREDENTIAL:
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----"],  # a hit raises, and writes nothing
 )
 
 # …or map a field to a deterministic tokenizer, keeping distinctness without the value:
@@ -552,12 +555,16 @@ redact={"email": lambda v: v if str(v).startswith("tok:") else "tok:" + hmac_hex
 <pre data-lang="js"><code>fr.boundaryOf({
   redact: { password: null, ssn: null },      // by FIELD NAME
   scrub: (s) =&gt; s.replace(ADDRESS, hide),     // by VALUE: every string, anywhere
+  forbid: [/\b[a-f0-9]{64}\b/,                // THIS TAPE CARRIES NO CREDENTIAL:
+           /-----BEGIN [A-Z ]*PRIVATE KEY-----/],  // a hit raises, and writes nothing
 });</code></pre>
 
-<pre data-lang="cs"><code>var boundary = new Boundary().MaskFields("password", "ssn");   // masked wherever these keys appear
+<pre data-lang="cs"><code>var boundary = new Boundary().MaskFields("password", "ssn");   // by FIELD NAME
 
 // …or map a field to a deterministic tokenizer, keeping distinctness without the value:
 boundary.Redact["email"] = v =&gt; ((string)v!).StartsWith("tok:") ? v : "tok:" + HmacHex(v);
+
+boundary.Scrubbing(@"\d{3}-\d{2}-\d{4}");                      // by VALUE: every string, anywhere
 
 // `forbid` states what a field rule cannot: THIS TAPE CARRIES NO CREDENTIAL. Each pattern is
 // matched against the fully-redacted line; a hit raises ForbiddenValue and writes nothing.
@@ -574,7 +581,7 @@ boundary.Forbidden(@"\b[a-f0-9]{64}\b")                        // a scrypt diges
 		`-----BEGIN [A-Z ]*PRIVATE KEY-----`},                 // a hit raises, and writes nothing
 }</code></pre>
 
-<div class="note" data-lang="js">
+<div class="note">
   <p>Field rules assume secrets live in named fields. Often they do not: an address handed to a store
   as a <em>positional</em> argument, baked into a <em>key</em> (<code>user:${addr}</code>), or sitting
   mid-sentence in an email body has no field name to match — and walks onto the tape untouched while a
@@ -588,17 +595,17 @@ scrub to itself, or a redacted recording could never be replayed. A rule that ra
 mask: the failure direction is <em>masked</em>, never <em>leaked</em>, and never <em>broke the
 recorded call</em>.</p>
 
-<h3 data-lang="py">Then assert you got them all</h3>
+<h3>Then assert you got them all</h3>
 
-<div class="note" data-lang="py">
-  <p>Redaction is declarative and opt-in, so it protects exactly the fields you thought of — and its
+<div class="note">
+  <p>Masking is declarative and opt-in, so it protects exactly the fields you thought of — and its
   failure mode is <strong>silent and open</strong>. Forget <code>salt</code> and the tape leaks.
   Someone adds <code>recovery_token</code> to the model next month and the tape leaks. Rename a field
   and the rule quietly stops matching. Nothing tells you. And a value with no name at all — a
   positional argument, a chain signature, an opaque repr — has nothing for a field rule to grip.</p>
 </div>
 
-<p data-lang="py"><code>forbid</code> states the property those rules cannot: <em>this tape carries no
+<p><code>forbid</code> states the property those rules cannot: <em>this tape carries no
 credential</em>. Each entry is a regex, matched against the fully-redacted line the recorder is about
 to write. A hit raises <code>ForbiddenValue</code> and writes nothing — not to the file, not to the
 crash sidecar, not to a sink.</p>
@@ -609,12 +616,12 @@ crash sidecar, not to a sink.</p>
             r"-----BEGIN [A-Z ]*PRIVATE KEY-----"], # → raise, do not write
 )</code></pre>
 
-<p data-lang="py">Match <strong>shapes, not values</strong>: a credential you can enumerate you could
+<p>Match <strong>shapes, not values</strong>: a credential you can enumerate you could
 already have redacted. It is the one you cannot name that this is for. The failure names the rule and
 never the match — a tripwire that quotes the secret it caught, into a log or a stack trace, has become
 the leak it was there to prevent.</p>
 
-<div class="note" data-lang="py">
+<div class="note">
   <p><strong>This is the one failure the recorder does not swallow.</strong> Everywhere else the
   direction is <em>the recording is a bit poorer, the app survives</em>. Here it inverts: a tape being
   written with a live credential on it is not a poorer recording, it is an exfiltration path — and the

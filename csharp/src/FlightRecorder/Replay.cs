@@ -115,7 +115,12 @@ namespace FlightRecorder
             if (!_probe)
             {
                 var recorded = Json.Canonical(ev.GetValueOrNull("args") ?? new List<object?>());
-                var replayed = Json.Canonical(Serial.RedactJsonable(args, _boundary.RedactRules));
+                // The tape's args were masked before they were written, so the re-derived args must be
+                // masked the same way or every redacted recording would diverge on its own redaction.
+                // This is the whole reason the scrub is required to be idempotent: what came off the
+                // tape is a mask already, and passing it through the scrub again must not move it.
+                var replayed = Json.Canonical(
+                    Serial.RedactJsonable(args, _boundary.RedactRules, _boundary.Scrub));
                 if (recorded != replayed)
                     throw Diverge($"fx {fn}({replayed})", $"fx {fn}({recorded})");
             }
@@ -318,7 +323,7 @@ namespace FlightRecorder
             }
 
             var replayedResult = error != null ? null
-                : Serial.RedactJsonable(Serial.ToJsonable(result), b.RedactRules);
+                : Serial.RedactJsonable(Serial.ToJsonable(result), b.RedactRules, b.Scrub);
             var recordedResult = call.GetValueOrNull("result");
             report.RecordedResult = recordedResult;
             report.ReplayedResult = replayedResult;

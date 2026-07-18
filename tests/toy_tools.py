@@ -184,6 +184,24 @@ async def awaited(email: str) -> dict:
         return await fx.fetch_remote(email)
 
 
+async def leak_everywhere(email: str, token: str) -> dict:
+    """The three shapes no field name can reach, in one call.
+
+    The token goes to the boundary POSITIONALLY (nothing but an index in `args`), then baked
+    into a cache key where it is a substring of a value nobody named, then dropped
+    mid-sentence into prose. `redact` masks the `token` kwarg and watches all three copies
+    walk onto the tape beside it; only a sweep over every leaf string catches them.
+
+    The key and the body also make the derivation point: replay is handed the MASKED token
+    and rebuilds both from it, so the comparison only holds if the sweep maps the raw
+    derivation onto the same string the replayed code builds — that is idempotence doing the
+    work."""
+    probe = await fx.fetch_remote(token)
+    keyed = await fx.fetch_remote(f"session:{token}:v1")
+    body = f"Hello {email} — your token is {token}. Do not share it."
+    return {"email": email, "probe": probe["v"], "keyed": keyed["key"], "body": body}
+
+
 async def remote_sum(email: str, a: str, b: str) -> dict:
     x = await fx.fetch_remote(a)
     y = await fx.fetch_remote(b)

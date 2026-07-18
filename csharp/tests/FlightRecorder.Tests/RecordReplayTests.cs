@@ -67,6 +67,95 @@ namespace FlightRecorder.Tests
             Assert.Equal("ToyError: no such key: ghost", call["error"]);
         }
 
+        // A tool whose secret has no field name anywhere: the token is a positional argument to the
+        // store, it is interpolated into the key, and it is quoted mid-sentence in a value and in the
+        // result. `MaskFields` cannot see any of that. Only a value-level sweep can.
+        private const string Token = "sk-live-4242";
+
+        private static object? Fetch(IStore store, string user, string token) =>
+            Recorder.Record("fetch", new { user }, () =>
+            {
+                var doc = store.Get(user);
+                store.Set($"seen:{user}:{token}", new Dictionary<string, object?>
+                {
+                    ["note"] = $"authorized with {token}",
+                });
+                return new Dictionary<string, object?> { ["name"] = doc.Name, ["trace"] = $"used {token}" };
+            });
+
+        private static Boundary ScrubbingBoundary() =>
+            TestSupport.ToyBoundary().Scrubbing("sk-live-[A-Za-z0-9]+");
+
+        [Fact]
+        public void ScrubMasksASecretNoFieldNameCouldReach()
+        {
+            var b = ScrubbingBoundary();
+            var path = TestSupport.RecordToTape(b, store => Fetch(store, "alice", Token));
+            var text = System.IO.File.ReadAllText(path);
+
+            Assert.DoesNotContain(Token, text);
+            Assert.Contains(Serial.Redacted, text);
+            // And the tape is still a tape — masked, not mangled.
+            var violations = Validate.ValidateTape(text);
+            Assert.True(violations.Count == 0, string.Join("\n", violations));
+        }
+
+        [Fact]
+        public void AScrubbedRecordingStillReplays()
+        {
+            // The idempotence claim, exercised rather than asserted in prose: the tape holds masked
+            // arguments, replay re-derives the real ones and scrubs them the same way, and the two
+            // sides meet. A scrub applied on only one side would diverge here.
+            var b = ScrubbingBoundary();
+            var path = TestSupport.RecordToTape(b, store => Fetch(store, "alice", Token));
+            var call = Replay.PickCall(Replay.LoadTape(path), fn: "fetch");
+
+            var store = TestSupport.WrapStore();
+            var report = Replay.Call(call, kw => Fetch(store, (string)kw["user"]!, Token), b);
+
+            Assert.True(report.Ok, Replay.FormatReport(0, report));
+            Assert.Null(report.Divergence);
+        }
+
+        [Fact]
+        public void AThrowingScrubMasksAndTheCallStillRuns()
+        {
+            // Recording must never be the reason a call fails, and a mask that crashes must fail
+            // towards masked, never towards leaked.
+            var b = TestSupport.ToyBoundary();
+            b.Scrub = _ => throw new System.InvalidOperationException("boom");
+
+            object? result = null;
+            var path = TestSupport.RecordToTape(b, store => result = Fetch(store, "alice", Token));
+
+            var returned = Assert.IsType<Dictionary<string, object?>>(result);
+            Assert.Equal($"used {Token}", returned["trace"]); // the app got its real value
+            var text = System.IO.File.ReadAllText(path);
+            Assert.DoesNotContain(Token, text);               // the tape did not
+        }
+
+        [Fact]
+        public void ScrubComposesWithRedactRatherThanReplacingIt()
+        {
+            // signup masks `password` by name; the scrub sweeps the token by value. Both survive the
+            // round trip, so adding one layer did not quietly disable the other.
+            var b = ScrubbingBoundary();
+            var path = TestSupport.RecordToTape(b, store =>
+            {
+                ToyTools.Signup(store, "a@b.c", "hunter2");
+                Fetch(store, "alice", Token);
+            });
+            var text = System.IO.File.ReadAllText(path);
+            Assert.DoesNotContain("hunter2", text);
+            Assert.DoesNotContain(Token, text);
+
+            var tape = Replay.LoadTape(path);
+            var store2 = TestSupport.WrapStore();
+            var signup = Replay.Call(Replay.PickCall(tape, fn: "signup"),
+                kw => ToyTools.Signup(store2, (string)kw["email"]!, "hunter2"), b);
+            Assert.True(signup.Ok, Replay.FormatReport(0, signup));
+        }
+
         [Fact]
         public void AskingADifferentQuestionDiverges()
         {

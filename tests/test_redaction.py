@@ -14,7 +14,7 @@ from tests import toy_effects, toy_tools
 SECRET = "s3cr3t-hunter2"
 
 
-def make_boundary(redact, forbid=()) -> fr.Boundary:
+def make_boundary(redact, forbid=(), scrub=None) -> fr.Boundary:
     return fr.Boundary(
         effects=[(toy_effects, ["fetch_remote", "maybe_fail", "read_config",
                                 "create_account"])],
@@ -23,13 +23,14 @@ def make_boundary(redact, forbid=()) -> fr.Boundary:
         random_modules=[toy_tools],
         error_revivers={"ToyError": lambda args: toy_effects.ToyError(*args)},
         redact=redact,
+        scrub=scrub,
         forbid=forbid,
     )
 
 
 class ToyAdapter(fr.ReplayAdapter):
-    def __init__(self, redact):
-        self.boundary = make_boundary(redact)
+    def __init__(self, redact, scrub=None):
+        self.boundary = make_boundary(redact, scrub=scrub)
         self.trace_root = os.path.dirname(toy_tools.__file__)
 
     def resolve(self, fn_name, feed):
@@ -45,8 +46,8 @@ class CaptureSink:
         self.published.append(data)
 
 
-def record(tmp_path, redact, run, sink=None, forbid=()):
-    fr.install(make_boundary(redact, forbid), toy_tools, directory=str(tmp_path),
+def record(tmp_path, redact, run, sink=None, forbid=(), scrub=None):
+    fr.install(make_boundary(redact, forbid, scrub), toy_tools, directory=str(tmp_path),
                enabled=True, sink=sink)
     try:
         run()
@@ -267,3 +268,129 @@ def test_forbid_is_opt_in(tmp_path):
     # not a policy the recorder imposes on every boundary that already exists.
     session = record(tmp_path, set(), lambda: asyncio.run(toy_tools.signup("t@x.com", KEY)))
     assert KEY in session.read_text(encoding="utf-8")
+
+
+# --- scrub: value-level redaction, for the secret no field name can reach (issue #22) -----
+#
+# The three layers are complements, not substitutes. `redact` masks by NAME and protects the
+# fields you thought of. `forbid` asserts the tape carries no credential and, when one gets
+# through, refuses to write — which is the correct answer and the end of the road: the call
+# cannot be recorded at all. `scrub` masks by VALUE, sweeping every leaf string wherever it
+# sits, so the positional argument, the interpolated key and the sentence of prose are masked
+# and the call is still recorded, still replayable. An assertion is not a fix; this is the fix.
+
+TOKEN = "tk-4f2a9c81"
+# Idempotent by construction, which is the whole contract: "[TOKEN]" contains no TOKEN, so a
+# value that came off the tape already masked scrubs to itself.
+mask_token = lambda s: s.replace(TOKEN, "[TOKEN]")
+
+
+def test_a_secret_with_no_field_name_is_masked_wherever_it_sits(tmp_path):
+    # Nothing is declared by name here — `redact` is empty. Every mask on this tape was put
+    # there by the sweep, in the three places a field name cannot follow a value to.
+    session = record(tmp_path, set(),
+                     lambda: asyncio.run(toy_tools.leak_everywhere("t@x.com", TOKEN)),
+                     scrub=mask_token)
+    nothing_on_disk_carries(tmp_path, TOKEN)
+    call = json.loads(session.read_text(encoding="utf-8").splitlines()[1])
+    fx_evs = [e for e in call["events"] if e["k"] == "fx"]
+    assert fx_evs[0]["args"] == ["[TOKEN]"]                       # positional: no name at all
+    assert fx_evs[1]["args"] == ["session:[TOKEN]:v1"]            # a substring inside a key
+    assert call["result"]["body"].startswith("Hello t@x.com — your token is [TOKEN].")
+    assert call["kwargs"]["token"] == "[TOKEN]"                   # and the kwarg too
+
+
+def test_a_scrubbed_recording_still_replays(tmp_path):
+    # The claim idempotence exists to make, tested rather than asserted in prose. Replay is
+    # handed the MASKED token off the tape, rebuilds the key and the body out of it, and the
+    # sweep maps the recorded derivation onto exactly that — so the questions still match.
+    session = record(tmp_path, set(),
+                     lambda: asyncio.run(toy_tools.leak_everywhere("t@x.com", TOKEN)),
+                     scrub=mask_token)
+    report = fr.replay_call(session, 0, ToyAdapter(set(), scrub=mask_token), None)
+    assert report.ok, (report.divergence, report.result_diff, report.write_divergences)
+    assert report.replayed_result["keyed"] == "session:[TOKEN]:v1"
+
+
+def test_the_scrub_must_be_applied_on_both_sides(tmp_path):
+    # A secret born INSIDE the code is the case that proves the replay side has to sweep too.
+    # `call_home` builds its password from a literal, not from the tape, so the replayed code
+    # produces it RAW every time. The recorded question is masked; the replayed one is not,
+    # unless replay scrubs its own side before comparing. This is why the sweep is applied on
+    # both paths, and it is the reason it has to be idempotent.
+    lit = "hunter2-literal"
+    mask_lit = lambda s: s.replace(lit, "[LIT]")
+    session = record(tmp_path, set(), lambda: asyncio.run(toy_tools.call_home("t@x.com")),
+                     scrub=mask_lit)
+    nothing_on_disk_carries(tmp_path, lit)
+
+    blind = fr.replay_call(session, 0, ToyAdapter(set()), None)   # adapter declares no sweep
+    assert not blind.ok and lit in (blind.divergence or "")
+    seeing = fr.replay_call(session, 0, ToyAdapter(set(), scrub=mask_lit), None)
+    assert seeing.ok, (seeing.divergence, seeing.result_diff)
+
+
+def test_the_gap_forbid_could_only_refuse_is_now_masked(tmp_path):
+    # Directly above, `test_a_value_no_field_name_could_ever_reach_is_still_caught` records
+    # this same call and it RAISES: the tripwire sees the nameless copy of `a` and refuses,
+    # and the call goes unrecorded. Same call, same tripwire, plus a sweep — and now the
+    # recording exists, carries no credential, and replays.
+    session = record(tmp_path, set(),
+                     lambda: asyncio.run(toy_tools.remote_sum("t@x.com", KEY, "k")),
+                     scrub=lambda s: s.replace(KEY, "[KEY]"), forbid=[KEY_SHAPE])
+    nothing_on_disk_carries(tmp_path, KEY)
+    call = json.loads(session.read_text(encoding="utf-8").splitlines()[1])
+    assert next(e for e in call["events"] if e["k"] == "fx")["args"] == ["[KEY]"]
+    report = fr.replay_call(session, 0,
+                            ToyAdapter(set(), scrub=lambda s: s.replace(KEY, "[KEY]")), None)
+    assert report.ok, (report.divergence, report.result_diff)
+
+
+def test_a_raising_scrub_degrades_to_the_mask(tmp_path):
+    # The failure direction is "masked", never "leaked" and never "broke the recorded call".
+    # A sweep that blows up on every string is the worst case, and the tool still returns.
+    def broken(s):
+        raise RuntimeError("boom")
+
+    got = {}
+    session = record(tmp_path, set(),
+                     lambda: got.setdefault(
+                         "r", asyncio.run(toy_tools.leak_everywhere("t@x.com", TOKEN))),
+                     scrub=broken)
+    assert got["r"]["body"].endswith("Do not share it.")   # the call itself: untouched
+    nothing_on_disk_carries(tmp_path, TOKEN)
+    call = json.loads(session.read_text(encoding="utf-8").splitlines()[1])
+    assert call["kwargs"]["token"] == fr.REDACTED
+    assert call["result"]["body"] == fr.REDACTED
+
+
+def test_scrub_composes_with_redact_rather_than_replacing_it(tmp_path):
+    # Both layers, both visible on one tape: the named field carries the field rule's mask,
+    # and the three copies no name could reach carry the sweep's.
+    session = record(tmp_path, {"token"},
+                     lambda: asyncio.run(toy_tools.leak_everywhere("t@x.com", TOKEN)),
+                     scrub=mask_token)
+    nothing_on_disk_carries(tmp_path, TOKEN)
+    call = json.loads(session.read_text(encoding="utf-8").splitlines()[1])
+    assert call["kwargs"]["token"] == fr.REDACTED                 # by name
+    fx_evs = [e for e in call["events"] if e["k"] == "fx"]
+    assert fx_evs[0]["args"] == ["[TOKEN]"]                       # by value
+    assert fx_evs[1]["args"] == ["session:[TOKEN]:v1"]
+
+
+def test_a_transform_output_still_meets_the_sweep(tmp_path):
+    # A field rule that returns a string is not a licence for the sweep to look away — it is
+    # easy to write a "safe" transform that quietly keeps the secret inside its output.
+    session = record(tmp_path, {"token": lambda v: f"len:{v}"},
+                     lambda: asyncio.run(toy_tools.leak_everywhere("t@x.com", TOKEN)),
+                     scrub=mask_token)
+    nothing_on_disk_carries(tmp_path, TOKEN)
+    call = json.loads(session.read_text(encoding="utf-8").splitlines()[1])
+    assert call["kwargs"]["token"] == "len:[TOKEN]"
+
+
+def test_no_scrub_is_a_no_op(tmp_path):
+    # Opt-in, like the other two: a boundary that declares nothing records exactly as before.
+    session = record(tmp_path, set(),
+                     lambda: asyncio.run(toy_tools.leak_everywhere("t@x.com", TOKEN)))
+    assert TOKEN in session.read_text(encoding="utf-8")

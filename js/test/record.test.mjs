@@ -17,11 +17,11 @@ let dir;
 let store;
 let tools;
 
-function setup({ redact = {}, constants = {}, gate = null } = {}) {
+function setup({ redact = {}, scrub = null, forbid = [], constants = {}, gate = null } = {}) {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flight-'));
   const raw = new ToyStore();
   store = fr.wrap(raw, ['get', 'set', 'boom'], { prefix: 'store' });
-  const b = fr.boundaryOf({ redact, constants });
+  const b = fr.boundaryOf({ redact, scrub, forbid, constants });
   fr.install(b, { directory: dir, gate });
 
   // Wrap every tool: this is the call boundary. (Forgetting this is exactly how a tape ends
@@ -210,6 +210,102 @@ test('a redaction rule that throws masks rather than leaks', async () => {
 
   assert.ok(!readTape().includes('hunter2'), 'the failure direction is masked, never leaked');
   assert.equal(calls()[0].kwargs.password, '[REDACTED]');
+});
+
+// --- the forbid tripwire ----------------------------------------------------------------
+//
+// `redact` and `scrub` are maskers: they rewrite the tape so it can still be replayed. `forbid`
+// is an assertion, and it refuses to write at all. The claim under test is never "an error was
+// raised" — it is that the tape does not hold the value.
+
+const PRIVATE_KEY = '-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK7\n';
+const KEY_SHAPE = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+
+test('a forbidden value in a result refuses the write — and the tape does not hold it', async () => {
+  setup({ forbid: [KEY_SHAPE] });
+  const leak = fr.tool('leak', async () => ({ note: 'here you go', key: PRIVATE_KEY }));
+
+  await assert.rejects(() => leak({ who: 'alice' }), fr.ForbiddenValue);
+
+  const tape = readTape();
+  assert.ok(!tape.includes('PRIVATE KEY'), 'the credential is nowhere on the tape');
+  assert.ok(!tape.includes('MIIBOgIBAAJBAK7'), 'nor is the body of it');
+  assert.equal(calls().length, 0, 'the refused line was never written — not even partially');
+  assert.deepEqual(fr.validateTape(tape), [], 'and what is left is still a conformant tape');
+});
+
+test('the error names the rule and points at the fix — never the match', async () => {
+  setup({ forbid: [KEY_SHAPE] });
+  const leak = fr.tool('leak', async () => ({ key: PRIVATE_KEY }));
+
+  await assert.rejects(() => leak({}), (e) => {
+    assert.equal(e.name, 'ForbiddenValue');
+    assert.match(e.message, /BEGIN \[A-Z \]\*PRIVATE KEY/, 'it names the pattern that fired');
+    assert.match(e.message, /nothing was written/i);
+    assert.match(e.message, /redact|widen a rule/, 'and says what to do about it');
+    assert.ok(!e.message.includes('MIIBOgIBAAJBAK7'), 'a tripwire that quotes the secret IS the leak');
+    return true;
+  });
+});
+
+test('a forbidden value anywhere on the line trips it — effect args included', async () => {
+  setup({ forbid: [/\b[a-f0-9]{64}\b/] });
+  const digest = 'a'.repeat(64); // the shape redaction never saw: a positional argument
+  const leak = fr.tool('leak', async () => { await store.set(digest, 1); });
+
+  await assert.rejects(() => leak({}), fr.ForbiddenValue);
+  assert.ok(!readTape().includes(digest), 'a value with no field name still cannot reach the tape');
+  assert.equal(calls().length, 0);
+});
+
+test('a credential pinned as a header constant never gets a tape at all', () => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flight-'));
+  const b = fr.boundaryOf({ constants: { 'config.KEY': PRIVATE_KEY }, forbid: [KEY_SHAPE] });
+
+  // The header is a tape line like any other, and it is written at install. A constant is the
+  // one place a secret sits still long enough to look harmless.
+  assert.throws(() => fr.install(b, { directory: dir }), fr.ForbiddenValue);
+  assert.deepEqual(fs.readdirSync(dir), [], 'no file was created to hold it');
+});
+
+test('a bad pattern fails at declaration, not at the first record', () => {
+  // A tripwire that only reports a broken rule when it first fires is no tripwire: the
+  // declaration would look installed and be inert until the exact moment it mattered.
+  assert.throws(() => fr.boundaryOf({ forbid: ['(unclosed'] }), (e) => {
+    assert.match(e.message, /bad forbid pattern/);
+    assert.match(e.message, /\(unclosed/, 'and says which one');
+    return true;
+  });
+});
+
+test('a value redaction already masked does not trip the wire', async () => {
+  setup({ redact: { password: null }, forbid: [/hunter2/] });
+  await tools.signup({ email: 'a@b.c', password: 'hunter2' });
+
+  // The tripwire reads the line AFTER masking, so the two compose instead of fighting: a field
+  // you did remember to name costs you nothing.
+  assert.equal(calls().length, 1, 'the call was written');
+  assert.equal(calls()[0].kwargs.password, '[REDACTED]');
+  assert.ok(!readTape().includes('hunter2'));
+});
+
+test('a value scrub already swept does not trip the wire either', async () => {
+  const bearer = /sk-[a-z0-9]{12}/;
+  setup({ scrub: (s) => s.replace(/sk-[a-z0-9]{12}/g, '[KEY]'), forbid: [bearer] });
+  const t = fr.tool('t', async () => ({ header: 'Authorization: Bearer sk-abcdef123456' }));
+
+  await t({});
+  assert.equal(calls().length, 1, 'the scrub got there first, so the write went through');
+  assert.equal(calls()[0].result.header, 'Authorization: Bearer [KEY]');
+});
+
+test('a clean recording is untouched by a declared tripwire', async () => {
+  setup({ forbid: [KEY_SHAPE, /\b[a-f0-9]{64}\b/] });
+  await tools.greet({ user: 'alice' });
+  await assert.rejects(() => tools.explode({ user: 'ghost' }));
+
+  assert.deepEqual(calls().map((c) => c.fn), ['greet', 'explode']);
+  assert.deepEqual(fr.validateTape(readTape()), []);
 });
 
 // --- gating ---------------------------------------------------------------------------

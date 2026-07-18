@@ -25,3 +25,24 @@ export class ProbeUnanswerable extends Error {
     this.name = 'ProbeUnanswerable';
   }
 }
+
+/**
+ * A `forbid` pattern matched the record the recorder was about to write.
+ *
+ * Raised at record time, before any bytes reach the file, the in-memory mirror or the sink — so
+ * the credential does not land, anywhere, ever. This is the one failure in the recorder that is
+ * deliberately NOT best-effort. Everywhere else the direction is "the recording is a bit poorer,
+ * the app survives", because a recorder must not break the app it observes. Here it inverts: a
+ * tape being written with a live credential on it is not a poorer recording, it is an
+ * exfiltration path, and the app is already in the state you swore it would never be in.
+ * Failing the call is the quiet option.
+ *
+ * The message names the RULE and never the match. It ends up in logs and stack traces, and a
+ * tripwire that quotes the secret it caught has become the leak it was there to prevent.
+ */
+export class ForbiddenValue extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ForbiddenValue';
+  }
+}
