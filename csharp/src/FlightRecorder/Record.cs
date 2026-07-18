@@ -190,7 +190,7 @@ namespace FlightRecorder
                 if (_sink == null) return;
                 // A sink that throws is swallowed: recording must never be the reason a call fails.
                 try { _sink.Publish(Name, _text); }
-                catch (Exception e) { Trace.WriteLine($"flight-recorder: sink publish failed — {e.Message}"); }
+                catch (Exception e) { System.Diagnostics.Trace.WriteLine($"flight-recorder: sink publish failed — {e.Message}"); }
             }
         }
 
@@ -262,7 +262,7 @@ namespace FlightRecorder
                 Active.Value = prev;
                 try { _writer.WriteCall(fn, kwargs, buf.Events, result, error, Mono.Elapsed.TotalMilliseconds - t0); }
                 catch (ForbiddenValue) { throw; }
-                catch (Exception e) { Trace.WriteLine($"flight-recorder: could not write the call — {e.Message}"); }
+                catch (Exception e) { System.Diagnostics.Trace.WriteLine($"flight-recorder: could not write the call — {e.Message}"); }
             }
         }
 
@@ -291,7 +291,7 @@ namespace FlightRecorder
                 Active.Value = prev;
                 try { _writer.WriteCall(fn, kwargs, buf.Events, result, error, Mono.Elapsed.TotalMilliseconds - t0); }
                 catch (ForbiddenValue) { throw; }
-                catch (Exception e) { Trace.WriteLine($"flight-recorder: could not write the call — {e.Message}"); }
+                catch (Exception e) { System.Diagnostics.Trace.WriteLine($"flight-recorder: could not write the call — {e.Message}"); }
             }
         }
 
