@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>flight-recorder — record the boundary, replay the real code</title>
-<meta name="description" content="Record an app's tool calls at their nondeterminism boundary; replay them deterministically against the real code. Python, Node, .NET, Go and Java, one tape.">
+<meta name="description" content="Record an app's tool calls at their nondeterminism boundary; replay them deterministically against the real code. Python, Node, .NET, Go, Java and PHP, one tape.">
 <style>
   /* Library documentation. Plain, legible, unbranded — the reader came for the API, not a
      product. Light by default, because that is what docs are; dark honoured if asked for. */
@@ -125,7 +125,8 @@
   body[data-show="js"] [data-lang="js"],
   body[data-show="cs"] [data-lang="cs"],
   body[data-show="go"] [data-lang="go"],
-  body[data-show="java"] [data-lang="java"] { display: block; }
+  body[data-show="java"] [data-lang="java"],
+  body[data-show="php"] [data-lang="php"] { display: block; }
 
   @media (max-width: 900px) {
     /* minmax(0, 1fr), never a bare 1fr. A grid item's automatic minimum size is its min-content
@@ -205,6 +206,7 @@
       <button role="tab" data-set="cs" aria-selected="false">.NET</button>
       <button role="tab" data-set="go" aria-selected="false">Go</button>
       <button role="tab" data-set="java" aria-selected="false">Java</button>
+      <button role="tab" data-set="php" aria-selected="false">PHP</button>
     </div>
     <nav>
       <a href="slides.html">Slides</a>
@@ -265,8 +267,9 @@ to happen again.</p>
   &lt;artifactId&gt;flight-recorder&lt;/artifactId&gt;
   &lt;version&gt;0.1.0&lt;/version&gt;
 &lt;/dependency&gt;</code></pre>
+<pre data-lang="php"><code>composer require xag/flight-recorder</code></pre>
 
-<p class="muted">Five implementations, <strong>one tape</strong> — format v1, frozen in
+<p class="muted">Six implementations, <strong>one tape</strong> — format v1, frozen in
 <a href="https://github.com/xag/flight-recorder/blob/main/spec/tape-v1.md">spec/tape-v1.md</a>.
 Only <em>record</em> and <em>replay</em> are language-bound: replaying JavaScript means running
 JavaScript. Everything downstream consumes the tape, and a tape is only data.</p>
@@ -356,6 +359,17 @@ Boundary boundary = new Boundary()
 // Wrap what the app HOLDS — a transparent proxy over an interface, never a mock.
 // Everything not named passes straight through, untouched and unrecorded.
 Store store = Recorder.wrapAs(Store.class, storageClient, "kv", "read", "write");</code></pre>
+<pre data-lang="php"><code>use Xag\FlightRecorder\{Boundary, Recorder};
+
+$boundary = (new Boundary())
+    -&gt;constant('Config::LIMIT', Config::LIMIT)              // header-captured
+    -&gt;maskFields('password')                                // field-name redaction
+    -&gt;forbidden('/-----BEGIN [A-Z ]*PRIVATE KEY-----/')     // the tripwire redaction can't name
+    -&gt;reviving('ApiError', fn (array $a) =&gt; new ApiError($a[0]));
+
+// Wrap what the app HOLDS — a transparent decorator, never a mock.
+// Everything not named passes straight through, untouched and unrecorded.
+$store = Recorder::wrapAs('kv', $storageClient, 'read', 'write');</code></pre>
 
 <div class="note" data-lang="js">
   <p><strong>Why wrapping, and not patching modules?</strong> An ES module's namespace is immutable:
@@ -388,9 +402,19 @@ Store store = Recorder.wrapAs(Store.class, storageClient, "kv", "read", "write")
   named methods, and forwards the rest untouched. Not a mock — it calls the real thing and writes
   down what came back.</p>
 </div>
+<div class="note" data-lang="php">
+  <p><strong>Why wrapping, and not patching?</strong> A PHP function name is not a rebindable
+  binding — you cannot point <code>file_get_contents</code> at something else — so, as in Node,
+  .NET, Go and Java, the boundary is the <em>object</em> the app holds. <code>wrapAs</code> returns
+  a decorator whose <code>__call</code> records the named methods and forwards the rest untouched.
+  PHP reaches this more cheaply than any of them: <code>__call</code> catches undefined methods at
+  run time, so there is no interface to implement and no code to generate. The cost is that the
+  wrapper does not satisfy a type declaration for the class it wraps — <code>unwrap()</code> is
+  there for the code paths that need the real object.</p>
+</div>
 
 <p>The clock and the RNG hold nothing to wrap in any runtime — Python and Node shim the globals,
-.NET, Go and Java read them through recorder handles.</p>
+.NET, Go, Java and PHP read them through recorder handles.</p>
 
 <div class="note" data-lang="js">
   <p>Node shims <code>Date.now</code>, <code>new Date()</code>, <code>performance.now</code>,
@@ -428,6 +452,19 @@ Store store = Recorder.wrapAs(Store.class, storageClient, "kv", "read", "write")
   does not follow work handed to an executor. If a recorded call fans out, wrap the task with
   <code>Recorder.propagate(...)</code> — otherwise the boundary reads on that thread go unrecorded,
   silently. Threads started inline inherit it without help.</p>
+</div>
+<div class="note" data-lang="php">
+  <p>PHP has no global clock or RNG to shim either, so the app calls the recorder's primitives:
+  <code>Recorder::now()</code> and <code>Recorder::perf()</code> for the clocks, and
+  <code>Recorder::sampleIndices</code> (the positions drawn) / <code>Recorder::randBytes</code> /
+  <code>Recorder::randFloat</code> / <code>Recorder::randInt</code> for randomness. Under record
+  they draw for real and write it down; under replay they answer from the tape.</p>
+  <p><strong>One thing to know:</strong> PHP has a single <code>DateTimeImmutable</code> and it
+  always carries a timezone, so <code>now()</code> writes an aware value and there is no naive/aware
+  distinction for a replay to preserve. Reading another runtime's tape, a naive <code>now.v</code>
+  revives in the default timezone. The ambient call is a static, which is exactly right for a
+  share-nothing request model: nothing can inherit it and nothing can lose it, so the executor
+  caveat that Java carries has no analogue here.</p>
 </div>
 
 <h2 id="record">Record</h2>
@@ -473,6 +510,14 @@ Object result = rec.call("study_status", Recorder.kwargs("user", user), () -&gt;
     LocalDateTime at = Recorder.now();       // now
     return compute(doc, at);
 });</code></pre>
+<pre data-lang="php"><code>$rec = Recorder::open('.flight', $boundary);   // lazy: the first admitted call opens the file
+
+// Wrap each tool call — that line IS the execution.
+$result = $rec-&gt;call('study_status', ['user' =&gt; $user], function () use ($store, $user) {
+    $doc = $store-&gt;read($user);          // fx, through the wrapped client
+    $at  = Recorder::now();              // now
+    return compute($doc, $at);
+});</code></pre>
 
 <p>Off by default. When enabled, each call writes one line — bound args, ordered boundary events,
 result.</p>
@@ -510,6 +555,10 @@ rec, _ := fr.New("flight", fr.Boundary{
 
 Boundary boundary = new Boundary()
     .enabledWhen((fn, kwargs) -&gt; writes.contains(fn));   // record what matters, not everything</code></pre>
+<pre data-lang="php"><code>$writes = ['set_level', 'record_answer'];
+
+$boundary = (new Boundary())
+    -&gt;enabledWhen(fn (string $fn, array $kwargs) =&gt; in_array($fn, $writes, true));   // record what matters</code></pre>
 
 <p class="muted">A gate that never fires leaves no session file at all. A gate that raises is treated
 as a "no": it can never break the call it was asked about.</p>
@@ -570,6 +619,12 @@ Boundary boundary = new Boundary()
     .publishingTo((name, text) -&gt; kv.setex("flight:" + name, Duration.ofDays(7), text));
 
 Recorder rec = Recorder.open(".flight", boundary);   // hand off and return; never block</code></pre>
+<pre data-lang="php"><code>// One method, handed the WHOLE session text each time — so an overwriting store is enough
+// and a tape is never half-published.
+$boundary = (new Boundary())
+    -&gt;publishingTo(fn (string $name, string $text) =&gt; $redis-&gt;setex("flight:$name", 604800, $text));
+
+$rec = Recorder::open('.flight', $boundary);   // hand off and return; never block</code></pre>
 
 <div class="note" data-lang="cs">
   <p>The sink is handed the whole session — after the header, and after every completed call — so an
@@ -652,6 +707,15 @@ boundary.Forbidden(@"\b[a-f0-9]{64}\b")                        // a scrypt diges
     // is matched against the fully-redacted line; a hit raises ForbiddenValue and writes nothing.
     .forbidden("\\b[a-f0-9]{64}\\b")                     // a scrypt digest survived redaction
     .forbidden("-----BEGIN [A-Z ]*PRIVATE KEY-----");</code></pre>
+<pre data-lang="php"><code>$boundary = (new Boundary())
+    -&gt;maskFields('password', 'ssn')                      // by FIELD NAME
+    // …or map a field to a deterministic tokenizer, keeping distinctness without the value:
+    -&gt;redacting('email', fn ($v) =&gt; str_starts_with($v, 'tok:') ? $v : 'tok:' . hmacHex($v))
+    -&gt;scrubbing('/\d{3}-\d{2}-\d{4}/')                  // by VALUE: every string, anywhere
+    // `forbidden` states what a field rule cannot: THIS TAPE CARRIES NO CREDENTIAL. Each pattern
+    // is matched against the fully-redacted line; a hit throws ForbiddenValue and writes nothing.
+    -&gt;forbidden('/\b[a-f0-9]{64}\b/')                    // a scrypt digest survived redaction
+    -&gt;forbidden('/-----BEGIN [A-Z ]*PRIVATE KEY-----/');</code></pre>
 
 <div class="note">
   <p>Field rules assume secrets live in named fields. Often they do not: an address handed to a store
@@ -758,6 +822,15 @@ Replay.Report report = Replay.replayCall(tape.call("study_status"),
 
 report.ok()          // result and error both reproduce the recording
 report.divergence    // …or the exact point where behaviour changed</code></pre>
+<pre data-lang="php"><code>$tape   = Recording::load('.flight/flight-….jsonl');
+$report = Replay::replayCall(
+    $tape-&gt;call('study_status'),
+    fn (string $fn, array $kwargs) =&gt; fn () =&gt; studyStatus($kwargs['user']),   // the same function;
+    $boundary                                 // its effects come off the tape, not the network
+);
+
+$report-&gt;ok();          // result and error both reproduce the recording
+$report-&gt;divergence;    // …or the exact point where behaviour changed</code></pre>
 
 <h3>Divergence is the finding</h3>
 
@@ -817,6 +890,11 @@ run.Trace.Render("deck")    // a readable timeline</code></pre>
 
 run.trace().values("level");   // [level=0 at Tools.java:12 in Tools.studyStatus]
 run.trace().render("deck");    // a readable timeline</code></pre>
+<pre data-lang="php"><code>$run = Tracer::run(['src/Tools.php'],            // the files to observe
+                   App\Tools::class, 'studyStatus', $user);
+
+$run-&gt;trace-&gt;values('level');   // [level=0 at Tools.php:12 in Tools.studyStatus]
+$run-&gt;trace-&gt;render('deck');    // a readable timeline</code></pre>
 
 <div class="note" data-lang="cs">
   <p>The CLR has no <code>sys.settrace</code> and no per-line hook, so the code is <strong>rewritten
@@ -844,6 +922,19 @@ run.trace().render("deck");    // a readable timeline</code></pre>
   <p>One consequence worth knowing: javac exposes no definite-assignment analysis (Roslyn does), so
   the rewriter tracks scope syntactically and observes a local only from the statement after an
   initialised declaration. It may miss a variable; it can never emit one javac would reject.</p>
+</div>
+<div class="note" data-lang="php">
+  <p>PHP exposes no per-line hook a library can install without an extension, so it takes the same
+  road as .NET, Go and Java: <code>token_get_all</code> — PHP's own lexer, in core and always
+  present — instruments the sources, and the copy is included <strong>in-process</strong>, sharing
+  this package and therefore the same boundary and the same tape. Xdebug was rejected because a
+  library has no business requiring an extension in someone else's <code>php.ini</code>, and
+  <code>declare(ticks=1)</code> because a tick handler cannot read the locals of the frame that
+  triggered it, which makes it a profiler rather than a trace.</p>
+  <p>One consequence worth knowing, and it is a pleasant one: <code>get_defined_vars()</code> hands
+  over every local in scope, so the rewriter never names a variable and never has to reason about
+  whether one is assigned. The definite-assignment analysis that .NET asks Roslyn for, and that Java
+  approximates syntactically, simply has no counterpart to work around here.</p>
 </div>
 
 <h2 id="regression">Pinned recordings</h2>
@@ -905,6 +996,17 @@ void thePinnedSessionStillBehaves() throws Exception {
 
     assertTrue(report.ok(), () -&gt; Replay.format(0, report));
 }</code></pre>
+<pre data-lang="php"><code>public function testThePinnedSessionStillBehaves(): void
+{
+    $tape   = Recording::load(__DIR__ . '/recordings/status.jsonl');
+    $report = Replay::replayCall(
+        $tape-&gt;call('study_status'),
+        fn (string $fn, array $kwargs) =&gt; fn () =&gt; studyStatus($kwargs['user']),
+        $this-&gt;boundary
+    );
+
+    self::assertTrue($report-&gt;ok(), (string) $report);
+}</code></pre>
 
 <h2 id="mutation">Edit the tape to visit a world that never happened</h2>
 
@@ -950,8 +1052,16 @@ call.clock().reverse();             // time runs backwards
 // Editing a call marks it a probe: arguments are no longer compared, name and order still gate.
 Invariants.Report report = call.check(resolver, invariants, boundary);
 call.save("src/test/resources/recordings/empty-corpus.jsonl", boundary);   // pin it: a probe suite member</code></pre>
+<pre data-lang="php"><code>$tape = Recording::load($path);
+$call = Mutate::on($tape-&gt;call(0));
+$call-&gt;read('stream')-&gt;setEmpty();     // empty corpus — the store can never answer this
+$call-&gt;clock()-&gt;reverse();             // time runs backwards
 
-<h2 id="invariants">Invariants <span class="badge">Python · Node · .NET · Go · Java</span></h2>
+// Editing a call marks it a probe: arguments are no longer compared, name and order still gate.
+$report = $call-&gt;check($resolver, $invariants, $boundary);
+$tape-&gt;forbiddingFrom($boundary)-&gt;save(__DIR__ . '/recordings/empty-corpus.jsonl');   // pin it</code></pre>
+
+<h2 id="invariants">Invariants <span class="badge">Python · Node · .NET · Go · Java · PHP</span></h2>
 
 <p>An invariant is a claim about <strong>every</strong> execution, written once and checked against any
 recording — so it can condemn the very first observation of a bug, which no recording can. A bug
@@ -1031,6 +1141,22 @@ var levelNeverEmpties = Invariants.of("level never excludes the whole corpus", t
 
 Invariants.Report report = Invariants.check(tape, 0, resolver,
     List.of(noEmptyClaim, levelNeverEmpties), boundary, false);</code></pre>
+<pre data-lang="php"><code>$noEmptyClaim = Invariant::of('never claims end-of-corpus while words remain', function ($t) {
+    $r = $t-&gt;resultArray();
+    if ($r['done'] &amp;&amp; $r['corpus'] - $r['deck'] &gt; 0) {
+        throw new RuntimeException('claimed done with ' . ($r['corpus'] - $r['deck']) . ' left');
+    }
+});
+
+$levelNeverEmpties = Invariant::of('level never excludes the whole corpus', function ($t) {
+    foreach ($t-&gt;trace-&gt;values('level') as $obs) {
+        if ($obs-&gt;value &lt;= 0) {
+            throw new RuntimeException("level={$obs-&gt;value} at {$obs-&gt;at}");
+        }
+    }
+});
+
+$report = Invariants::check($tape, 0, $resolver, [$noEmptyClaim, $levelNeverEmpties], $boundary);</code></pre>
 
 <p data-lang="py">The second claim is the reason this exists: the production bug that shaped the library
 was an internal variable (<code>level=0</code>) silently emptying a whole corpus, with a perfectly
@@ -1045,7 +1171,7 @@ claims the code made, and — through <code>v.Trace</code> — every local on ev
   <em>any</em> of them. A tape written by Go can be judged by a claim written in Node.</p>
 </div>
 
-<h2 id="sem">Semantic spans <span class="badge">Python · Node · .NET · Go · Java</span></h2>
+<h2 id="sem">Semantic spans <span class="badge">Python · Node · .NET · Go · Java · PHP</span></h2>
 
 <p>A recording answers <strong>“same?”</strong>. An invariant answers <strong>“right?”</strong>. Neither
 answers <strong>“what was this?”</strong> — and that is the question anyone actually opens a tape with.
@@ -1077,6 +1203,10 @@ call to the thing that charges cards beneath it, is a claim a reader can now ref
 <pre data-lang="java"><code>Recorder.span("assign_turn", Map.of("chore", chore), () -&gt; {   // every boundary event inside the span
     Snapshot holder = Recorder.queryOne("get", "member:" + who, () -&gt; db.get(who));
     Recorder.note("skipped", Map.of("reason", "absent"));      // a moment worth marking, no span
+});</code></pre>
+<pre data-lang="php"><code>Recorder::span('assign_turn', ['chore' =&gt; $chore], function () use ($db, $who) {   // events inside the span
+    $holder = Recorder::queryOne('get', "member:$who", fn () =&gt; $db-&gt;get($who));
+    Recorder::note('skipped', ['reason' =&gt; 'absent']);          // a moment worth marking, no span
 });</code></pre>
 
 <p>Which makes a tape something you can <strong>read</strong> rather than search. Load the semantic
@@ -1121,6 +1251,13 @@ enrol  ok  (1 now)
     - corpus_read  found=true
     register  ERROR  (2 fx)
     - registration_failed  why="no such key: alice"</code></pre>
+<pre data-lang="php"><code>&gt; echo Recording::load($tape)-&gt;call(0)-&gt;renderSpans();
+enrol  ok  (1 now)
+  enrol  ok
+    load_corpus  ok  (1 fx)
+    - corpus_read  found=true
+    register  ERROR  (2 fx)
+    - registration_failed  why="no such key: alice"</code></pre>
 
 <p>Spans are call-scoped and well-nested by construction (the only way to open one is the context
 manager), so enclosure is derived from order and there are no parent pointers to get wrong. A body that
@@ -1145,14 +1282,14 @@ in.</p>
 
 <div class="table-wrap">
 <table>
-  <tr><th></th><th>Python</th><th>Node</th><th>.NET</th><th>Go</th><th>Java</th></tr>
-  <tr><td>Boundary</td><td>name module functions; patch in place</td><td>wrap what the app <em>holds</em> — namespaces are immutable</td><td>wrap what the app <em>holds</em> — a <code>DispatchProxy</code>; bindings can't be swapped</td><td>explicit primitives on a <code>context.Context</code> — no patch, no proxy</td><td>wrap what the app <em>holds</em> — a <code>java.lang.reflect.Proxy</code>; patching would cost a <code>-javaagent</code></td></tr>
-  <tr><td>Randomness</td><td><code>sample</code> — the <em>positions</em> drawn, so a mutated population still replays</td><td><code>bytes</code>/<code>float</code>/<code>int</code> — the draw <em>is</em> the value</td><td>a handle covering every shape — <code>sample</code> and <code>bytes</code>/<code>int</code>/<code>float</code></td><td>primitives for every shape — the <em>positions</em>, and <code>bytes</code>/<code>float</code>/<code>int</code></td><td>primitives for every shape — the <em>positions</em>, and <code>bytes</code>/<code>float</code>/<code>int</code></td></tr>
-  <tr><td>Nothing</td><td>one — <code>None</code></td><td>two — <code>undefined</code> earns its own marker</td><td>one — <code>null</code></td><td>one — <code>nil</code></td><td>one — <code>null</code></td></tr>
-  <tr><td>The clock's shape</td><td>naive or aware, and the difference is preserved</td><td>one <code>Date</code></td><td><code>DateTime</code>/<code>DateTimeOffset</code></td><td>always located</td><td><code>LocalDateTime</code> or <code>OffsetDateTime</code> — preserved, because they do not compare</td></tr>
-  <tr><td>The sink</td><td>hand the bytes to a queue</td><td>hand the promise to the host — <code>waitUntil</code></td><td>a synchronous <code>Publish</code>, handed the whole session</td><td>a <code>Publish([]byte)</code> handed the whole session — hand off and return</td><td>a <code>publish(name, text)</code> handed the whole session — hand off and return</td></tr>
-  <tr><td>The ambient</td><td>a <code>ContextVar</code></td><td>an <code>AsyncLocalStorage</code></td><td>an <code>AsyncLocal</code>, which follows an <code>await</code></td><td>an explicit <code>context.Context</code> — honest across goroutines</td><td>an <code>InheritableThreadLocal</code>; an executor needs <code>Recorder.propagate</code></td></tr>
-  <tr><td>Tracing</td><td><code>sys.settrace</code> — every local, every executed line, free</td><td>the same, via the V8 Inspector from a worker thread — slower, and it sees across an <code>await</code></td><td>no runtime hook exists, so the code is rewritten: Roslyn instruments the sources, compiles to memory, and the traced copy runs in-process</td><td>no runtime hook either — <code>go/ast</code> instruments a copy of the module, so the traced run costs a compile and happens in its own process</td><td>no runtime hook either — javac's own <code>com.sun.source</code> parser instruments the sources and compiles them to memory, in-process, as .NET does</td></tr>
+  <tr><th></th><th>Python</th><th>Node</th><th>.NET</th><th>Go</th><th>Java</th><th>PHP</th></tr>
+  <tr><td>Boundary</td><td>name module functions; patch in place</td><td>wrap what the app <em>holds</em> — namespaces are immutable</td><td>wrap what the app <em>holds</em> — a <code>DispatchProxy</code>; bindings can't be swapped</td><td>explicit primitives on a <code>context.Context</code> — no patch, no proxy</td><td>wrap what the app <em>holds</em> — a <code>java.lang.reflect.Proxy</code>; patching would cost a <code>-javaagent</code></td><td>wrap what the app <em>holds</em> — a <code>__call</code> decorator, so no interface and no code generation</td></tr>
+  <tr><td>Randomness</td><td><code>sample</code> — the <em>positions</em> drawn, so a mutated population still replays</td><td><code>bytes</code>/<code>float</code>/<code>int</code> — the draw <em>is</em> the value</td><td>a handle covering every shape — <code>sample</code> and <code>bytes</code>/<code>int</code>/<code>float</code></td><td>primitives for every shape — the <em>positions</em>, and <code>bytes</code>/<code>float</code>/<code>int</code></td><td>primitives for every shape — the <em>positions</em>, and <code>bytes</code>/<code>float</code>/<code>int</code></td><td>primitives for every shape, over <code>random_int</code>/<code>random_bytes</code></td></tr>
+  <tr><td>Nothing</td><td>one — <code>None</code></td><td>two — <code>undefined</code> earns its own marker</td><td>one — <code>null</code></td><td>one — <code>nil</code></td><td>one — <code>null</code></td><td>one — <code>null</code></td></tr>
+  <tr><td>The clock's shape</td><td>naive or aware, and the difference is preserved</td><td>one <code>Date</code></td><td><code>DateTime</code>/<code>DateTimeOffset</code></td><td>always located</td><td><code>LocalDateTime</code> or <code>OffsetDateTime</code> — preserved, because they do not compare</td><td>one <code>DateTimeImmutable</code>, always zoned — so there is no awareness to preserve</td></tr>
+  <tr><td>The sink</td><td>hand the bytes to a queue</td><td>hand the promise to the host — <code>waitUntil</code></td><td>a synchronous <code>Publish</code>, handed the whole session</td><td>a <code>Publish([]byte)</code> handed the whole session — hand off and return</td><td>a <code>publish(name, text)</code> handed the whole session — hand off and return</td><td>a <code>publish(name, text)</code> handed the whole session; no background thread to hide latency in</td></tr>
+  <tr><td>The ambient</td><td>a <code>ContextVar</code></td><td>an <code>AsyncLocalStorage</code></td><td>an <code>AsyncLocal</code>, which follows an <code>await</code></td><td>an explicit <code>context.Context</code> — honest across goroutines</td><td>an <code>InheritableThreadLocal</code>; an executor needs <code>Recorder.propagate</code></td><td>a static — share-nothing per request, so nothing can inherit it or lose it</td></tr>
+  <tr><td>Tracing</td><td><code>sys.settrace</code> — every local, every executed line, free</td><td>the same, via the V8 Inspector from a worker thread — slower, and it sees across an <code>await</code></td><td>no runtime hook exists, so the code is rewritten: Roslyn instruments the sources, compiles to memory, and the traced copy runs in-process</td><td>no runtime hook either — <code>go/ast</code> instruments a copy of the module, so the traced run costs a compile and happens in its own process</td><td>no runtime hook either — javac's own <code>com.sun.source</code> parser instruments the sources and compiles them to memory, in-process, as .NET does</td><td>no runtime hook either — PHP's own <code>token_get_all</code> instruments the sources and the copy is included in-process; <code>get_defined_vars()</code> hands over every local, so nothing has to be named</td></tr>
 </table>
 </div>
 
@@ -1274,7 +1411,7 @@ claim above is a survey result, not a proof.</p>
 
   let saved = null;
   try { saved = localStorage.getItem(KEY); } catch {}
-  show(['js', 'cs', 'go', 'java'].includes(saved) ? saved : 'py');
+  show(['js', 'cs', 'go', 'java', 'php'].includes(saved) ? saved : 'py');
 </script>
 
 <script>
@@ -1306,6 +1443,10 @@ claim above is a survey result, not a proof.</p>
         re: /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("""[\s\S]*?"""|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(@[A-Za-z_]\w*)|(\b(?:null|true|false|this|super)\b)|(\b(?:package|import|class|interface|enum|record|extends|implements|public|private|protected|static|final|abstract|synchronized|volatile|transient|native|strictfp|sealed|permits|var|new|return|if|else|for|while|do|switch|case|break|continue|try|catch|finally|throw|throws|instanceof|void|yield|default|assert)\b)|(\b[A-Za-z_]\w*(?=\s*[(<]))|(\b[A-Z][A-Za-z0-9_]*\b)|(\b\d[\d_]*\.?\d*[fdlFDL]?\b)/g,
         cls: ['tok-com', 'tok-str', 'tok-dec', 'tok-con', 'tok-key', 'tok-fn', 'tok-typ', 'tok-num'],
       },
+      php: {
+        re: /(\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\$[A-Za-z_]\w*)|(\b(?:null|true|false|this|self|static|parent)\b)|(\b(?:namespace|use|class|interface|trait|enum|extends|implements|public|private|protected|final|abstract|readonly|function|fn|return|new|if|else|elseif|for|foreach|as|while|do|switch|case|break|continue|try|catch|finally|throw|match|instanceof|echo|print|require|require_once|include|include_once|declare|yield|global|const|clone)\b)|(\b[A-Za-z_]\w*(?=\s*\())|(\b\d[\d_]*\.?\d*\b)/g,
+        cls: ['tok-com', 'tok-str', 'tok-dec', 'tok-con', 'tok-key', 'tok-fn', 'tok-num'],
+      },
       xml: {
         re: /(&lt;!--[\s\S]*?--&gt;)|(&lt;\/?[A-Za-z][\w:.-]*)|(&gt;)|("(?:[^"\\]|\\.)*")/g,
         cls: ['tok-com', 'tok-key', 'tok-key', 'tok-str'],
@@ -1315,7 +1456,7 @@ claim above is a survey result, not a proof.</p>
         cls: ['tok-typ', 'tok-str', 'tok-con', 'tok-num'],
       },
       shell: {
-        re: /(#[^\n]*)|("[^"]*"|'[^']*')|(\b(?:pip|npm|dotnet|python|pytest|git|node|uv|go)\b)|(\s--?[A-Za-z][\w-]*)/g,
+        re: /(#[^\n]*)|("[^"]*"|'[^']*')|(\b(?:pip|npm|dotnet|python|pytest|git|node|uv|go|composer|php|phpunit)\b)|(\s--?[A-Za-z][\w-]*)/g,
         cls: ['tok-com', 'tok-str', 'tok-fn', 'tok-con'],
       },
     };
@@ -1342,7 +1483,7 @@ claim above is a survey result, not a proof.</p>
     // shell, and console output is nobody's language. So detect from content first, tab second.
     function detectLang(code, dataLang) {
       const first = code.replace(/^\n+/, '').split('\n', 1)[0].trim();
-      if (/^(pip|npm|dotnet|go get)\b/.test(first)) return 'shell';
+      if (/^(pip|npm|dotnet|go get|composer)\b/.test(first)) return 'shell';
       if (/^\$\s/.test(first)) return 'shell';
       if (/^>>>\s/.test(first) || /^>\s/.test(first)) return null; // console/output — leave plain
       if (/^\{/.test(first)) return 'json';
@@ -1353,6 +1494,7 @@ claim above is a survey result, not a proof.</p>
       // The Maven coordinates are XML, not Java — the tab says java, the content disagrees, and
       // the content wins (same reason `pip install` under the py tab is shell).
       if (dataLang === 'java') return /^&lt;/.test(first) ? 'xml' : 'java';
+      if (dataLang === 'php') return 'php';
       return null;
     }
 

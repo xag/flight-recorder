@@ -20,7 +20,7 @@ no waiting for the bug to happen again.
 ## → [Read the guide](https://xag.github.io/flight-recorder/)
 
 The full walkthrough — declare the boundary, record, replay, edit the tape to visit worlds that
-never happened, invariants, semantic spans — in Python, Node and .NET, one tab away.
+never happened, invariants, semantic spans — in Python, Node, .NET, Go, Java and PHP, one tab away.
 [Slides — Testing as Simulation](https://xag.github.io/flight-recorder/slides.html).
 
 ## The tape is a standard
@@ -29,9 +29,9 @@ The recording format is a frozen, documented wire contract: [`spec/tape-v1.md`](
 **Implementations are welcome** — only *record* and *replay* must be native to a runtime;
 everything that *analyzes* a tape works on any tape. Conformance is not the prose: it is
 [`spec/fixtures/`](spec/fixtures/) plus the checker in [`spec/validate.py`](spec/validate.py)
-(mirrored in JS, .NET, Go, and Java). Every implementation must validate every fixture, and every
-fixture must have been produced by an implementation. This repo ships five implementations —
-Python, Node, .NET, Go, and Java — reading and writing the same tapes.
+(mirrored in JS, .NET, Go, Java, and PHP). Every implementation must validate every fixture, and every
+fixture must have been produced by an implementation. This repo ships six implementations —
+Python, Node, .NET, Go, Java, and PHP — reading and writing the same tapes.
 
 ## Why
 

@@ -97,3 +97,28 @@ jobs:
           java-version: "21"
           cache: maven
       - run: mvn -B --no-transfer-progress test
+
+  # The PHP port: install, test, and confirm the recorder emits conformant tapes. The fixture
+  # generator is env-gated (FR_REGEN_FIXTURES), so `phpunit` never mutates the committed
+  # php-*.jsonl; the ungated scenario test records to a temp dir and validates there instead. As
+  # with the others, the Python and Node conformance suites glob spec/fixtures/ and validate the
+  # checked-in php-*.jsonl on their own — so a fork of the tape between runtimes fails a build
+  # that is not this one, which is the whole point of the arrangement.
+  #
+  # Only ext-json and ext-tokenizer, both bundled: variable-level tracing rewrites the sources
+  # with PHP's own lexer rather than asking for a debugging extension, so there is nothing here a
+  # stock PHP does not already have.
+  php:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: php
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: json, tokenizer, mbstring
+          coverage: none
+      - run: composer install --no-interaction --no-progress
+      - run: composer exec phpunit -- --colors=never

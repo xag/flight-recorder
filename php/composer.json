@@ -1,0 +1,45 @@
+{
+  "name": "xag/flight-recorder",
+  "description": "Record the answers your code got from the outside world while handling a request, and replay that exact request against the real code. A PHP implementation of the frozen tape-v1 wire format.",
+  "type": "library",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/xag/flight-recorder",
+  "authors": [
+    { "name": "Xavier Grehant" }
+  ],
+  "support": {
+    "issues": "https://github.com/xag/flight-recorder/issues",
+    "source": "https://github.com/xag/flight-recorder"
+  },
+  "keywords": [
+    "record",
+    "replay",
+    "deterministic",
+    "testing",
+    "debugging",
+    "simulation",
+    "observability",
+    "nondeterminism",
+    "regression"
+  ],
+  "require": {
+    "php": ">=8.1",
+    "ext-json": "*",
+    "ext-tokenizer": "*"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^10.5"
+  },
+  "autoload": {
+    "psr-4": { "Xag\\FlightRecorder\\": "src/" }
+  },
+  "autoload-dev": {
+    "psr-4": { "Xag\\FlightRecorder\\Tests\\": "tests/" }
+  },
+  "scripts": {
+    "test": "phpunit"
+  },
+  "config": {
+    "sort-packages": true
+  }
+}
