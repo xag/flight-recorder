@@ -154,6 +154,42 @@
        that can be read and let .table-wrap scroll, which is what it is there for. */
     .table-wrap table { min-width: 32rem; }
   }
+
+  /* --- code: a copy button and syntax highlighting, both inline and dependency-free --- */
+
+  /* The button pins to this non-scrolling wrapper, not to <pre> — a <pre> is an overflow-x
+     scroll container, and a button positioned inside it would slide away with the code. */
+  .code-wrap { position: relative; }
+  .copy-btn {
+    position: absolute; top: .4rem; right: .4rem;
+    font: 600 .68rem/1 var(--mono); color: var(--muted);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 5px;
+    padding: .34rem .55rem; cursor: pointer; opacity: 0; transition: opacity .12s, color .12s;
+  }
+  .code-wrap:hover .copy-btn, .copy-btn:focus-visible { opacity: 1; }
+  .copy-btn:hover { color: var(--fg); border-color: var(--muted); }
+  .copy-btn.copied { color: var(--tok-dec); border-color: var(--tok-dec); opacity: 1; }
+  @media (hover: none) { .copy-btn { opacity: 1; } }   /* touch has no hover — always show it */
+
+  /* GitHub-flavoured token colours, tuned for both themes the page already honours. */
+  :root {
+    --tok-com: #6e7781; --tok-str: #0a3069; --tok-num: #0550ae; --tok-key: #cf222e;
+    --tok-con: #0550ae; --tok-fn: #8250df; --tok-typ: #953800; --tok-dec: #116329;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --tok-com: #8b949e; --tok-str: #a5d6ff; --tok-num: #79c0ff; --tok-key: #ff7b72;
+      --tok-con: #79c0ff; --tok-fn: #d2a8ff; --tok-typ: #ffa657; --tok-dec: #7ee787;
+    }
+  }
+  .tok-com { color: var(--tok-com); font-style: italic; }
+  .tok-str { color: var(--tok-str); }
+  .tok-num { color: var(--tok-num); }
+  .tok-key { color: var(--tok-key); }
+  .tok-con { color: var(--tok-con); }
+  .tok-fn  { color: var(--tok-fn); }
+  .tok-typ { color: var(--tok-typ); }
+  .tok-dec { color: var(--tok-dec); }
 </style>
 </head>
 <body data-show="py">
@@ -908,6 +944,118 @@ claim above is a survey result, not a proof.</p>
   let saved = null;
   try { saved = localStorage.getItem(KEY); } catch {}
   show(['js', 'cs'].includes(saved) ? saved : 'py');
+</script>
+
+<script>
+  // A copy button on every code block, and inline syntax highlighting. No dependencies and no
+  // network: with JavaScript off the code still reads, because the source is already escaped.
+  (function () {
+    const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    // Each language is one combined regex; the first alternative that matches at a position wins,
+    // so comments and strings are claimed before any keyword inside them can be.
+    const LANGS = {
+      python: {
+        re: /(#[^\n]*)|([rbuf]{0,2}(?:'''[\s\S]*?'''|"""[\s\S]*?"""|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"))|(@[A-Za-z_]\w*)|(\b(?:True|False|None|self|cls)\b)|(\b(?:def|class|import|from|as|return|with|for|while|in|if|elif|else|try|except|finally|raise|yield|lambda|await|async|pass|break|continue|global|nonlocal|assert|del|not|and|or|is)\b)|(\b[A-Za-z_]\w*(?=\s*\())|(\b\d[\d_]*\.?\d*\b)/g,
+        cls: ['tok-com', 'tok-str', 'tok-dec', 'tok-con', 'tok-key', 'tok-fn', 'tok-num'],
+      },
+      javascript: {
+        re: /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")|(\b(?:this|true|false|null|undefined|NaN|Infinity)\b)|(\b(?:const|let|var|function|return|import|export|from|default|async|await|new|class|extends|if|else|for|of|in|while|do|switch|case|break|continue|try|catch|finally|throw|typeof|instanceof|void|yield|delete)\b)|(\b[A-Za-z_$][\w$]*(?=\s*\())|(\b\d[\d_]*\.?\d*\b)/g,
+        cls: ['tok-com', 'tok-str', 'tok-con', 'tok-key', 'tok-fn', 'tok-num'],
+      },
+      csharp: {
+        re: /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|([$@]{0,2}"(?:[^"\\]|\\.)*")|(\b(?:using|namespace|var|new|class|struct|interface|enum|public|private|protected|internal|static|readonly|const|void|return|if|else|for|foreach|in|while|do|switch|case|break|continue|try|catch|finally|throw|null|true|false|async|await|nameof|typeof|is|as|out|ref|params|this|base|override|virtual|abstract|sealed|get|set|yield|default|when)\b)|(\b[A-Za-z_]\w*(?=\s*[(<]))|(\b[A-Z][A-Za-z0-9_]*\b)|(\b\d[\d_]*\.?\d*[fdmL]?\b)/g,
+        cls: ['tok-com', 'tok-str', 'tok-key', 'tok-fn', 'tok-typ', 'tok-num'],
+      },
+      json: {
+        re: /("(?:[^"\\]|\\.)*"(?=\s*:))|("(?:[^"\\]|\\.)*")|(\b(?:true|false|null)\b)|(-?\d[\d.eE+-]*)/g,
+        cls: ['tok-typ', 'tok-str', 'tok-con', 'tok-num'],
+      },
+      shell: {
+        re: /(#[^\n]*)|("[^"]*"|'[^']*')|(\b(?:pip|npm|dotnet|python|pytest|git|node|uv)\b)|(\s--?[A-Za-z][\w-]*)/g,
+        cls: ['tok-com', 'tok-str', 'tok-fn', 'tok-con'],
+      },
+    };
+
+    function highlight(code, key) {
+      const spec = LANGS[key];
+      if (!spec) return escapeHtml(code);
+      let out = '';
+      let last = 0;
+      let m;
+      spec.re.lastIndex = 0;
+      while ((m = spec.re.exec(code))) {
+        if (m.index > last) out += escapeHtml(code.slice(last, m.index));
+        let gi = 1;
+        while (gi < m.length && m[gi] === undefined) gi += 1;
+        out += '<span class="' + (spec.cls[gi - 1] || '') + '">' + escapeHtml(m[0]) + '</span>';
+        last = m.index + m[0].length;
+        if (m[0] === '') spec.re.lastIndex += 1;
+      }
+      return out + escapeHtml(code.slice(last));
+    }
+
+    // The tab attribute (py/js/cs) is not the syntax: a `pip install` block is tagged py but is
+    // shell, and console output is nobody's language. So detect from content first, tab second.
+    function detectLang(code, dataLang) {
+      const first = code.replace(/^\n+/, '').split('\n', 1)[0].trim();
+      if (/^(pip|npm|dotnet)\b/.test(first)) return 'shell';
+      if (/^\$\s/.test(first)) return 'shell';
+      if (/^>>>\s/.test(first) || /^>\s/.test(first)) return null; // console/output — leave plain
+      if (/^\{/.test(first)) return 'json';
+      if (dataLang === 'py') return 'python';
+      if (dataLang === 'js') return 'javascript';
+      if (dataLang === 'cs') return 'csharp';
+      return null;
+    }
+
+    function legacyCopy(text, done) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); done(); } catch (e) { /* ignore */ }
+      document.body.removeChild(ta);
+    }
+
+    document.querySelectorAll('main pre').forEach((pre) => {
+      const code = pre.querySelector('code');
+      if (!code) return;
+      const text = code.textContent;
+
+      const lang = detectLang(text, pre.getAttribute('data-lang'));
+      if (lang) code.innerHTML = highlight(text, lang);
+
+      // Wrap so the button has a non-scrolling box to pin to, and carry the tab state onto the
+      // wrapper so hiding a language hides its button too.
+      const wrap = document.createElement('div');
+      wrap.className = 'code-wrap';
+      if (pre.dataset.lang) { wrap.dataset.lang = pre.dataset.lang; pre.removeAttribute('data-lang'); }
+      pre.parentNode.insertBefore(wrap, pre);
+      wrap.appendChild(pre);
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'copy-btn';
+      btn.textContent = 'Copy';
+      btn.setAttribute('aria-label', 'Copy code to clipboard');
+      btn.addEventListener('click', () => {
+        const done = () => {
+          btn.textContent = 'Copied';
+          btn.classList.add('copied');
+          setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1400);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, () => legacyCopy(text, done));
+        } else {
+          legacyCopy(text, done);
+        }
+      });
+      wrap.appendChild(btn);
+    });
+  })();
 </script>
 
 </body>
