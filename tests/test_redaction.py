@@ -29,8 +29,8 @@ def make_boundary(redact, forbid=(), scrub=None) -> fr.Boundary:
 
 
 class ToyAdapter(fr.ReplayAdapter):
-    def __init__(self, redact, scrub=None):
-        self.boundary = make_boundary(redact, scrub=scrub)
+    def __init__(self, redact, scrub=None, forbid=()):
+        self.boundary = make_boundary(redact, forbid=forbid, scrub=scrub)
         self.trace_root = os.path.dirname(toy_tools.__file__)
 
     def resolve(self, fn_name, feed):
@@ -394,3 +394,135 @@ def test_no_scrub_is_a_no_op(tmp_path):
     session = record(tmp_path, set(),
                      lambda: asyncio.run(toy_tools.leak_everywhere("t@x.com", TOKEN)))
     assert TOKEN in session.read_text(encoding="utf-8")
+
+
+# --- forbid on the sidecars: the tape is not the only file the recorder writes (issue #43) --
+#
+# `forbid` declares a property — THIS RECORDING CARRIES NO CREDENTIAL — and a property that
+# holds of one file in the directory is not the property anybody thought they were buying.
+# Two artifacts were writing unguarded: the replay trace, and a mutated tape on its way back
+# to disk.
+
+
+def derive_key_session(tmp_path, forbid=()):
+    """A clean tape by construction: `derive_key` builds its secret as a local and hands it to
+    nobody, so there is nothing for the write path's tripwire to catch."""
+    session = record(tmp_path, set(), lambda: asyncio.run(toy_tools.derive_key("t@x.com")),
+                     forbid=forbid)
+    assert KEY not in session.read_text(encoding="utf-8")
+    return session
+
+
+def test_the_trace_carries_what_the_tape_never_could(tmp_path):
+    # The hole, shown before it is closed — the counterpart of
+    # `test_a_value_no_field_name_could_ever_reach_leaks_past_a_correct_rule`. Nothing is
+    # declared here, and the point is what the artifact holds: a trace records every local of
+    # every executed line, so a value that touched no boundary at all is written out raw. This
+    # is why the trace, not the tape, is the worst instance of the gap.
+    session = derive_key_session(tmp_path)
+    trace = tmp_path / "trace.jsonl"
+    report = fr.replay_call(session, 0, ToyAdapter(set()), trace)
+    assert report.ok, (report.divergence, report.result_diff)
+    assert KEY in trace.read_text(encoding="utf-8")
+
+
+def test_a_secret_only_the_trace_could_see_refuses_the_trace(tmp_path):
+    # Same call, same execution, tripwire declared — and now the artifact does not exist.
+    # Asserting the raise is not the claim: the claim is that no file on disk holds the key,
+    # which is the only thing anybody actually wanted.
+    session = derive_key_session(tmp_path, forbid=[KEY_SHAPE])
+    trace = tmp_path / "trace.jsonl"
+    with pytest.raises(fr.ForbiddenValue):
+        fr.replay_call(session, 0, ToyAdapter(set(), forbid=[KEY_SHAPE]), trace)
+    assert not trace.exists()
+    nothing_on_disk_carries(tmp_path, KEY)
+
+
+def test_the_refused_trace_is_not_reported_as_an_application_error(tmp_path):
+    # The failure mode this design exists to avoid. The tripwire fires inside a sys.settrace
+    # callback, and an exception raised there is injected into the frame being traced — where
+    # the replayed code's own `except Exception` would eat it and replay_call would hand back
+    # a report with a credential leak filed under `replayed_error`. So the trace holds the
+    # violation and the driver raises it: replay_call returns NOTHING here.
+    session = derive_key_session(tmp_path, forbid=[KEY_SHAPE])
+    got = []
+    with pytest.raises(fr.ForbiddenValue) as exc:
+        got.append(fr.replay_call(session, 0, ToyAdapter(set(), forbid=[KEY_SHAPE]),
+                                  tmp_path / "trace.jsonl"))
+    assert got == []
+    assert KEY not in str(exc.value) and KEY_SHAPE in str(exc.value)
+    # ...and a refusal mid-replay must not leave the process armed: the hook is off and the
+    # boundary is unpatched before the exception goes anywhere.
+    assert fr.hook.mode == "off"
+    assert not hasattr(toy_tools.greet, "__flight_wrapped__")
+
+
+def test_a_trace_with_no_tripwire_is_untouched(tmp_path):
+    # Free and invisible for every boundary that declares no forbid — which is every boundary
+    # that existed before this. The trace is written, complete, and replay reports as always.
+    session = derive_key_session(tmp_path)
+    trace = tmp_path / "trace.jsonl"
+    report = fr.replay_call(session, 0, ToyAdapter(set()), trace)
+    assert report.ok and report.transitions > 0
+    lines = trace.read_text(encoding="utf-8").splitlines()
+    assert json.loads(lines[0])["e"] == "H" and len(lines) == report.transitions + 1
+
+
+def test_a_clean_trace_survives_a_declared_tripwire(tmp_path):
+    # The other half of "free": declaring a tripwire must not cost a trace that carries no
+    # credential. A rule that fired on clean runs would be switched off within the week.
+    session = record(tmp_path, {"password"},
+                     lambda: asyncio.run(toy_tools.signup("t@x.com", KEY)), forbid=[KEY_SHAPE])
+    trace = tmp_path / "trace.jsonl"
+    report = fr.replay_call(session, 0, ToyAdapter({"password"}, forbid=[KEY_SHAPE]), trace)
+    assert report.ok, (report.divergence, report.result_diff)
+    assert trace.exists() and report.transitions > 0
+    nothing_on_disk_carries(tmp_path, KEY)
+
+
+# --- forbid on the save path: mutation edits recorded values, so the check must run again ---
+
+
+def mutable_session(tmp_path):
+    return record(tmp_path, set(), lambda: toy_tools.study_status("t@x.com", level=2))
+
+
+def test_a_mutation_that_introduces_a_forbidden_value_refuses_to_save(tmp_path):
+    # The tape passed the tripwire when it was written and carries nothing. Then an edit puts a
+    # live key on it — which is not a far-fetched way to use this API, it is the ordinary one:
+    # you paste a hostile value out of a real response to see what the code does with it.
+    rec = fr.Recording.load(mutable_session(tmp_path), make_boundary(set(), forbid=[KEY_SHAPE]))
+    rec.call(0).set_kwargs(email=KEY)
+    out = tmp_path / "pinned.jsonl"
+    with pytest.raises(fr.ForbiddenValue) as exc:
+        rec.save(out)
+    assert not out.exists()          # not truncated, not empty — never opened
+    assert KEY not in str(exc.value) and KEY_SHAPE in str(exc.value)
+    nothing_on_disk_carries(tmp_path, KEY)
+
+
+def test_the_save_tripwire_reads_every_line_not_just_the_first(tmp_path):
+    # The header is written first and the offending call comes after it. Judging all the lines
+    # before opening the file is what keeps a partial pin — clean header, no calls — off disk.
+    session = mutable_session(tmp_path)
+    fr.Recording.load(session, make_boundary(set(), forbid=[KEY_SHAPE])).save(
+        tmp_path / "clean.jsonl")                      # a clean tape still pins, unchanged
+    assert (tmp_path / "clean.jsonl").exists()
+
+    rec = fr.Recording.load(session, make_boundary(set(), forbid=[KEY_SHAPE]))
+    rec.call(0).read(op="stream").result = [{"name": KEY, "x": 1}]
+    with pytest.raises(fr.ForbiddenValue):
+        rec.save(tmp_path / "poisoned.jsonl")
+    assert not (tmp_path / "poisoned.jsonl").exists()
+    nothing_on_disk_carries(tmp_path, KEY)
+
+
+def test_the_save_path_is_unguarded_without_a_boundary(tmp_path):
+    # Opt-in on both counts: no boundary handed to load(), or a boundary declaring no forbid,
+    # and save() writes exactly what it is given — which is what every caller written before
+    # this got, and must keep getting.
+    for boundary in (None, make_boundary(set())):
+        rec = fr.Recording.load(mutable_session(tmp_path), boundary)
+        rec.call(0).set_kwargs(email=KEY)
+        out = rec.save(tmp_path / f"pinned-{boundary is None}.jsonl")
+        assert KEY in out.read_text(encoding="utf-8")

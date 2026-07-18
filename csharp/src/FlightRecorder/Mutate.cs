@@ -30,16 +30,28 @@ namespace FlightRecorder
         public Dictionary<string, object?> Header { get; }
         public List<Dictionary<string, object?>> Calls { get; }
 
-        private Recording(Dictionary<string, object?> header, List<Dictionary<string, object?>> calls)
+        // Mutation exists precisely to EDIT recorded values, so a tape that passed the tripwire
+        // when it was written can have a forbidden value put back in by hand and then saved. The
+        // write path was guarded; the re-write path was not, and an edit is the easiest way there
+        // is to reintroduce the exact thing the boundary swore would never be on a tape.
+        private readonly Boundary? _boundary;
+
+        private Recording(Dictionary<string, object?> header, List<Dictionary<string, object?>> calls,
+            Boundary? boundary)
         {
             Header = header;
             Calls = calls;
+            _boundary = boundary;
         }
 
-        public static Recording Load(string path)
+        /// <param name="boundary">Whose <see cref="Boundary.Forbid"/> patterns every save of this
+        /// recording must pass. Defaults to the boundary recording declared — which is the right
+        /// answer inside a live recorded run and null in a test process, so pass it explicitly
+        /// when you are mutating a tape the recorder is no longer installed for.</param>
+        public static Recording Load(string path, Boundary? boundary = null)
         {
             var tape = Replay.LoadTape(path);
-            return new Recording(tape.Header, tape.Calls.ToList());
+            return new Recording(tape.Header, tape.Calls.ToList(), boundary ?? Recorder.CurrentBoundary);
         }
 
         public CallHandle Call(int index)
@@ -56,16 +68,28 @@ namespace FlightRecorder
         public string RenderSpans() =>
             string.Join("\n\n", Spans().Select((tree, i) => $"call {i}:\n{SpanTree.Render(tree)}"));
 
-        internal string Write(string path)
+        internal string Write(string path, Boundary? boundary = null)
         {
+            var forbid = (boundary ?? _boundary)?.Forbid;
+            var lines = new List<string> { Json.Stringify(Header) };
+            foreach (var call in Calls) lines.Add(Json.Stringify(call));
+
+            // Render and check the WHOLE tape before opening the file. A guard that fired halfway
+            // through the write would truncate whatever was already at `path` — losing a good tape
+            // to punish a bad edit, and leaving a half-file that replays as a mangled session.
+            // Refusing costs nothing here because nothing has been opened yet.
+            if (forbid != null && forbid.Count > 0)
+                for (var i = 0; i < lines.Count; i++)
+                    Tripwire.Guard(lines[i], forbid,
+                        i == 0 ? "the header of the mutated recording" : $"mutated call {i - 1}");
+
             using var w = new StreamWriter(path, append: false);
-            w.Write(Json.Stringify(Header) + "\n");
-            foreach (var call in Calls) w.Write(Json.Stringify(call) + "\n");
+            foreach (var line in lines) w.Write(line + "\n");
             return path;
         }
 
         /// <summary>Pin the (mutated) recording as a probe fixture.</summary>
-        public string Save(string path) => Write(path);
+        public string Save(string path, Boundary? boundary = null) => Write(path, boundary);
     }
 
     public sealed class CallHandle
@@ -148,7 +172,10 @@ namespace FlightRecorder
             var tmp = Path.Combine(Path.GetTempPath(), $"fr-mutated-{Guid.NewGuid():N}.jsonl");
             try
             {
-                _recording.Write(tmp);
+                // The boundary given here is the most specific one the caller has named, so it
+                // decides the tripwire too: this temp file is a real tape on a real disk, and a
+                // probe run is no reason for a credential to get written to one.
+                _recording.Write(tmp, boundary);
                 return Invariants.CheckInvariants(tmp, index, body, invariants, boundary, probe: true);
             }
             finally

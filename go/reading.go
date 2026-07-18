@@ -11,6 +11,7 @@ package flightrecorder
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -19,6 +20,42 @@ import (
 type Recording struct {
 	Header map[string]any
 	calls  []map[string]any
+	forbid []*regexp.Regexp
+}
+
+// Forbid arms this recording's tripwire with the same patterns the Boundary declared, so Save
+// refuses to write a forbidden value.
+//
+// The write path was guarded and the RE-write path was not, which is the wrong way round: mutation
+// exists precisely to EDIT recorded values, so a tape that passed the tripwire when it was recorded
+// can have a credential put into it by hand and then be saved with nothing looking. The patterns
+// have to be handed over here because a tape does not carry them — the rules are the boundary's,
+// not the artifact's, and they are deliberately not written onto the tape for a later reader to
+// find and "helpfully" relax.
+//
+// A bad pattern fails here, at declaration time, exactly as it does in New.
+func (r *Recording) Forbid(patterns ...string) error {
+	var res []*regexp.Regexp
+	for _, p := range patterns {
+		re, err := regexp.Compile(p)
+		if err != nil {
+			return fmt.Errorf("bad forbid pattern %q: %w", p, err)
+		}
+		res = append(res, re)
+	}
+	r.forbid = res
+	return nil
+}
+
+// forbiddenHit reports the first pattern matching line, or "". Free for a recording that armed
+// nothing, which is every recording that existed before Forbid did.
+func (r *Recording) forbiddenHit(line []byte) string {
+	for _, re := range r.forbid {
+		if re.Match(line) {
+			return re.String()
+		}
+	}
+	return ""
 }
 
 // Load reads a tape from a file.
@@ -50,23 +87,28 @@ func (r *Recording) Call(i int) *CallView {
 	return &CallView{rec: r, index: i, raw: r.calls[i]}
 }
 
-// Save writes the (possibly mutated) recording back to a tape file.
+// Save writes the (possibly mutated) recording back to a tape file. If Forbid armed the tripwire,
+// every line is vetted before ANY of them reaches the disk — the whole tape is built in memory
+// first, so a refusal leaves no half-written file behind and the target file is never touched.
 func (r *Recording) Save(path string) error {
 	var b strings.Builder
-	writeLine := func(obj map[string]any) error {
+	writeLine := func(obj map[string]any, what string) error {
 		line, err := marshalStable(obj)
 		if err != nil {
 			return err
+		}
+		if hit := r.forbiddenHit(line); hit != "" {
+			return &ForbiddenValue{Pattern: hit, What: what}
 		}
 		b.Write(line)
 		b.WriteByte('\n')
 		return nil
 	}
-	if err := writeLine(r.Header); err != nil {
+	if err := writeLine(r.Header, "the session record"); err != nil {
 		return err
 	}
-	for _, c := range r.calls {
-		if err := writeLine(c); err != nil {
+	for i, c := range r.calls {
+		if err := writeLine(c, fmt.Sprintf("the edited call record for %q (call %d)", str(c["fn"]), i)); err != nil {
 			return err
 		}
 	}

@@ -75,7 +75,11 @@ function emit(ev) {
   if (buf) buf.push(scrub(ev));
 }
 
-export { scrub, active, patch, isoLocal };
+// `compileForbid` and `guard` are exported for the OTHER writers in this package — render.js
+// writes a session-format tape of its own, with its own file handle. A tripwire that only
+// covered the writer it was born in would be a property that holds for one file and not the
+// tape sitting next to it, which is not a property at all.
+export { scrub, active, patch, isoLocal, compileForbid, guard };
 
 // `data` is a semantic event's payload and is scrubbed like any other: testimony is written
 // by the app, about the app's own values, and is exactly as likely to carry a credential as an

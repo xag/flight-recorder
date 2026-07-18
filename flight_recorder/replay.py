@@ -28,7 +28,9 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from flight_recorder.boundary import Boundary, ChainTarget
-from flight_recorder.record import _SemCapture, hook, patch_boundary, unpatch_all, _patch
+from flight_recorder.record import (
+    ForbiddenValue, _SemCapture, _guard, _patch, hook, patch_boundary, unpatch_all,
+)
 from flight_recorder.serial import (
     from_jsonable, redact_jsonable, render, safe_repr, short, to_jsonable, trace_jsonable,
 )
@@ -256,29 +258,82 @@ class Tracer:
 
     Values are recorded as data, not reprs, so an invariant can do arithmetic on them and
     look inside a document — and so two traces of the same execution are equal, which reprs
-    carrying memory addresses never were."""
+    carrying memory addresses never were.
+
+    A trace is the worst place in the recorder for a credential to land, and the reason is
+    what makes it useful: it holds every local of every executed line, which means it holds
+    values BEFORE they reach any masking — the raw string on its way into the header the
+    effect will send. The tape beside it is redacted, swept and asserted clean by `forbid`;
+    for as long as this file was written unguarded, the tape's promise ended at the tape. So
+    the boundary's tripwire reads every line here too, and the same rule holds: the message
+    names the pattern, never the match."""
 
     def __init__(self, out_path: Path, root: str, skip_files: Optional[set] = None,
-                 skip_locals: tuple = ("self", "svc")):
+                 skip_locals: tuple = ("self", "svc"), forbid: Optional[list] = None):
         self.path = out_path
         self.root = root
         self.skip_files = skip_files or set()
         self.skip_locals = skip_locals
-        self._f = out_path.open("w", encoding="utf-8")
+        self._forbid = forbid or []
+        # Held rather than raised: see _abort. None means this trace is clean so far.
+        self.violation: Optional[ForbiddenValue] = None
         self._prev: dict[int, dict] = {}
         self._line: dict[int, int] = {}
         self.transitions = 0
-        self._f.write(json.dumps({"e": "H", "trace_version": TRACE_VERSION}) + "\n")
+        line = json.dumps({"e": "H", "trace_version": TRACE_VERSION})
+        # Ahead of the open(), exactly as the `.inflight` sidecar does it: a trace is a file
+        # on disk like any other, and refusing after the file exists is refusing too late.
+        # This one is on the driver's own thread, before tracing is armed, so it may raise.
+        _guard(line, self._forbid, "the trace header")
+        self._f = out_path.open("w", encoding="utf-8")
+        self._f.write(line + "\n")
 
     def start(self) -> None:
         sys.settrace(self._global)
 
     def stop(self) -> None:
         sys.settrace(None)
-        self._f.close()
+        if self._f is not None:
+            self._f.close()
+            self._f = None
+
+    def _abort(self, violation: ForbiddenValue) -> None:
+        """The tripwire fired inside a `sys.settrace` callback, where raising is not an option.
+        An exception out of a trace function is injected into the frame being traced: the
+        replayed application would see a ForbiddenValue it never raised, its own `except
+        Exception` would swallow it, and replay_call would file the leak as `replayed_error`
+        — a credential on disk, reported as an application bug. `trace_jsonable` is documented
+        never to raise for the same reason; this is that rule applied to the writer.
+
+        So the trace disarms itself here and hands the exception to stop(), which runs on the
+        driver's thread outside every traced frame, and replay_call raises it there.
+
+        The whole trace goes, not only the offending line. What would be left is a file that
+        stops mid-execution with nothing on it saying why — an amputated account that reads
+        like a complete one, which is worse than no account at all."""
+        self.violation = violation
+        sys.settrace(None)
+        try:
+            self._f.close()
+        finally:
+            # `None` is the disarmed signal every callback below checks: settrace(None) from
+            # inside a callback does not retract the f_trace already installed on the frames
+            # currently on the stack, so they will call back in and must find the door shut.
+            self._f = None
+            self.path.unlink(missing_ok=True)
 
     def _write(self, obj: dict) -> None:
-        self._f.write(json.dumps(obj, ensure_ascii=False, default=repr) + "\n")
+        if self._f is None:
+            return
+        line = json.dumps(obj, ensure_ascii=False, default=repr)
+        try:
+            _guard(line, self._forbid,
+                   f"the traced {obj.get('e')!r} record of {obj.get('fn')} "
+                   f"at {obj.get('at')}")
+        except ForbiddenValue as e:
+            self._abort(e)
+            return
+        self._f.write(line + "\n")
         self.transitions += 1
 
     def _locals(self, frame: Any) -> dict:
@@ -290,6 +345,8 @@ class Tracer:
         return f"{os.path.basename(frame.f_code.co_filename)}:{lineno or frame.f_lineno}"
 
     def _global(self, frame: Any, event: str, arg: Any) -> Optional[Callable]:
+        if self._f is None:
+            return None  # disarmed by _abort: trace no new frame
         fname = frame.f_code.co_filename
         if not fname.startswith(self.root) or os.path.basename(fname) in self.skip_files:
             return None
@@ -311,7 +368,9 @@ class Tracer:
         except Exception:
             return False
 
-    def _local(self, frame: Any, event: str, arg: Any) -> Callable:
+    def _local(self, frame: Any, event: str, arg: Any) -> Optional[Callable]:
+        if self._f is None:
+            return None  # disarmed by _abort: returning None retires f_trace for this frame
         fid = id(frame)
         if event == "line":
             cur = self._locals(frame)
@@ -501,7 +560,8 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
         fn = adapter.resolve(rec["fn"], feed)
         kwargs = from_jsonable(rec["kwargs"])
         report.call_kwargs = kwargs
-        tracer = Tracer(trace_path, adapter.trace_root, set(adapter.skip_files)) \
+        tracer = Tracer(trace_path, adapter.trace_root, set(adapter.skip_files),
+                        forbid=adapter.boundary.forbid_patterns()) \
             if trace_path else None
     except BaseException:
         hook.mode, hook.feed, hook.sems = "off", None, None
@@ -531,6 +591,15 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
         hook.mode, hook.feed, hook.sems = "off", None, None
         hook.redact, hook.scrub = {}, None
         unpatch_all()
+
+    # The trace's tripwire could not raise where it fired (Tracer._abort says why), so it
+    # raises here — after the finally has disarmed the hook and unpatched the boundary, so a
+    # refused trace never leaves the process armed, and before anything is returned. A
+    # forbidden value is not a field on a report: it is the one failure in this library that
+    # is allowed to stop the caller, and downgrading it to a warning nobody reads would undo
+    # the whole point of moving the guard onto this path.
+    if tracer is not None and tracer.violation is not None:
+        raise tracer.violation
 
     # The sems trailing the last boundary answer — an outermost span's `end`, most often — were
     # never reached by a pop_expect, and leaving them unread would report a shorter path than
