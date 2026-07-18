@@ -220,7 +220,8 @@ class PlaybackChain:
             if name in target.terminal_writes:
                 # Scrubbed like the recording was, so a redacted write still compares —
                 # and so t.writes never carries a value the tape was forbidden to hold.
-                replayed = redact_jsonable([_arg_jsonable(a) for a in args], hook.redact)
+                replayed = redact_jsonable([_arg_jsonable(a) for a in args],
+                                           hook.redact, hook.scrub)
                 # Every write the replayed code performs is captured for the Trajectory —
                 # writes are never executed, but invariants must be able to judge them
                 # ("never writes when the corpus is empty").
@@ -480,7 +481,8 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
                         clock_modules=adapter.boundary.clock_modules,
                         random_modules=adapter.boundary.random_modules,
                         error_revivers=adapter.boundary.error_revivers,
-                        redact=adapter.boundary.redact)
+                        redact=adapter.boundary.redact,
+                        scrub=adapter.boundary.scrub)
     patch_boundary(boundary)
     # Declared chains whose holder exists now are swapped for playback; chains living on
     # objects the adapter constructs (a fresh service) are its resolve()'s business.
@@ -502,7 +504,8 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
         tracer = Tracer(trace_path, adapter.trace_root, set(adapter.skip_files)) \
             if trace_path else None
     except BaseException:
-        hook.mode, hook.feed, hook.redact, hook.sems = "off", None, {}, None
+        hook.mode, hook.feed, hook.sems = "off", None, None
+        hook.redact, hook.scrub = {}, None
         unpatch_all()
         raise
 
@@ -525,7 +528,8 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
         if tracer:
             tracer.stop()
             report.trace_path, report.transitions = tracer.path, tracer.transitions
-        hook.mode, hook.feed, hook.redact, hook.sems = "off", None, {}, None
+        hook.mode, hook.feed, hook.sems = "off", None, None
+        hook.redact, hook.scrub = {}, None
         unpatch_all()
 
     # The sems trailing the last boundary answer — an outermost span's `end`, most often — were
@@ -551,7 +555,8 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
     if report.divergence is None:
         # Scrubbed like the recorded result was, so a redacted recording still matches.
         # Invariants therefore judge the redacted result — the only one that exists.
-        replayed = redact_jsonable(to_jsonable(result), adapter.boundary.redact_rules())
+        replayed = redact_jsonable(to_jsonable(result), adapter.boundary.redact_rules(),
+                                   adapter.boundary.scrub)
         report.replayed_result = replayed
         report.result_match = replayed == rec["result"]
         if not report.result_match and report.error_match:

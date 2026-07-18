@@ -249,14 +249,44 @@ smell worth reading as one.
 
 ### Redaction
 
-A redaction rule is keyed by **field name** and applied to the jsonable tree before it is
-written: a bare rule replaces the value with `"[REDACTED]"`, a transform rule replaces it
-with the transform's output. A rule that raises degrades to `"[REDACTED]"` — the failure
-direction is *masked*, never *leaked*, and never *broke the recorded call*.
+Masking has two keyings, and an implementation MUST provide both. They are complements: one
+keys on where a value sits, the other on what it looks like, and a secret that has no field
+name is invisible to the first.
 
-Redaction transforms MUST be **idempotent**: replay re-derives the question it is about to
-ask, scrubs it the same way, and compares against the tape — so a value that is already a
-mask must scrub to itself.
+**By field name.** A rule keyed by field name, applied to the jsonable tree before it is
+written: a bare rule replaces the value with `"[REDACTED]"`, a transform rule replaces it
+with the transform's output.
+
+**By value (`scrub`).** A sweep applied to every leaf **string**, wherever it sits — a
+positional argument, a value baked into a key, a string mid-sentence in a body. Object keys
+are NOT swept, so that tapes stay comparable across implementations. A field rule's own
+output meets the sweep too.
+
+Either kind that raises degrades to `"[REDACTED]"` — the failure direction is *masked*,
+never *leaked*, and never *broke the recorded call*.
+
+Both MUST be **idempotent**: replay re-derives the question it is about to ask, scrubs it
+the same way, and compares against the tape — so a value that is already a mask must scrub
+to itself. This is the contract that makes a redacted recording replayable at all, and it is
+why a mask must not itself match the pattern that produced it.
+
+### Refusing to record (`forbid`)
+
+Not a format rule — it adds no key and no event — but **required recorder behaviour**, and
+recorded here because a tape's readers are entitled to what it guarantees.
+
+Masking is declarative and opt-in, so it can only mask what it was told about: the field
+someone forgot, the one added to the model next month, the one whose rule stopped matching
+after a rename. `forbid` states the property the masking rules cannot: *this tape carries no
+credential*. Patterns are matched against the fully-masked line about to be written; a hit
+means the recorder writes **nothing** — no call line, and no session file if the hit is in
+the header — and raises instead.
+
+Patterns match **shapes, not values**: a credential you can enumerate you can already
+redact. The raised error names the pattern and not the match, since an error carrying the
+secret would defeat its own purpose. A recorder is otherwise built never to break the app it
+instruments; this is the one failure it must not swallow, because a warning in a production
+log is not how anyone should discover a credential was about to be written down.
 
 ## Reserved
 

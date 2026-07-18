@@ -56,6 +56,99 @@ namespace FlightRecorder.Tests
         }
 
         [Fact]
+        public void ScrubMasksAValueThatHasNoFieldName()
+        {
+            // Nothing here is called "token". The secret sits in a positional argument, inside a key
+            // built by interpolation, and mid-sentence in prose — the three places a field-name rule
+            // is blind to, which is the entire reason Scrub exists.
+            var tree = new Dictionary<string, object?>
+            {
+                ["args"] = new List<object?> { "sk-live-4242", 7L },
+                ["key"] = "seen:alice:sk-live-4242",
+                ["body"] = "your key is sk-live-4242, keep it safe",
+            };
+            ScrubTransform scrub = s => s.Replace("sk-live-4242", Serial.Redacted);
+            var red = (Dictionary<string, object?>)Serial.RedactJsonable(tree, null, scrub)!;
+
+            Assert.DoesNotContain("sk-live-4242", Json.Canonical(red));
+            Assert.Equal(Serial.Redacted, ((List<object?>)red["args"]!)[0]);
+            Assert.Equal(7L, ((List<object?>)red["args"]!)[1]); // a non-string leaf is left alone
+            Assert.Equal($"seen:alice:{Serial.Redacted}", red["key"]);
+            Assert.Equal($"your key is {Serial.Redacted}, keep it safe", red["body"]);
+        }
+
+        [Fact]
+        public void ScrubIsAppliedOnTopOfFieldNameRules()
+        {
+            // The two layers compose: the rule handles the field it can name, the scrub sweeps what
+            // no name reaches — including the rule's own output, so a transform that shortens rather
+            // than masks cannot carry the secret past the sweep.
+            var tree = new Dictionary<string, object?>
+            {
+                ["password"] = "hunter2",
+                ["hint"] = "same as sk-live-4242",
+                ["short"] = "sk-live-4242",
+            };
+            var rules = new Dictionary<string, RedactTransform?>
+            {
+                ["password"] = null,
+                ["short"] = v => v, // a pass-through rule: the sweep is the only thing left to catch it
+            };
+            ScrubTransform scrub = s => s.Replace("sk-live-4242", Serial.Redacted);
+            var red = (Dictionary<string, object?>)Serial.RedactJsonable(tree, rules, scrub)!;
+
+            Assert.Equal(Serial.Redacted, red["password"]);
+            Assert.Equal($"same as {Serial.Redacted}", red["hint"]);
+            Assert.Equal(Serial.Redacted, red["short"]);
+        }
+
+        [Fact]
+        public void ScrubIsIdempotentOnItsOwnOutput()
+        {
+            // The claim replay leans on: a value read back off the tape is already a mask, and must
+            // scrub to itself. See RecordReplayTests for the same claim exercised end to end.
+            ScrubTransform scrub = s => s.Replace("sk-live-4242", Serial.Redacted);
+            var tree = new Dictionary<string, object?> { ["k"] = "seen:sk-live-4242" };
+            var once = Serial.RedactJsonable(tree, null, scrub);
+            var twice = Serial.RedactJsonable(once, null, scrub);
+            Assert.Equal(Json.Canonical(once), Json.Canonical(twice));
+        }
+
+        [Fact]
+        public void AThrowingScrubMasksRatherThanLeaks()
+        {
+            ScrubTransform scrub = _ => throw new InvalidOperationException("boom");
+            var red = (Dictionary<string, object?>)Serial.RedactJsonable(
+                new Dictionary<string, object?> { ["k"] = "sk-live-4242" }, null, scrub)!;
+            Assert.Equal(Serial.Redacted, red["k"]);
+        }
+
+        [Fact]
+        public void NoScrubMeansNoSweep()
+        {
+            var tree = new Dictionary<string, object?> { ["k"] = "sk-live-4242" };
+            Assert.Same(tree, Serial.RedactJsonable(tree, null, null));
+        }
+
+        [Fact]
+        public void ScrubbingRefusesAMaskThatItsOwnPatternMatches()
+        {
+            // Such a rule would keep moving the value on every pass, so a recording made under it
+            // could never be replayed. Better to refuse at declaration than to diverge at replay.
+            var b = new Boundary();
+            Assert.Throws<ArgumentException>(() => b.Scrubbing("sk-[a-z0-9-]+", "sk-masked"));
+            Assert.Null(b.Scrub);
+        }
+
+        [Fact]
+        public void ScrubbingStacks()
+        {
+            var b = new Boundary().Scrubbing("sk-live-[0-9]+").Scrubbing("[0-9]{16}");
+            Assert.Equal($"{Serial.Redacted} and {Serial.Redacted}",
+                b.Scrub!("sk-live-4242 and 4111111111111111"));
+        }
+
+        [Fact]
         public void ForbiddenHitReturnsThePatternNotTheValue()
         {
             var patterns = new List<Regex> { new Regex(@"\b[a-f0-9]{64}\b") };

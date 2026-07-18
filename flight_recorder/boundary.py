@@ -56,9 +56,33 @@ class Boundary:
     # still verifies. A set/list of names masks them as serial.REDACTED; a dict maps
     # name -> transform (None = mask), where a transform receives the jsonable value and
     # must be deterministic AND idempotent — replay re-applies it to already-transformed
-    # values. Field-name driven: it cannot reach positional values with no name (pass
-    # sensitive values as keywords) or chain signatures (which render arguments).
+    # values. Field-name driven: it cannot reach positional values with no name or chain
+    # signatures (which render arguments) — that is what `scrub`, below, is for.
     redact: Any = field(default_factory=dict)
+    # Value-level redaction: a `str -> str` callable swept over EVERY leaf string on the tape,
+    # wherever it sits. `redact` needs a field name to key on, and a secret does not always
+    # have one — passed positionally it lands in `args` with nothing but an index; baked into
+    # a cache key (`session:{token}`) or dropped mid-sentence into an email body it is a
+    # substring of a value nobody named. Field rules cannot follow it there, and `forbid` can
+    # only refuse the whole recording. `scrub` is the remedy the assertion lacks: it masks
+    # those values and the call is still recorded, still replayable.
+    #
+    # It also fixes what `redact` breaks by design. Masking an INPUT poisons everything
+    # derived from it: mask `user_id` by name and the tape holds a document path built from
+    # the RAW id while replay, handed the mask, builds one from the MASK — a spurious
+    # divergence that says nothing about the code. A substring sweep is consistent under
+    # derivation; the replayed code rebuilds exactly what the tape already shows.
+    #
+    # It MUST be idempotent, and this is load-bearing rather than tidy: replay re-derives the
+    # question it is about to ask, scrubs it the same way, and compares against the tape. A
+    # value that is already a mask (it came off the tape) has to scrub to itself, or no
+    # scrubbed recording could ever be replayed.
+    #
+    #     scrub=lambda s: TOKEN_RE.sub("[TOKEN]", s)   # a shape, and "[TOKEN]" has none
+    #
+    # A scrub that raises degrades to serial.REDACTED, exactly as a raising `redact` rule
+    # does: masked, never leaked, and never breaking the recorded call.
+    scrub: Any = None
     # The tripwire that backstops `redact`. Redaction is declarative and opt-in, so it
     # protects exactly the fields you thought of, and its failure mode is silent and open:
     # forget `salt` and the tape leaks; add `recovery_token` to the model next month and the

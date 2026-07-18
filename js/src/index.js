@@ -26,7 +26,7 @@ export { validateTape, VERSION } from './spec/validate.js';
 export { loadTape, pickCall, replayCall } from './replay.js';
 export { invariant, checkInvariants, formatReport, Trajectory } from './invariants.js';
 export { traced, Trace } from './trace.js';
-export { ReplayDivergence, ProbeUnanswerable } from './errors.js';
+export { ReplayDivergence, ProbeUnanswerable, ForbiddenValue } from './errors.js';
 // The render boundary. Also its own entry point (`@xag/flight-recorder/render`); it imports no
 // browser automation library, so nothing that installs this package pays for one.
 export { captureLayout, renderCall, RenderTape } from './render.js';

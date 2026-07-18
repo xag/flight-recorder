@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { toJsonable, redactJsonable, short } from './serial.js';
-import { ReplayDivergence, ProbeUnanswerable } from './errors.js';
+import { ReplayDivergence, ProbeUnanswerable, ForbiddenValue } from './errors.js';
 
 // Captured at module load, before any shim replaces them. THE RECORDER MUST NEVER USE THE
 // SHIMMED GLOBALS: it stamps every line with the time and measures every call's duration,
@@ -93,6 +93,79 @@ function scrub(ev) {
   return out;
 }
 
+// --- the tripwire: the backstop `redact` and `scrub` cannot be ----------------------
+//
+// Masking is declarative and opt-in, so it protects exactly the fields and values you thought
+// of, and its failure mode is silent and open: forget `salt` and the tape leaks; add
+// `recovery_token` to the model next month and the tape leaks; rename a field and the rule
+// quietly stops matching. Nothing tells you. `scrub` narrows the gap but does not close it —
+// it catches secrets whose VALUE you can name, and by construction neither rule can reach the
+// one you never thought to name at all: a positional argument, a key, an opaque repr, a string
+// some effect built by concatenation.
+//
+// `forbid` states the property those rules cannot: THIS TAPE CARRIES NO CREDENTIAL. It turns
+// "I forgot one" from an invisible leak into a noisy failure at record time.
+//
+// MATCH SHAPES, NOT VALUES: a credential you can enumerate you can already redact. It is the
+// one you cannot name that this is for.
+//
+//     forbid: [/\b[a-f0-9]{64}\b/,                    // a scrypt digest survived redaction
+//              /-----BEGIN [A-Z ]*PRIVATE KEY-----/]
+
+/**
+ * Compile a `forbid` declaration once, up front.
+ *
+ * A tripwire that only reports a bad pattern when it first fires is no tripwire at all: the
+ * declaration would look installed and be inert until the exact moment it mattered. So patterns
+ * are compiled at declaration time and a bad one throws there, in the line that wrote it, while
+ * someone is still looking at it.
+ */
+function compileForbid(patterns) {
+  return (patterns ?? []).map((p) => {
+    if (p instanceof RegExp) {
+      // A global or sticky regex carries `lastIndex` between calls, so the second line it is
+      // asked about starts scanning from wherever the first match ended — a tripwire that
+      // silently stops looking partway through a session. Recompile without those flags.
+      return p.global || p.sticky ? new RegExp(p.source, p.flags.replace(/[gy]/g, '')) : p;
+    }
+    try {
+      return new RegExp(p);
+    } catch (e) {
+      throw new SyntaxError(`bad forbid pattern ${JSON.stringify(p)}: ${e.message}`);
+    }
+  });
+}
+
+/**
+ * The first pattern that matches `text`, or null if it is clean.
+ *
+ * Scans the SERIALIZED record, not the value tree, and that is the whole point. Redaction is
+ * field-name driven and scrubbing is value-driven; a secret reaches the tape through every path
+ * neither can see. The one thing all of those have in common is that they end up in the line
+ * about to be written. So the tripwire reads that line.
+ *
+ * Returns the PATTERN, never the match — see ForbiddenValue.
+ */
+function forbiddenHit(text, patterns) {
+  for (const p of patterns) {
+    if (p.test(text)) return p.source;
+  }
+  return null;
+}
+
+/** Refuse to write `line` if a pattern matches it. Free for a boundary that declares none. */
+function guard(line, patterns, what) {
+  if (!patterns || patterns.length === 0) return;
+  const hit = forbiddenHit(line, patterns);
+  if (hit !== null) {
+    throw new ForbiddenValue(
+      `${what} matches a forbidden pattern (${JSON.stringify(hit)}) after redaction — nothing ` +
+        `was written. A value that must never reach a tape was about to: name the field in the ` +
+        `boundary's redact rules, or widen a rule that has stopped matching, and record again.`,
+    );
+  }
+}
+
 // --- the tape ----------------------------------------------------------------------
 
 class Recorder {
@@ -106,6 +179,10 @@ class Recorder {
     this.sink = sink;
     this.sinkTimeoutMs = sinkTimeoutMs;
     this.seq = 0;
+
+    // Before the header, because the header is a tape line like any other and is written below.
+    // A credential pinned as a constant is still a credential on the tape.
+    this.forbid = compileForbid(b.forbid);
 
     // A UNIQUE name, and the entropy is not decoration.
     //
@@ -145,6 +222,15 @@ class Recorder {
     // Append-only, one complete line per write: the only corruption possible is a torn
     // final line, which every reader is required to tolerate.
     const line = JSON.stringify(obj) + '\n';
+
+    // The tripwire sits HERE, at the single choke point every line passes through — the session
+    // header, every call, every fx/now/rand/sem event nested inside one. Guarding the value tree
+    // instead would leave exactly the paths a field name cannot reach, which is the leak this
+    // exists to catch. Nothing has been appended yet, so a refusal reaches neither the file nor
+    // the in-memory mirror the sink is handed: the tape does not merely omit the credential,
+    // the line never existed.
+    guard(line, this.forbid, `the ${obj.ev} record`);
+
     this.text += line;
     if (this.path) fs.appendFileSync(this.path, line, 'utf8');
   }
@@ -265,6 +351,12 @@ export function tool(name, fn) {
             else await published;
           }
         } catch (e) {
+          // The tripwire is the one recorder failure that is allowed past this net, and it is
+          // deliberate. Swallowing it would hand the caller its result and log a warning that
+          // says a credential was about to be written down — which is a discovery nobody makes
+          // from a `console.warn` in a production log. Refusing is the whole point, so the call
+          // fails: better a failed call than a tape you have to go and delete.
+          if (e instanceof ForbiddenValue) throw e;
           console.warn('flight-recorder: could not write the call —', e.message);
         }
       }
@@ -682,6 +774,7 @@ export function installRandom() {
  * @param {object} o
  * @param {object} [o.constants]  "module.NAME" → value, snapshotted into the header
  * @param {object} [o.redact]     field name → null (mask) or an idempotent transform
+ * @param {Array<string|RegExp>} [o.forbid]  patterns that must never appear on the tape
  * @param {boolean} [o.clock]     record Date.now()
  * @param {boolean} [o.random]    record crypto.randomBytes() / randomUUID()
  */
@@ -693,6 +786,10 @@ export function boundaryOf(o = {}) {
     // Field rules cannot see those, and a redacted input would otherwise poison every value
     // derived from it. Must be idempotent.
     scrub: o.scrub ?? null,
+    // The tripwire that backstops both of the above — see compileForbid. Compiled here, at the
+    // one place a boundary is declared, so a pattern that does not parse is a loud failure in
+    // the line that wrote it rather than a surprise at the first recorded call.
+    forbid: compileForbid(o.forbid),
     clock: o.clock ?? true,
     random: o.random ?? true,
     // type name -> (args) => Error. Replay must rebuild a recorded error with its real

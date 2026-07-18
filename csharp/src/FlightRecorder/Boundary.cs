@@ -30,7 +30,20 @@ namespace FlightRecorder
         /// transformed values.</summary>
         public Dictionary<string, RedactTransform?> Redact { get; } = new Dictionary<string, RedactTransform?>();
 
-        /// <summary>The tripwire that backstops <see cref="Redact"/>: patterns matched against the
+        /// <summary>Value-level redaction: handed every leaf string the recorder is about to write,
+        /// wherever it sits, and returns the masked text. Where <see cref="Redact"/> needs a field
+        /// name, this needs nothing — which is the point, because the secret that hurts is the one
+        /// with no name: a positional argument, a token interpolated into a document key, an API key
+        /// quoted mid-sentence in a message body. <see cref="Forbid"/> can only refuse such a call;
+        /// this can record it.
+        ///
+        /// It must be deterministic AND idempotent — replay scrubs the re-derived question and
+        /// compares it to the tape, so a value that is already a mask must scrub to itself, or the
+        /// recording can never be replayed. It is applied to the output of a <see cref="Redact"/>
+        /// transform too. A scrub that throws masks as <see cref="Serial.Redacted"/>.</summary>
+        public ScrubTransform? Scrub { get; set; }
+
+        /// <summary>The tripwire that backstops <see cref="Redact"/> and <see cref="Scrub"/>: patterns matched against the
         /// fully-redacted line the recorder is about to write. A hit raises
         /// <see cref="ForbiddenValue"/> and writes nothing. Match shapes, not values — a credential
         /// you can enumerate you can already redact; it is the one you cannot name this is for.</summary>
@@ -57,6 +70,24 @@ namespace FlightRecorder
         public Boundary Forbidden(string pattern)
         {
             Forbid.Add(new Regex(pattern, RegexOptions.Compiled));
+            return this;
+        }
+
+        /// <summary>Mask every occurrence of a pattern in every recorded string — sugar for the
+        /// common shape of <see cref="Scrub"/>, and the shape that is idempotent for free, since
+        /// <paramref name="mask"/> is checked not to match <paramref name="pattern"/>: rescrubbing a
+        /// masked value finds nothing left to mask. Calling it twice STACKS, so several secret
+        /// shapes each get their own line rather than one regex having to spell them all.</summary>
+        public Boundary Scrubbing(string pattern, string mask = Serial.Redacted)
+        {
+            var re = new Regex(pattern, RegexOptions.Compiled);
+            if (re.IsMatch(mask))
+                throw new ArgumentException(
+                    $"the mask \"{mask}\" itself matches /{pattern}/, so scrubbing it again would " +
+                    "change it — replay re-scrubs what it reads off the tape, and would diverge on " +
+                    "every recording this rule touched");
+            var prior = Scrub;
+            Scrub = s => re.Replace(prior == null ? s : prior(s), mask);
             return this;
         }
 

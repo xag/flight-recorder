@@ -173,10 +173,10 @@ namespace FlightRecorder
                     ["ev"] = "call",
                     ["seq"] = (long)_seq,
                     ["fn"] = fn,
-                    ["kwargs"] = Serial.RedactJsonable(Serial.ToJsonable(kwargs), _boundary.RedactRules),
+                    ["kwargs"] = Serial.RedactJsonable(Serial.ToJsonable(kwargs), _boundary.RedactRules, _boundary.Scrub),
                     ["events"] = settled.Cast<object?>().ToList(),
                     ["result"] = error != null ? null
-                        : Serial.RedactJsonable(Serial.ToJsonable(result), _boundary.RedactRules),
+                        : Serial.RedactJsonable(Serial.ToJsonable(result), _boundary.RedactRules, _boundary.Scrub),
                     ["error"] = error,
                     ["ts"] = Serial.Iso(DateTimeOffset.Now),
                     ["ms"] = Math.Round(ms, 2),
@@ -218,10 +218,11 @@ namespace FlightRecorder
         private static Dictionary<string, object?> Scrub(Dictionary<string, object?> ev)
         {
             var rules = _boundary?.RedactRules;
-            if (rules == null || rules.Count == 0) return ev;
+            var scrub = _boundary?.Scrub;
+            if ((rules == null || rules.Count == 0) && scrub == null) return ev;
             var outEv = new Dictionary<string, object?>(ev);
             foreach (var k in PayloadKeys)
-                if (outEv.ContainsKey(k)) outEv[k] = Serial.RedactJsonable(outEv[k], rules);
+                if (outEv.ContainsKey(k)) outEv[k] = Serial.RedactJsonable(outEv[k], rules, scrub);
             return outEv;
         }
 

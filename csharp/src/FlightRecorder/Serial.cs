@@ -17,6 +17,21 @@ namespace FlightRecorder
     /// <summary>A redaction rule: a transform applied to the jsonable value, or <c>null</c> to mask.</summary>
     public delegate object? RedactTransform(object? value);
 
+    /// <summary>A value-level mask: handed every leaf string on the tape, whatever it is called and
+    /// wherever it sits, and returns what should be written in its place.
+    ///
+    /// This exists because <see cref="RedactTransform"/> can only see what has a field name. A key
+    /// built by interpolation, a positional argument, a token quoted mid-sentence in an email body —
+    /// none of those have a name to key on, and before this the only recourse was
+    /// <see cref="Boundary.Forbid"/>, which refuses to record the call at all. An assertion is not a
+    /// remedy; this is the remedy.
+    ///
+    /// It MUST be idempotent. Replay re-derives the question the code is about to ask, scrubs it the
+    /// same way, and compares the result against the tape — so a value that came OFF the tape is
+    /// already a mask, and must scrub to itself. A scrub that masks its own output differently makes
+    /// every recording it touches permanently unreplayable.</summary>
+    public delegate string ScrubTransform(string value);
+
     /// <summary>A traced sequence that was too long to hold whole: the first
     /// <see cref="Serial.TraceMaxItems"/> items, and the length the original really had.
     ///
@@ -204,19 +219,27 @@ namespace FlightRecorder
 
         // --- redaction ------------------------------------------------------------------
 
-        /// <summary>Apply field-name redaction rules to a jsonable tree (see <see cref="Boundary.Redact"/>).
-        /// A rule that throws degrades to <see cref="Redacted"/>: the failure direction is masked,
-        /// never leaked and never breaks the recorded call.</summary>
-        public static object? RedactJsonable(object? v, IReadOnlyDictionary<string, RedactTransform?>? rules)
+        /// <summary>Apply field-name redaction rules (see <see cref="Boundary.Redact"/>) and the
+        /// value-level <paramref name="scrub"/> (see <see cref="Boundary.Scrub"/>) to a jsonable tree.
+        ///
+        /// The two are complements, not alternatives: rules replace what a name can find, the scrub
+        /// sweeps every leaf string for what no name can. A rule's own OUTPUT is swept too, so a
+        /// transform that shortens rather than masks cannot smuggle the secret past the sweep.
+        ///
+        /// Either failing degrades to <see cref="Redacted"/>: the failure direction is masked, never
+        /// leaked and never breaks the recorded call. A null scrub means no sweep at all.</summary>
+        public static object? RedactJsonable(object? v, IReadOnlyDictionary<string, RedactTransform?>? rules,
+            ScrubTransform? scrub = null)
         {
-            if (rules == null || rules.Count == 0) return v;
+            var hasRules = rules != null && rules.Count > 0;
+            if (!hasRules && scrub == null) return v;
 
             if (v is IDictionary<string, object?> map)
             {
                 var outMap = new Dictionary<string, object?>();
                 foreach (var kv in map)
                 {
-                    if (rules.TryGetValue(kv.Key, out var rule))
+                    if (hasRules && rules!.TryGetValue(kv.Key, out var rule))
                     {
                         if (rule == null)
                         {
@@ -224,13 +247,13 @@ namespace FlightRecorder
                         }
                         else
                         {
-                            try { outMap[kv.Key] = rule(kv.Value); }
+                            try { outMap[kv.Key] = Sweep(rule(kv.Value), scrub); }
                             catch { outMap[kv.Key] = Redacted; }
                         }
                     }
                     else
                     {
-                        outMap[kv.Key] = RedactJsonable(kv.Value, rules);
+                        outMap[kv.Key] = RedactJsonable(kv.Value, rules, scrub);
                     }
                 }
                 return outMap;
@@ -238,10 +261,20 @@ namespace FlightRecorder
             if (v is IEnumerable<object?> list)
             {
                 var outList = new List<object?>();
-                foreach (var x in list) outList.Add(RedactJsonable(x, rules));
+                foreach (var x in list) outList.Add(RedactJsonable(x, rules, scrub));
                 return outList;
             }
-            return v;
+            return Sweep(v, scrub);
+        }
+
+        /// <summary>Hand one leaf to the scrub. A scrub that throws masks the value outright rather
+        /// than passing it through — the one thing worse than a poorer recording is a recording that
+        /// leaks because the mask crashed.</summary>
+        private static object? Sweep(object? v, ScrubTransform? scrub)
+        {
+            if (scrub == null || !(v is string s)) return v;
+            try { return scrub(s); }
+            catch { return Redacted; }
         }
 
         /// <summary>The first forbid pattern that matches the serialized line, or null if clean.

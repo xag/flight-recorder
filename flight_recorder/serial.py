@@ -67,32 +67,68 @@ def to_jsonable(v: Any, depth: int = 0) -> Any:
     return _opaque_value(v)
 
 
-def redact_jsonable(v: Any, rules: dict) -> Any:
-    """Apply field-name redaction rules (see Boundary.redact) to a jsonable tree. A dict
-    entry whose key is named in `rules` has its value replaced — by REDACTED when the rule
-    is None, else by the rule applied to the (jsonable) value; everything else recurses.
-    A rule that raises degrades to REDACTED: the failure direction is 'masked', never
-    'leaked' and never 'broke the recorded call'."""
-    if not rules:
+def redact_jsonable(v: Any, rules: dict, scrub: Any = None) -> Any:
+    """Mask a jsonable tree two ways: `rules` by FIELD NAME (Boundary.redact), `scrub` by
+    VALUE (Boundary.scrub). A dict entry whose key is named in `rules` has its value replaced
+    — by REDACTED when the rule is None, else by the rule applied to the (jsonable) value;
+    everything else recurses. `scrub` then sweeps every leaf string, wherever it sits.
+
+    Field rules assume a secret lives in a named field. Often it does not. A value passed
+    POSITIONALLY has no field name to match; nor does one interpolated into a key
+    (`session:{token}`) or sitting mid-sentence in a body of prose. Any of those walks onto
+    the tape untouched while a tidily-masked copy of itself sits in the next field along.
+    Sweeping every string is the only thing that catches them.
+
+    The sweep also reaches something field rules structurally cannot: **masking an INPUT
+    poisons everything derived from it.** Mask an identifier by name and the recording holds
+    a key built from the RAW value while replay, handed the mask, builds one from the MASK —
+    a different question, and a divergence that says nothing about the code. A substring
+    sweep is consistent under derivation: `session:{token}` scrubs to exactly what the
+    replayed code builds out of the scrubbed `token`. That is what makes a pseudonymised
+    recording replayable at all.
+
+    It is NOT consistent under decryption. If the code recovers a value by decrypting stored
+    ciphertext, no sweep can reach it, and masking either side sends the replayed code down a
+    branch it never took — the recording then reproduces an execution that never happened.
+    Some values have to stay on the tape, and the tape treated accordingly.
+
+    Both MUST be idempotent. Replay re-derives the question it is about to ask, scrubs it the
+    same way, and compares against the tape — so a value that is ALREADY a mask (it came off
+    the tape) has to scrub to itself, or a redacted recording could never be replayed at all.
+
+    A rule or a scrub that raises degrades to REDACTED: the failure direction is 'masked',
+    never 'leaked' and never 'broke the recorded call'."""
+    if not rules and scrub is None:
         return v
+
+    def leaf(x: Any) -> Any:
+        if scrub is None or not isinstance(x, str):
+            return x
+        try:
+            return scrub(x)
+        except Exception:
+            return REDACTED
+
     if isinstance(v, dict):
         out = {}
         for k, x in v.items():
-            if k in rules:
+            if rules and k in rules:
                 rule = rules[k]
                 if rule is None:
                     out[k] = REDACTED
                 else:
                     try:
-                        out[k] = rule(x)
+                        # The rule's OUTPUT still meets the sweep: a transform that
+                        # tokenizes a field is not a licence for the sweep to look away.
+                        out[k] = leaf(rule(x))
                     except Exception:
                         out[k] = REDACTED
             else:
-                out[k] = redact_jsonable(x, rules)
+                out[k] = redact_jsonable(x, rules, scrub)
         return out
     if isinstance(v, list):
-        return [redact_jsonable(x, rules) for x in v]
-    return v
+        return [redact_jsonable(x, rules, scrub) for x in v]
+    return leaf(v)
 
 
 def forbidden_hit(text: str, patterns: Any) -> Optional[str]:
