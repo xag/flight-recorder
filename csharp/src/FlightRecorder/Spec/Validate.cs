@@ -33,7 +33,7 @@ namespace FlightRecorder.Spec
         // python | node | dotnet | go. Adding a runtime is an additive change (the spec's own "add
         // a key, no version bump" rule): existing tapes still validate, and a further recorder's
         // tapes now validate too.
-        private static readonly string[] Runtimes = { "python", "node", "dotnet", "go" };
+        private static readonly string[] Runtimes = { "python", "node", "dotnet", "go", "java" };
 
         private static readonly Regex Iso = new Regex(
             @"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$", RegexOptions.Compiled);

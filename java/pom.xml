@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.github.xag</groupId>
+  <artifactId>flight-recorder</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+
+  <name>flight-recorder</name>
+  <description>Record the answers your code got from the outside world while handling a request,
+    and replay that exact request against the real code. A Java implementation of the frozen
+    tape-v1 wire format. https://github.com/xag/flight-recorder</description>
+  <url>https://github.com/xag/flight-recorder</url>
+
+  <licenses>
+    <license>
+      <name>Apache-2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+    </license>
+  </licenses>
+
+  <developers>
+    <developer><name>Xavier Grehant</name></developer>
+  </developers>
+
+  <scm>
+    <url>https://github.com/xag/flight-recorder</url>
+    <connection>scm:git:https://github.com/xag/flight-recorder.git</connection>
+  </scm>
+
+  <properties>
+    <!-- 17 for reach: the widest LTS a library can ask for and still be picked up without a
+         toolchain argument. Nothing here needs a later language level — the tracer's rewriter
+         uses com.sun.source (in the JDK since 6) and javax.tools, not a preview feature. -->
+    <maven.compiler.source>17</maven.compiler.source>
+    <maven.compiler.target>17</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <!-- NO runtime dependencies, deliberately. A recorder is a thing you install into someone
+       else's app; every jar it drags in is a version conflict it can cause in a codebase it was
+       supposed to be observing silently. Java ships no JSON, so the tape codec is hand-rolled
+       (Json.java) — the same call .NET made in Json.cs for canonical comparison. Test scope is
+       the only place a dependency is allowed. -->
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.10.2</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+      </plugin>
+    </plugins>
+  </build>
+</project>

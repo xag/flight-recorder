@@ -460,7 +460,7 @@ func validateLine(obj any, i int, out *[]string, first bool) {
 			checkValue(c, fmt.Sprintf("line %d.constants", i), out, 0)
 		}
 		var runtimes []string
-		for _, rk := range []string{"python", "node", "dotnet", "go"} {
+		for _, rk := range []string{"python", "node", "dotnet", "go", "java"} {
 			if _, present := m[rk]; present {
 				runtimes = append(runtimes, rk)
 			}

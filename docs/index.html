@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>flight-recorder — record the boundary, replay the real code</title>
-<meta name="description" content="Record an app's tool calls at their nondeterminism boundary; replay them deterministically against the real code. Python, Node, .NET and Go, one tape.">
+<meta name="description" content="Record an app's tool calls at their nondeterminism boundary; replay them deterministically against the real code. Python, Node, .NET, Go and Java, one tape.">
 <style>
   /* Library documentation. Plain, legible, unbranded — the reader came for the API, not a
      product. Light by default, because that is what docs are; dark honoured if asked for. */
@@ -124,7 +124,8 @@
   body[data-show="py"] [data-lang="py"],
   body[data-show="js"] [data-lang="js"],
   body[data-show="cs"] [data-lang="cs"],
-  body[data-show="go"] [data-lang="go"] { display: block; }
+  body[data-show="go"] [data-lang="go"],
+  body[data-show="java"] [data-lang="java"] { display: block; }
 
   @media (max-width: 900px) {
     /* minmax(0, 1fr), never a bare 1fr. A grid item's automatic minimum size is its min-content
@@ -203,6 +204,7 @@
       <button role="tab" data-set="js" aria-selected="false">Node</button>
       <button role="tab" data-set="cs" aria-selected="false">.NET</button>
       <button role="tab" data-set="go" aria-selected="false">Go</button>
+      <button role="tab" data-set="java" aria-selected="false">Java</button>
     </div>
     <nav>
       <a href="slides.html">Slides</a>
@@ -258,8 +260,13 @@ to happen again.</p>
 <pre data-lang="js"><code>npm install @xag/flight-recorder</code></pre>
 <pre data-lang="cs"><code>dotnet add package flight-recorder</code></pre>
 <pre data-lang="go"><code>go get github.com/xag/flight-recorder/go</code></pre>
+<pre data-lang="java"><code>&lt;dependency&gt;
+  &lt;groupId&gt;io.github.xag&lt;/groupId&gt;
+  &lt;artifactId&gt;flight-recorder&lt;/artifactId&gt;
+  &lt;version&gt;0.1.0&lt;/version&gt;
+&lt;/dependency&gt;</code></pre>
 
-<p class="muted">Four implementations, <strong>one tape</strong> — format v1, frozen in
+<p class="muted">Five implementations, <strong>one tape</strong> — format v1, frozen in
 <a href="https://github.com/xag/flight-recorder/blob/main/spec/tape-v1.md">spec/tape-v1.md</a>.
 Only <em>record</em> and <em>replay</em> are language-bound: replaying JavaScript means running
 JavaScript. Everything downstream consumes the tape, and a tape is only data.</p>
@@ -338,6 +345,18 @@ boundary := fr.Boundary{
 	Forbid:    []string{`-----BEGIN [A-Z ]*PRIVATE KEY-----`}, // the tripwire redaction can't name
 }</code></pre>
 
+<pre data-lang="java"><code>import io.github.xag.flightrecorder.*;
+
+Boundary boundary = new Boundary()
+    .constant("config.LIMIT", LIMIT)                        // header-captured
+    .maskFields("password")                                 // field-name redaction
+    .forbidden("-----BEGIN [A-Z ]*PRIVATE KEY-----")        // the tripwire redaction can't name
+    .reviving("ApiError", args -&gt; new ApiError((String) args.get(0)));
+
+// Wrap what the app HOLDS — a transparent proxy over an interface, never a mock.
+// Everything not named passes straight through, untouched and unrecorded.
+Store store = Recorder.wrapAs(Store.class, storageClient, "kv", "read", "write");</code></pre>
+
 <div class="note" data-lang="js">
   <p><strong>Why wrapping, and not patching modules?</strong> An ES module's namespace is immutable:
   there is no way to reach behind an <code>import</code> and swap what a caller already bound. So the
@@ -361,8 +380,17 @@ boundary := fr.Boundary{
   door; nothing behind it is imitated.</p>
 </div>
 
+<div class="note" data-lang="java">
+  <p><strong>Why wrapping, and not patching?</strong> Java can patch a loaded class, but only through
+  a <code>-javaagent</code> — a launch flag, and a library has no business demanding one of the
+  command line that starts your app. So the boundary is the <em>object</em> the app holds:
+  <code>wrapAs</code> returns a <code>java.lang.reflect.Proxy</code> over the interface, records the
+  named methods, and forwards the rest untouched. Not a mock — it calls the real thing and writes
+  down what came back.</p>
+</div>
+
 <p>The clock and the RNG hold nothing to wrap in any runtime — Python and Node shim the globals,
-.NET and Go read them through recorder handles.</p>
+.NET, Go and Java read them through recorder handles.</p>
 
 <div class="note" data-lang="js">
   <p>Node shims <code>Date.now</code>, <code>new Date()</code>, <code>performance.now</code>,
@@ -387,6 +415,19 @@ boundary := fr.Boundary{
   <code>fr.SampleIndices</code> (the positions drawn) / <code>fr.RandBytes</code> /
   <code>fr.RandFloat</code> / <code>fr.RandIntn</code> for randomness. Under record they draw for
   real and write it down; under replay they answer from the tape.</p>
+</div>
+
+<div class="note" data-lang="java">
+  <p>Java has no global clock or RNG to shim either, so the app calls the recorder's primitives:
+  <code>Recorder.now()</code> (naive) / <code>Recorder.nowOffset()</code> (timezone-aware) /
+  <code>Recorder.perf()</code> for the clocks, and <code>Recorder.sampleIndices</code> (the positions
+  drawn) / <code>Recorder.randBytes</code> / <code>Recorder.randFloat</code> /
+  <code>Recorder.randInt</code> for randomness. Under record they draw for real and write it down;
+  under replay they answer from the tape.</p>
+  <p><strong>One thing to know:</strong> the active call rides on a <code>ThreadLocal</code>, which
+  does not follow work handed to an executor. If a recorded call fans out, wrap the task with
+  <code>Recorder.propagate(...)</code> — otherwise the boundary reads on that thread go unrecorded,
+  silently. Threads started inline inherit it without help.</p>
 </div>
 
 <h2 id="record">Record</h2>
@@ -424,6 +465,15 @@ result, err := rec.Call(ctx, "study_status", map[string]any{"user": user},
 		return compute(doc, at), err
 	})</code></pre>
 
+<pre data-lang="java"><code>Recorder rec = Recorder.open(".flight", boundary);   // lazy: the first admitted call opens the file
+
+// Wrap each tool call — that line IS the execution.
+Object result = rec.call("study_status", Recorder.kwargs("user", user), () -&gt; {
+    Row doc = store.read(user);              // fx, through the wrapped client
+    LocalDateTime at = Recorder.now();       // now
+    return compute(doc, at);
+});</code></pre>
+
 <p>Off by default. When enabled, each call writes one line — bound args, ordered boundary events,
 result.</p>
 
@@ -455,6 +505,11 @@ Recorder.Install(boundary, directory: ".flight",
 rec, _ := fr.New("flight", fr.Boundary{
 	Enabled: func(fn string, kwargs map[string]any) bool { return writes[fn] },   // record what matters
 })</code></pre>
+
+<pre data-lang="java"><code>Set&lt;String&gt; writes = Set.of("set_level", "record_answer");
+
+Boundary boundary = new Boundary()
+    .enabledWhen((fn, kwargs) -&gt; writes.contains(fn));   // record what matters, not everything</code></pre>
 
 <p class="muted">A gate that never fires leaves no session file at all. A gate that raises is treated
 as a "no": it can never break the call it was asked about.</p>
@@ -508,6 +563,13 @@ func (s kvSink) Publish(name string, data []byte) {
 }
 
 rec, _ := fr.New("flight", fr.Boundary{Sink: kvSink{kv}})   // the sink IS the tape</code></pre>
+
+<pre data-lang="java"><code>// One method, handed the WHOLE session text each time — so an overwriting store is enough
+// and a tape is never half-published.
+Boundary boundary = new Boundary()
+    .publishingTo((name, text) -&gt; kv.setex("flight:" + name, Duration.ofDays(7), text));
+
+Recorder rec = Recorder.open(".flight", boundary);   // hand off and return; never block</code></pre>
 
 <div class="note" data-lang="cs">
   <p>The sink is handed the whole session — after the header, and after every completed call — so an
@@ -580,6 +642,16 @@ boundary.Forbidden(@"\b[a-f0-9]{64}\b")                        // a scrypt diges
 	Forbid: []string{`\b[a-f0-9]{64}\b`,                        // THIS TAPE CARRIES NO CREDENTIAL:
 		`-----BEGIN [A-Z ]*PRIVATE KEY-----`},                 // a hit raises, and writes nothing
 }</code></pre>
+
+<pre data-lang="java"><code>Boundary boundary = new Boundary()
+    .maskFields("password", "ssn")                       // by FIELD NAME
+    // …or map a field to a deterministic tokenizer, keeping distinctness without the value:
+    .redacting("email", v -&gt; ((String) v).startsWith("tok:") ? v : "tok:" + hmacHex(v))
+    .scrubbing("\\d{3}-\\d{2}-\\d{4}")                   // by VALUE: every string, anywhere
+    // `forbidden` states what a field rule cannot: THIS TAPE CARRIES NO CREDENTIAL. Each pattern
+    // is matched against the fully-redacted line; a hit raises ForbiddenValue and writes nothing.
+    .forbidden("\\b[a-f0-9]{64}\\b")                     // a scrypt digest survived redaction
+    .forbidden("-----BEGIN [A-Z ]*PRIVATE KEY-----");</code></pre>
 
 <div class="note">
   <p>Field rules assume secrets live in named fields. Often they do not: an address handed to a store
@@ -679,6 +751,14 @@ report.Divergence   // …or the exact point where behaviour changed</code></pre
 report.OK()          // result and error both reproduce the recording
 report.Divergence    // …or the exact point where behaviour changed</code></pre>
 
+<pre data-lang="java"><code>Recording tape = Recording.load(".flight/flight-….jsonl");
+Replay.Report report = Replay.replayCall(tape.call("study_status"),
+    (fn, kwargs) -&gt; () -&gt; studyStatus((String) kwargs.get("user")),   // the same function;
+    boundary, false);                        // its effects come off the tape, not the network
+
+report.ok()          // result and error both reproduce the recording
+report.divergence    // …or the exact point where behaviour changed</code></pre>
+
 <h3>Divergence is the finding</h3>
 
 <p>Replay does two jobs, and the second matters as much as the first: it <strong>answers</strong>, and
@@ -776,6 +856,15 @@ public void ThePinnedSessionStillBehaves()
 	}
 }</code></pre>
 
+<pre data-lang="java"><code>@Test
+void thePinnedSessionStillBehaves() throws Exception {
+    Recording tape = Recording.load("src/test/resources/recordings/status.jsonl");
+    Replay.Report report = Replay.replayCall(tape.call("study_status"),
+        (fn, kwargs) -&gt; () -&gt; studyStatus((String) kwargs.get("user")), boundary, false);
+
+    assertTrue(report.ok(), () -&gt; Replay.format(0, report));
+}</code></pre>
+
 <h2 id="mutation">Edit the tape to visit a world that never happened</h2>
 
 <p>A recording is data, so hostile states are one edit away: empty the result, hand back an absurd
@@ -812,7 +901,16 @@ call.MarkProbe()                       // a mutated answer changes every downstr
 report, _ := fr.CheckInvariantsCall(call, resolve, true, invariants)
 rec.Save("tests/recordings/empty-corpus.jsonl")   // pin it: a probe suite member</code></pre>
 
-<h2 id="invariants">Invariants <span class="badge">Python · Node · .NET · Go</span></h2>
+<pre data-lang="java"><code>Recording tape = Recording.load(path);
+Mutate.Handle call = Mutate.on(tape.call(0));
+call.read("stream").setEmpty();     // empty corpus — the store can never answer this
+call.clock().reverse();             // time runs backwards
+
+// Editing a call marks it a probe: arguments are no longer compared, name and order still gate.
+Invariants.Report report = call.check(resolver, invariants, boundary);
+call.save("src/test/resources/recordings/empty-corpus.jsonl", boundary);   // pin it: a probe suite member</code></pre>
+
+<h2 id="invariants">Invariants <span class="badge">Python · Node · .NET · Go · Java</span></h2>
 
 <p>An invariant is a claim about <strong>every</strong> execution, written once and checked against any
 recording — so it can condemn the very first observation of a bug, which no recording can. A bug
@@ -879,6 +977,20 @@ levelNeverEmpties := fr.NewInvariant("level never excludes the whole corpus",
 report, _ := fr.CheckInvariants(tape, 0, resolve,
 	[]fr.Invariant{noEmptyClaim, levelNeverEmpties})</code></pre>
 
+<pre data-lang="java"><code>var noEmptyClaim = Invariants.of("never claims end-of-corpus while words remain", t -&gt; {
+    Map&lt;String, Object&gt; r = Json.asMap(t.result);
+    assertFalse((Boolean) r.get("done") &amp;&amp; (Long) r.get("corpus") - (Long) r.get("deck") &gt; 0);
+});
+
+var levelNeverEmpties = Invariants.of("level never excludes the whole corpus", t -&gt; {
+    for (Trace.Obs obs : t.trace.values("level")) {
+        assertTrue((Long) obs.value() &gt; 0, "level=" + obs.value() + " at " + obs.at());
+    }
+});
+
+Invariants.Report report = Invariants.check(tape, 0, resolver,
+    List.of(noEmptyClaim, levelNeverEmpties), boundary, false);</code></pre>
+
 <p data-lang="py">The second claim is the reason this exists: the production bug that shaped the library
 was an internal variable (<code>level=0</code>) silently emptying a whole corpus, with a perfectly
 self-consistent output.</p>
@@ -892,7 +1004,7 @@ claims the code made, and — through <code>v.Trace</code> — every local on ev
   <em>any</em> of them. A tape written by Go can be judged by a claim written in Node.</p>
 </div>
 
-<h2 id="sem">Semantic spans <span class="badge">Python · Node · .NET · Go</span></h2>
+<h2 id="sem">Semantic spans <span class="badge">Python · Node · .NET · Go · Java</span></h2>
 
 <p>A recording answers <strong>“same?”</strong>. An invariant answers <strong>“right?”</strong>. Neither
 answers <strong>“what was this?”</strong> — and that is the question anyone actually opens a tape with.
@@ -920,6 +1032,11 @@ call to the thing that charges cards beneath it, is a claim a reader can now ref
 	_ = holder
 	return err
 })</code></pre>
+
+<pre data-lang="java"><code>Recorder.span("assign_turn", Map.of("chore", chore), () -&gt; {   // every boundary event inside the span
+    Snapshot holder = Recorder.queryOne("get", "member:" + who, () -&gt; db.get(who));
+    Recorder.note("skipped", Map.of("reason", "absent"));      // a moment worth marking, no span
+});</code></pre>
 
 <p>Which makes a tape something you can <strong>read</strong> rather than search. Load the semantic
 skeleton first and descend into the raw JSONL only inside the span that looks wrong:</p>
@@ -956,6 +1073,14 @@ enrol  ok  (1 now)
     register  ERROR  (2 fx)
     - registration_failed  why="no such key: alice"</code></pre>
 
+<pre data-lang="java"><code>&gt; System.out.println(Recording.load(tape).call(0).renderSpans());
+enrol  ok  (1 now)
+  enrol  ok
+    load_corpus  ok  (1 fx)
+    - corpus_read  found=true
+    register  ERROR  (2 fx)
+    - registration_failed  why="no such key: alice"</code></pre>
+
 <p>Spans are call-scoped and well-nested by construction (the only way to open one is the context
 manager), so enclosure is derived from order and there are no parent pointers to get wrong. A body that
 raises still closes its span, marked <code>error</code>, and the exception goes on its way untouched — a
@@ -979,12 +1104,14 @@ in.</p>
 
 <div class="table-wrap">
 <table>
-  <tr><th></th><th>Python</th><th>Node</th><th>.NET</th><th>Go</th></tr>
-  <tr><td>Boundary</td><td>name module functions; patch in place</td><td>wrap what the app <em>holds</em> — namespaces are immutable</td><td>wrap what the app <em>holds</em> — a <code>DispatchProxy</code>; bindings can't be swapped</td><td>explicit primitives on a <code>context.Context</code> — no patch, no proxy</td></tr>
-  <tr><td>Randomness</td><td><code>sample</code> — the <em>positions</em> drawn, so a mutated population still replays</td><td><code>bytes</code>/<code>float</code>/<code>int</code> — the draw <em>is</em> the value</td><td>a handle covering every shape — <code>sample</code> and <code>bytes</code>/<code>int</code>/<code>float</code></td><td>primitives for every shape — the <em>positions</em>, and <code>bytes</code>/<code>float</code>/<code>int</code></td></tr>
-  <tr><td>Nothing</td><td>one — <code>None</code></td><td>two — <code>undefined</code> earns its own marker</td><td>one — <code>null</code></td><td>one — <code>nil</code></td></tr>
-  <tr><td>The sink</td><td>hand the bytes to a queue</td><td>hand the promise to the host — <code>waitUntil</code></td><td>a synchronous <code>Publish</code>, handed the whole session</td><td>a <code>Publish([]byte)</code> handed the whole session — hand off and return</td></tr>
-  <tr><td>Tracing</td><td><code>sys.settrace</code> — every local, every executed line, free</td><td>the same, via the V8 Inspector from a worker thread — slower, and it sees across an <code>await</code></td><td>no runtime hook exists, so the code is rewritten: Roslyn instruments the sources, compiles to memory, and the traced copy runs in-process</td><td>no runtime hook either — <code>go/ast</code> instruments a copy of the module, so the traced run costs a compile and happens in its own process</td></tr>
+  <tr><th></th><th>Python</th><th>Node</th><th>.NET</th><th>Go</th><th>Java</th></tr>
+  <tr><td>Boundary</td><td>name module functions; patch in place</td><td>wrap what the app <em>holds</em> — namespaces are immutable</td><td>wrap what the app <em>holds</em> — a <code>DispatchProxy</code>; bindings can't be swapped</td><td>explicit primitives on a <code>context.Context</code> — no patch, no proxy</td><td>wrap what the app <em>holds</em> — a <code>java.lang.reflect.Proxy</code>; patching would cost a <code>-javaagent</code></td></tr>
+  <tr><td>Randomness</td><td><code>sample</code> — the <em>positions</em> drawn, so a mutated population still replays</td><td><code>bytes</code>/<code>float</code>/<code>int</code> — the draw <em>is</em> the value</td><td>a handle covering every shape — <code>sample</code> and <code>bytes</code>/<code>int</code>/<code>float</code></td><td>primitives for every shape — the <em>positions</em>, and <code>bytes</code>/<code>float</code>/<code>int</code></td><td>primitives for every shape — the <em>positions</em>, and <code>bytes</code>/<code>float</code>/<code>int</code></td></tr>
+  <tr><td>Nothing</td><td>one — <code>None</code></td><td>two — <code>undefined</code> earns its own marker</td><td>one — <code>null</code></td><td>one — <code>nil</code></td><td>one — <code>null</code></td></tr>
+  <tr><td>The clock's shape</td><td>naive or aware, and the difference is preserved</td><td>one <code>Date</code></td><td><code>DateTime</code>/<code>DateTimeOffset</code></td><td>always located</td><td><code>LocalDateTime</code> or <code>OffsetDateTime</code> — preserved, because they do not compare</td></tr>
+  <tr><td>The sink</td><td>hand the bytes to a queue</td><td>hand the promise to the host — <code>waitUntil</code></td><td>a synchronous <code>Publish</code>, handed the whole session</td><td>a <code>Publish([]byte)</code> handed the whole session — hand off and return</td><td>a <code>publish(name, text)</code> handed the whole session — hand off and return</td></tr>
+  <tr><td>The ambient</td><td>a <code>ContextVar</code></td><td>an <code>AsyncLocalStorage</code></td><td>an <code>AsyncLocal</code>, which follows an <code>await</code></td><td>an explicit <code>context.Context</code> — honest across goroutines</td><td>an <code>InheritableThreadLocal</code>; an executor needs <code>Recorder.propagate</code></td></tr>
+  <tr><td>Tracing</td><td><code>sys.settrace</code> — every local, every executed line, free</td><td>the same, via the V8 Inspector from a worker thread — slower, and it sees across an <code>await</code></td><td>no runtime hook exists, so the code is rewritten: Roslyn instruments the sources, compiles to memory, and the traced copy runs in-process</td><td>no runtime hook either — <code>go/ast</code> instruments a copy of the module, so the traced run costs a compile and happens in its own process</td><td>no runtime hook either — javac's own <code>com.sun.source</code> parser instruments the sources and compiles them to memory, in-process, as .NET does</td></tr>
 </table>
 </div>
 
@@ -1106,7 +1233,7 @@ claim above is a survey result, not a proof.</p>
 
   let saved = null;
   try { saved = localStorage.getItem(KEY); } catch {}
-  show(['js', 'cs', 'go'].includes(saved) ? saved : 'py');
+  show(['js', 'cs', 'go', 'java'].includes(saved) ? saved : 'py');
 </script>
 
 <script>
@@ -1133,6 +1260,14 @@ claim above is a survey result, not a proof.</p>
       go: {
         re: /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|(`[^`]*`|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b(?:nil|true|false|iota)\b)|(\b(?:func|package|import|return|if|else|for|range|go|defer|chan|select|switch|case|default|break|continue|fallthrough|type|struct|interface|map|var|const|goto)\b)|(\b[A-Za-z_]\w*(?=\s*\())|(\b\d[\d_]*\.?\d*\b)/g,
         cls: ['tok-com', 'tok-str', 'tok-con', 'tok-key', 'tok-fn', 'tok-num'],
+      },
+      java: {
+        re: /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("""[\s\S]*?"""|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(@[A-Za-z_]\w*)|(\b(?:null|true|false|this|super)\b)|(\b(?:package|import|class|interface|enum|record|extends|implements|public|private|protected|static|final|abstract|synchronized|volatile|transient|native|strictfp|sealed|permits|var|new|return|if|else|for|while|do|switch|case|break|continue|try|catch|finally|throw|throws|instanceof|void|yield|default|assert)\b)|(\b[A-Za-z_]\w*(?=\s*[(<]))|(\b[A-Z][A-Za-z0-9_]*\b)|(\b\d[\d_]*\.?\d*[fdlFDL]?\b)/g,
+        cls: ['tok-com', 'tok-str', 'tok-dec', 'tok-con', 'tok-key', 'tok-fn', 'tok-typ', 'tok-num'],
+      },
+      xml: {
+        re: /(&lt;!--[\s\S]*?--&gt;)|(&lt;\/?[A-Za-z][\w:.-]*)|(&gt;)|("(?:[^"\\]|\\.)*")/g,
+        cls: ['tok-com', 'tok-key', 'tok-key', 'tok-str'],
       },
       json: {
         re: /("(?:[^"\\]|\\.)*"(?=\s*:))|("(?:[^"\\]|\\.)*")|(\b(?:true|false|null)\b)|(-?\d[\d.eE+-]*)/g,
@@ -1174,6 +1309,9 @@ claim above is a survey result, not a proof.</p>
       if (dataLang === 'js') return 'javascript';
       if (dataLang === 'cs') return 'csharp';
       if (dataLang === 'go') return 'go';
+      // The Maven coordinates are XML, not Java — the tab says java, the content disagrees, and
+      // the content wins (same reason `pip install` under the py tab is shell).
+      if (dataLang === 'java') return /^&lt;/.test(first) ? 'xml' : 'java';
       return null;
     }
 
