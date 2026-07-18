@@ -9,12 +9,41 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text.RegularExpressions;
 
 namespace FlightRecorder
 {
     /// <summary>A redaction rule: a transform applied to the jsonable value, or <c>null</c> to mask.</summary>
     public delegate object? RedactTransform(object? value);
+
+    /// <summary>A traced sequence that was too long to hold whole: the first
+    /// <see cref="Serial.TraceMaxItems"/> items, and the length the original really had.
+    ///
+    /// It reports its true <see cref="Length"/> rather than the count of what survived, because
+    /// an invariant asking "was the corpus empty?" must not be told yes by the truncation.</summary>
+    public sealed class Truncated : IEnumerable<object?>
+    {
+        public IReadOnlyList<object?> Head { get; }
+        public int Length { get; }
+
+        public Truncated(IReadOnlyList<object?> head, int length) { Head = head; Length = length; }
+
+        public IEnumerator<object?> GetEnumerator() => Head.GetEnumerator();
+        IEnumerator IEnumerable.GetEnumerator() => Head.GetEnumerator();
+        public override string ToString() => $"[{Head.Count} of {Length} items]";
+    }
+
+    /// <summary>A traced string cut to a prefix, still reporting its true length.</summary>
+    public sealed class TruncatedText
+    {
+        public string Head { get; }
+        public int Length { get; }
+
+        public TruncatedText(string head, int length) { Head = head; Length = length; }
+
+        public override string ToString() => Head;
+    }
 
     public static class Serial
     {
@@ -244,6 +273,193 @@ namespace FlightRecorder
         {
             string s;
             try { s = Json.Stringify(ToJsonable(v)); }
+            catch { s = ReprOrPlaceholder(v); }
+            return s.Length <= limit ? s : s.Substring(0, limit - 1) + "…";
+        }
+
+        // --- traced internal values -----------------------------------------------------
+        //
+        // A different problem from boundary values, and it gets a different encoder. A boundary
+        // value is an INPUT to be revived faithfully; a traced value is a CLAIM to be asserted
+        // against. It is captured on every executed line, and it is whatever object the code
+        // happened to be holding — so it is recorded as data (you cannot do arithmetic on
+        // "3", and `FlightRecorder.Toy.Doc` tells you nothing), document snapshots are
+        // unwrapped, and anything long is cut to a prefix that still reports its true length.
+
+        /// <summary>Caps for traced values. A local can be a 10k-row list, and the tracer
+        /// snapshots it on every line that touches its frame.</summary>
+        public const int TraceMaxItems = 100;
+        public const int TraceMaxChars = 512;
+
+        /// <summary>Encode one traced internal value.
+        ///
+        /// This must NEVER throw. It runs inside the trace hook, on a line of the code under
+        /// replay — an exception here would be raised *in the frame being observed*, corrupting
+        /// the very execution the trace exists to watch. Anything hostile (a property getter
+        /// that throws, a cyclic graph, a ToString that dies) degrades to an opaque marker.</summary>
+        public static object? TraceJsonable(object? v)
+        {
+            try { return TraceEncode(v, 0); }
+            catch { return Opaque(v); }
+        }
+
+        private static object? TraceEncode(object? v, int depth)
+        {
+            if (depth > MaxDepth) return Opaque(v);
+            switch (v)
+            {
+                case null:
+                    return null;
+                case bool b:
+                    return b;
+                case string s:
+                    return s.Length <= TraceMaxChars
+                        ? (object)s
+                        : new Dictionary<string, object?>
+                        {
+                            ["__str__"] = new Dictionary<string, object?> { ["len"] = (long)s.Length, ["head"] = s.Substring(0, TraceMaxChars) },
+                        };
+                case DateTimeOffset dto:
+                    return new Dictionary<string, object?> { ["__dt__"] = Iso(dto) };
+                case DateTime dt:
+                    return new Dictionary<string, object?> { ["__dt__"] = IsoNaive(dt) };
+                case Snapshot snap:
+                    return new Dictionary<string, object?>
+                    {
+                        ["__snap__"] = SnapshotJsonable(snap.Id, snap.Exists, snap.Data),
+                    };
+            }
+
+            var t = v.GetType();
+            if (IsIntegral(t)) return Convert.ToInt64(v, CultureInfo.InvariantCulture);
+            if (t == typeof(double) || t == typeof(float) || t == typeof(decimal))
+            {
+                var d = Convert.ToDouble(v, CultureInfo.InvariantCulture);
+                return (double.IsNaN(d) || double.IsInfinity(d)) ? Opaque(v) : (object)d;
+            }
+            if (t.IsEnum) return v.ToString();
+
+            if (v is IDictionary dict)
+            {
+                var outMap = new Dictionary<string, object?>();
+                foreach (DictionaryEntry e in dict)
+                    outMap[Convert.ToString(e.Key, CultureInfo.InvariantCulture) ?? ""] = TraceEncode(e.Value, depth + 1);
+                // A traced dict that happens to have exactly one key spelled like a marker would
+                // revive as the thing the marker means. Escape it so it revives as itself.
+                if (outMap.Count == 1)
+                {
+                    foreach (var k in outMap.Keys)
+                        if (Markers.Contains(k) || TraceMarkers.Contains(k))
+                            return new Dictionary<string, object?> { ["__esc__"] = outMap };
+                }
+                return outMap;
+            }
+
+            if (v is IEnumerable en)
+            {
+                var items = new List<object?>();
+                var n = 0;
+                foreach (var x in en)
+                {
+                    if (n < TraceMaxItems) items.Add(TraceEncode(x, depth + 1));
+                    n += 1;
+                }
+                if (n <= TraceMaxItems) return items;
+                return new Dictionary<string, object?>
+                {
+                    ["__seq__"] = new Dictionary<string, object?> { ["len"] = (long)n, ["head"] = items },
+                };
+            }
+
+            return TracePocoOrOpaque(v, depth);
+        }
+
+        private static object? TracePocoOrOpaque(object v, int depth)
+        {
+            try
+            {
+                var props = v.GetType().GetProperties(
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                var outMap = new Dictionary<string, object?>();
+                foreach (var p in props)
+                {
+                    if (!p.CanRead || p.GetIndexParameters().Length > 0) continue;
+                    object? val;
+                    try { val = p.GetValue(v); }
+                    catch { continue; }
+                    outMap[CamelCase(p.Name)] = TraceEncode(val, depth + 1);
+                }
+                if (outMap.Count > 0) return outMap;
+            }
+            catch { /* fall through to opaque */ }
+            return Opaque(v);
+        }
+
+        private static readonly HashSet<string> TraceMarkers = new HashSet<string>
+        {
+            "__str__", "__seq__", "__snap__", "__esc__",
+        };
+
+        /// <summary>Revive a traced value into something an invariant can assert on.</summary>
+        public static object? FromTraceJsonable(object? v)
+        {
+            if (v is IDictionary<string, object?> map)
+            {
+                if (map.Count == 1)
+                {
+                    foreach (var kv in map)
+                    {
+                        switch (kv.Key)
+                        {
+                            case "__dt__":
+                            case "__date__":
+                                return ParseIso(kv.Value as string);
+                            case "__opaque__":
+                                return kv.Value;
+                            case "__undef__":
+                                return null;
+                            case "__snap__":
+                                return FromTraceJsonable(kv.Value);
+                            case "__seq__":
+                                {
+                                    var spec = kv.Value as IDictionary<string, object?>;
+                                    var head = (spec?.GetValueOrNull("head") as IEnumerable<object?>
+                                                ?? Enumerable.Empty<object?>()).Select(FromTraceJsonable).ToList();
+                                    return new Truncated(head, ToLen(spec?.GetValueOrNull("len")));
+                                }
+                            case "__str__":
+                                {
+                                    var spec = kv.Value as IDictionary<string, object?>;
+                                    return new TruncatedText(spec?.GetValueOrNull("head") as string ?? "",
+                                        ToLen(spec?.GetValueOrNull("len")));
+                                }
+                            case "__esc__":
+                                {
+                                    var inner = kv.Value as IDictionary<string, object?>;
+                                    var un = new Dictionary<string, object?>();
+                                    if (inner != null)
+                                        foreach (var e in inner) un[e.Key] = FromTraceJsonable(e.Value);
+                                    return un;
+                                }
+                        }
+                    }
+                }
+                var outMap = new Dictionary<string, object?>();
+                foreach (var kv in map) outMap[kv.Key] = FromTraceJsonable(kv.Value);
+                return outMap;
+            }
+            if (v is IEnumerable<object?> list)
+                return list.Select(FromTraceJsonable).ToList();
+            return v;
+        }
+
+        private static int ToLen(object? v) => v is long l ? (int)l : v is int i ? i : 0;
+
+        /// <summary>One-line display of a traced value, for a timeline or a failure message.</summary>
+        public static string RenderTraced(object? v, int limit = 90)
+        {
+            string s;
+            try { s = Json.Stringify(v); }
             catch { s = ReprOrPlaceholder(v); }
             return s.Length <= limit ? s : s.Substring(0, limit - 1) + "…";
         }

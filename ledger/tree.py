@@ -1,6 +1,6 @@
 """The docs ledger — the documentation architecture as data a check can go red on.
 
-flight-recorder ships one library in three runtimes, and its docs have exactly one failure
+flight-recorder ships one library in four runtimes, and its docs have exactly one failure
 mode worth a rule: they drift, and they play favourites. The root README was a Python tutorial
 (it doubled as the PyPI page), the guide is bilingual-turned-trilingual, and adding .NET meant
 editing the guide and three READMEs at once. So two rules, recorded here and — this is the point
@@ -206,10 +206,15 @@ _PARITY_DECISION = Node(
             "reached parity, and it goes red until the feature lands in every runtime.",
         "consequence":
             "A feature is not shipped until it is shipped in all four runtimes; the guide then "
-            "gains a tab, never a badge. A feature that is genuinely hard in one runtime — "
-            "variable-level tracing needs a debugger backend where there is no sys.settrace — holds "
-            "the gate red until it lands everywhere. The disparity is the finding, not an accepted "
-            "asterisk. This is the strictest gate in the ledger, and deliberately so.",
+            "gains a tab, never a badge. The disparity is the finding, not an accepted asterisk. "
+            "This is the strictest gate in the ledger, and deliberately so — and it has now been "
+            "paid once, which is the evidence it works. Variable-level tracing was the hard case: "
+            "the gate held red on the reading that it needed a debugger backend where there is no "
+            "sys.settrace, and that reading turned out to be WRONG. Neither .NET nor Go got a "
+            "debugger. Both got a rewriter — Roslyn over the sources in .NET, go/ast over a copy "
+            "of the module in Go — because the gate refused the footnote long enough for someone "
+            "to look for the third option. A gap documented honestly would have shipped the "
+            "asterisk and never found it.",
     },
     children=[
         Node(id="alt-lead-and-ports", kind="alternative",

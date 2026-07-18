@@ -33,14 +33,27 @@ namespace FlightRecorder
         public IReadOnlyList<Dictionary<string, object?>> Events { get; }
         public IReadOnlyList<(string Name, string Phase)> Sems { get; }
 
+        /// <summary>
+        /// The execution seen from the INSIDE: every local, on every executed line.
+        ///
+        /// This is the form that catches a bug whose output is perfectly self-consistent — the
+        /// production bug that shaped this library was an internal variable silently emptying a
+        /// corpus while every reported number agreed. Empty unless the body ran instrumented (see
+        /// <see cref="Tracer"/>), and empty rather than null so a claim about an untraced variable
+        /// fails honestly instead of passing vacuously.
+        /// </summary>
+        public Trace Trace { get; }
+
         internal CallView(object? result, string? error, IReadOnlyDictionary<string, object?> kwargs,
-            IReadOnlyList<Dictionary<string, object?>> events, IReadOnlyList<(string, string)> sems)
+            IReadOnlyList<Dictionary<string, object?>> events, IReadOnlyList<(string, string)> sems,
+            Trace trace)
         {
             Result = result;
             Error = error;
             Kwargs = kwargs;
             Events = events;
             Sems = sems;
+            Trace = trace;
         }
 
         /// <summary>The result revived into <typeparamref name="T"/> via a JSON round-trip.</summary>
@@ -87,7 +100,7 @@ namespace FlightRecorder
             var events = (call.GetValueOrNull("events") as IEnumerable<object?> ?? Enumerable.Empty<object?>())
                 .OfType<Dictionary<string, object?>>().ToList();
             var view = new CallView(report.Result, report.Error,
-                new Dictionary<string, object?>(kwargs), events, report.SemsReplayed);
+                new Dictionary<string, object?>(kwargs), events, report.SemsReplayed, report.Trace);
 
             var outp = new InvariantReport
             {

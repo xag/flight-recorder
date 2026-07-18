@@ -49,6 +49,15 @@ namespace FlightRecorder
         public IReadOnlyList<(string Name, string Phase)> SemsReplayed { get; internal set; } = Array.Empty<(string, string)>();
         public string? SemDivergence { get; internal set; }
         public bool SemStrict { get; internal set; }
+
+        /// <summary>
+        /// What the replayed code BELIEVED while it ran — every local, on every executed line.
+        ///
+        /// Populated when the body runs instrumented (see <see cref="Tracer"/>); an ordinary
+        /// replay leaves it empty rather than null, so a claim about a variable nobody traced
+        /// fails honestly instead of passing vacuously.
+        /// </summary>
+        public Trace Trace { get; internal set; } = new Trace(Array.Empty<Dictionary<string, object?>>());
     }
 
     public sealed class Feed
@@ -202,6 +211,9 @@ namespace FlightRecorder
             Boundary? boundary = null, bool probe = false, bool semStrict = false)
         {
             var ctx = Begin(call, boundary, probe);
+            // Mark before the body runs: one sink outlives one call, so the report's trace must be
+            // the trace of THIS call and not of every call replayed off the same tape.
+            var mark = TraceHook.Mark();
             object? result = null;
             string? error = null;
             Exception? divergence = null;
@@ -210,7 +222,7 @@ namespace FlightRecorder
             catch (ProbeUnanswerable e) { divergence = e; }
             catch (Exception e) { error = $"{e.GetType().Name}: {e.Message}"; }
             finally { End(); }
-            return Finish(ctx, call, boundary, semStrict, result, error, divergence);
+            return Finish(ctx, call, boundary, semStrict, result, error, divergence, mark);
         }
 
         /// <summary>Re-run one recorded call against the real async code.</summary>
@@ -219,6 +231,7 @@ namespace FlightRecorder
             Boundary? boundary = null, bool probe = false, bool semStrict = false)
         {
             var ctx = Begin(call, boundary, probe);
+            var mark = TraceHook.Mark();
             object? result = null;
             string? error = null;
             Exception? divergence = null;
@@ -227,7 +240,7 @@ namespace FlightRecorder
             catch (ProbeUnanswerable e) { divergence = e; }
             catch (Exception e) { error = $"{e.GetType().Name}: {e.Message}"; }
             finally { End(); }
-            return Finish(ctx, call, boundary, semStrict, result, error, divergence);
+            return Finish(ctx, call, boundary, semStrict, result, error, divergence, mark);
         }
 
         private sealed class Ctx
@@ -262,7 +275,7 @@ namespace FlightRecorder
         }
 
         private static ReplayReport Finish(Ctx ctx, Dictionary<string, object?> call, Boundary? boundary,
-            bool semStrict, object? result, string? error, Exception? divergence)
+            bool semStrict, object? result, string? error, Exception? divergence, int mark)
         {
             var b = boundary ?? new Boundary();
 
@@ -276,6 +289,7 @@ namespace FlightRecorder
 
             var report = new ReplayReport
             {
+                Trace = TraceHook.Live(mark),
                 SemsRecorded = semsRecorded,
                 SemsReplayed = semsReplayed,
                 SemDivergence = semDiv,

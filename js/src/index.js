@@ -24,6 +24,7 @@ export { boundaryOf, install, uninstall, tool, wrap, note, span, tapePath, FORMA
 export { toJsonable, fromJsonable, redactJsonable, REDACTED } from './serial.js';
 export { validateTape, VERSION } from './spec/validate.js';
 export { loadTape, pickCall, replayCall } from './replay.js';
+export { invariant, checkInvariants, formatReport, Trajectory } from './invariants.js';
 export { traced, Trace } from './trace.js';
 export { ReplayDivergence, ProbeUnanswerable } from './errors.js';
 // The render boundary. Also its own entry point (`@xag/flight-recorder/render`); it imports no
