@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -45,13 +46,31 @@ type SemPair struct {
 	Phase string
 }
 
-// feed is the recording as the world: events in order, popped by kind/shape.
+// feed is the recording as the world: events in order, popped by kind/shape. In probe mode
+// (a mutated recording) it is only an answering service: questions match by kind and shape,
+// order-monotonic, skipping recorded events the mutated execution no longer asks — because a
+// mutation legitimately changes which questions get asked, but the tape holds only the answers
+// it holds.
 type feed struct {
 	events    []map[string]any
 	pos       int
 	consumed  int
+	skipped   int
 	writeDivs []string
+	writes    []map[string]any // every write the replayed code performed, for invariants
+	probe     bool
 }
+
+// probeUnanswerable is panicked when a probe replay asks a question the mutated tape can't answer
+// — not a divergence: it impeaches neither code nor recording, only their pairing.
+type probeUnanswerable struct{ msg string }
+
+// chainArgs erases a chain signature's argument content: collection("u").where("x",">",0) →
+// collection.where. Under mutation a query's CONTENT changes (it flows from mutated data) but its
+// SHAPE does not, so probe matching compares shapes.
+var chainArgs = regexp.MustCompile(`\([^()]*\)`)
+
+func skeleton(sig string) string { return chainArgs.ReplaceAllString(sig, "") }
 
 func (f *feed) remaining() int { return len(f.events) - f.pos }
 
@@ -70,7 +89,13 @@ func (f *feed) matches(ev map[string]any, kind, sig, op, fn string) bool {
 		return false
 	}
 	if kind == "db" && sig != "" {
-		return str(ev["op"]) == op && str(ev["sig"]) == sig
+		if str(ev["op"]) != op {
+			return false
+		}
+		if f.probe {
+			return skeleton(str(ev["sig"])) == skeleton(sig)
+		}
+		return str(ev["sig"]) == sig
 	}
 	if kind == "fx" && fn != "" {
 		return str(ev["fn"]) == fn
@@ -91,6 +116,27 @@ func want(kind, sig, op, fn string) string {
 
 func (f *feed) popExpect(kind, sig, op, fn string) map[string]any {
 	f.skipSems()
+	if f.probe {
+		for j := f.pos; j < len(f.events); j++ {
+			ev := f.events[j]
+			if str(ev["k"]) == "sem" {
+				continue // not an answer, and not evidence of a changed path either
+			}
+			if f.matches(ev, kind, sig, op, fn) {
+				for k := f.pos; k < j; k++ { // recorded events the mutated path no longer asks
+					if str(f.events[k]["k"]) != "sem" {
+						f.skipped++
+					}
+				}
+				f.consumed += (j - f.pos) + 1
+				f.pos = j + 1
+				return ev
+			}
+		}
+		panic(&probeUnanswerable{fmt.Sprintf(
+			"the replayed code asked for %q but the recording holds no further such event — the "+
+				"mutation sent execution down a path this recording cannot answer", want(kind, sig, op, fn))})
+	}
 	if f.pos >= len(f.events) {
 		panic(&replayDivergence{fmt.Sprintf(
 			"replay asked for a %q event at position %d but the recording is exhausted — "+
@@ -182,8 +228,11 @@ func (rs *replayState) query(op, sig string) []Snapshot {
 }
 
 func (rs *replayState) execCompare(op, sig string, argsJsonable []any) {
+	// Every write the replayed code performs is captured for invariants ("never writes when the
+	// corpus is empty"); writes are compared, never executed.
+	rs.feed.writes = append(rs.feed.writes, map[string]any{"op": op, "sig": sig, "args": argsJsonable})
 	ev := rs.feed.popExpect("db", sig, op, "")
-	if !jsonEqual(ev["args"], argsJsonable) {
+	if !rs.feed.probe && !jsonEqual(ev["args"], argsJsonable) {
 		rs.feed.writeDivs = append(rs.feed.writeDivs, fmt.Sprintf(
 			"%s on %s:\n    recorded: %s\n    replayed: %s", op, sig, jsonString(ev["args"]), jsonString(argsJsonable)))
 	}
@@ -209,7 +258,9 @@ func (rs *replayState) span(ctx context.Context, name string, body func(context.
 func replayEffect[T any](rs *replayState, name string, args []any) (T, error) {
 	var zero T
 	ev := rs.feed.popExpect("fx", "", "", name)
-	if !jsonEqual(ev["args"], jsonableSlice(args)) {
+	// Probe replay never compares args: a mutated upstream answer legitimately changes every
+	// downstream question. The effect name and event order still gate.
+	if !rs.feed.probe && !jsonEqual(ev["args"], jsonableSlice(args)) {
 		panic(&replayDivergence{fmt.Sprintf(
 			"effect %s called with different arguments than recorded:\n  recorded: %s\n  replayed: %s",
 			name, jsonString(ev["args"]), jsonString(jsonableSlice(args)))})
@@ -235,47 +286,75 @@ type ReplayReport struct {
 	Divergence     string
 	EventsConsumed int
 	EventsTotal    int
+	Skipped        int    // probe only: recorded events the mutated path no longer asked
 	WriteDivs      []string
 	SemsRecorded   []SemPair
 	SemsReplayed   []SemPair
 	SemDivergence  string
 	ReplayedResult any
 	ReplayedError  string
+	Writes         []map[string]any // every write the replayed code performed (op/sig/args)
+	Kwargs         map[string]any   // the call's kwargs, revived
+	Probe          bool
+	Unanswerable   string // probe only: the mutation redirected onto a path the tape can't serve
 }
 
 // OK is a strict match: same result, same error, no boundary divergence, no write divergence,
 // and every recorded event consumed (the replayed code took neither a shorter nor a longer path).
+// A probe replay is not gated by match — a mutated recording is judged by invariants — so its OK
+// asks only that the tape could answer the path the mutation produced.
 func (r ReplayReport) OK() bool {
-	return r.ResultMatch && r.ErrorMatch && r.Divergence == "" &&
-		len(r.WriteDivs) == 0 && r.EventsConsumed == r.EventsTotal
+	if r.Divergence != "" || r.Unanswerable != "" {
+		return false
+	}
+	if r.Probe {
+		return true
+	}
+	return r.ResultMatch && r.ErrorMatch && len(r.WriteDivs) == 0 && r.EventsConsumed == r.EventsTotal
 }
 
 // Resolver maps a recorded call (its fn name and revived kwargs) to the function to re-execute.
 type Resolver func(fn string, kwargs map[string]any) (func(context.Context) (any, error), error)
 
 // Replay re-executes call `index` of the session at `path` against the code `resolve` returns,
-// feeding the recorded answers back, and returns the verdict.
+// feeding the recorded answers back, and returns the verdict. A call the mutation API marked a
+// probe replays in probe mode by itself.
 func Replay(path string, index int, resolve Resolver) (*ReplayReport, error) {
-	header, calls, err := loadSession(path)
+	_, calls, err := loadSession(path)
 	if err != nil {
 		return nil, err
 	}
-	_ = header
 	if index < 0 || index >= len(calls) {
 		return nil, fmt.Errorf("call %d out of range: %d call(s) in the session", index, len(calls))
 	}
 	rec := calls[index]
+	return replayRecordedCall(rec, resolve, rec["probe"] == true)
+}
+
+// ReplayCall replays an in-memory call view (from a loaded, possibly mutated Recording). probe —
+// or a call marked a probe via MarkProbe — matches boundary questions by shape and does not gate
+// on result/error; the verdict then belongs to invariants.
+func ReplayCall(cv *CallView, resolve Resolver, probe bool) (*ReplayReport, error) {
+	if cv == nil {
+		return nil, fmt.Errorf("no such call")
+	}
+	return replayRecordedCall(cv.raw, resolve, probe || cv.raw["probe"] == true)
+}
+
+func replayRecordedCall(rec map[string]any, resolve Resolver, probe bool) (*ReplayReport, error) {
 	events := toMapSlice(rec["events"])
-	f := &feed{events: events}
+	f := &feed{events: events, probe: probe}
 	rs := &replayState{feed: f}
 
 	report := &ReplayReport{
 		Fn:           str(rec["fn"]),
 		EventsTotal:  len(events),
 		SemsRecorded: semPairs(events),
+		Probe:        probe,
 	}
 
 	kwargs, _ := serial.FromJsonable(rec["kwargs"]).(map[string]any)
+	report.Kwargs = kwargs
 	fn, err := resolve(report.Fn, kwargs)
 	if err != nil {
 		return nil, fmt.Errorf("resolving %q: %w", report.Fn, err)
@@ -291,6 +370,10 @@ func Replay(path string, index int, resolve Resolver) (*ReplayReport, error) {
 					report.Divergence = d.msg
 					return
 				}
+				if u, ok := r.(*probeUnanswerable); ok {
+					report.Unanswerable = u.msg
+					return
+				}
 				panic(r)
 			}
 		}()
@@ -302,7 +385,9 @@ func Replay(path string, index int, resolve Resolver) (*ReplayReport, error) {
 	f.skipSems()
 
 	report.EventsConsumed = f.consumed
+	report.Skipped = f.skipped
 	report.WriteDivs = f.writeDivs
+	report.Writes = f.writes
 	report.SemsReplayed = rs.sems
 	report.SemDivergence = semDivergence(report.SemsRecorded, report.SemsReplayed)
 	if runErr != nil {
@@ -310,7 +395,7 @@ func Replay(path string, index int, resolve Resolver) (*ReplayReport, error) {
 	}
 	report.ErrorMatch = report.ReplayedError == recordedError(rec["error"])
 
-	if report.Divergence == "" {
+	if report.Divergence == "" && report.Unanswerable == "" {
 		rj := serial.ToJsonable(result)
 		report.ReplayedResult = rj
 		report.ResultMatch = jsonEqual(rj, rec["result"])
@@ -325,7 +410,11 @@ func loadSession(path string) (header map[string]any, calls []map[string]any, er
 	if err != nil {
 		return nil, nil, err
 	}
-	for _, ln := range strings.Split(string(data), "\n") {
+	return parseSession(string(data))
+}
+
+func parseSession(text string) (header map[string]any, calls []map[string]any, err error) {
+	for _, ln := range strings.Split(text, "\n") {
 		if strings.TrimSpace(ln) == "" {
 			continue
 		}
@@ -341,10 +430,13 @@ func loadSession(path string) (header map[string]any, calls []map[string]any, er
 		}
 	}
 	if header == nil {
-		return nil, nil, fmt.Errorf("%s has no session header — not a flight recording?", path)
+		return nil, nil, fmt.Errorf("no session header — not a flight recording?")
 	}
 	return header, calls, nil
 }
+
+// marshalStable serializes a tape object; encoding/json sorts map keys, so the bytes are stable.
+func marshalStable(obj map[string]any) ([]byte, error) { return json.Marshal(obj) }
 
 func toMapSlice(v any) []map[string]any {
 	arr, _ := v.([]any)

@@ -24,6 +24,7 @@ holding to account.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import quern.grounding  # noqa: F401 -- the grounding natives, for the gate rule
@@ -37,7 +38,7 @@ _SKIP = {".git", "node_modules", ".venv", "bin", "obj", ".dotnet", "dist",
 
 # The runtimes flight-recorder ships, and the guide tab each must have. A runtime that ships
 # without a tab here is a privileged-language violation by omission.
-_RUNTIME_TABS = {"Python": "py", "Node": "js", ".NET": "cs"}
+_RUNTIME_TABS = {"Python": "py", "Node": "js", ".NET": "cs", "Go": "go"}
 
 _GUIDE = _ROOT / "docs" / "index.html"
 _ROOT_README = _ROOT / "README.md"
@@ -66,7 +67,8 @@ def build() -> Quern:
                                               _ROOT.parent / "quern-registry"))
     quern = Quern(packages=[next(r for r in refs if r.name == "ledger")])
     quern = lib.effective(quern)
-    quern.root.children = [_DECISION, _no_privileged_language(), _no_doc_duplication()]
+    quern.root.children = [_DECISION, _no_privileged_language(), _no_doc_duplication(),
+                           _PARITY_DECISION, _feature_parity()]
     return quern
 
 
@@ -179,5 +181,100 @@ def _no_doc_duplication() -> Node:
              "not reproduce it",
         params={"tutorial_in_readmes": q},
         links={"admits": ["docs-carry-no-duplicated-tutorial"]},
+        payload={"note": q.source},
+    )
+
+
+# --- feature parity: the four runtimes are one library -----------------------------------
+
+_PARITY_DECISION = Node(
+    id="feature-parity",
+    kind="decision",
+    name="Every runtime ships every feature. The four implementations are one library, not a lead "
+         "implementation with ports trailing it: the guide shows the same feature set in all tabs, "
+         "no badge restricts a feature to some languages, and no 'not yet' note stands in for a "
+         "feature a runtime is missing.",
+    payload={
+        "rationale":
+            "A shared tape promises that a program's behaviour is portable across runtimes. A "
+            "feature gap breaks that promise unevenly: a tape recorded where invariants exist "
+            "cannot be judged where they do not, and a user who picks a runtime silently inherits "
+            "less library than the next person. So parity is the rule and 'implement it "
+            "everywhere' is the only discharge — never a footnote documenting the gap. The gate "
+            "reads the guide, because the guide is where a disparity becomes visible to a reader: "
+            "a badge that names only some runtimes, or a 'not yet' note, IS a feature that has not "
+            "reached parity, and it goes red until the feature lands in every runtime.",
+        "consequence":
+            "A feature is not shipped until it is shipped in all four runtimes; the guide then "
+            "gains a tab, never a badge. A feature that is genuinely hard in one runtime — "
+            "variable-level tracing needs a debugger backend where there is no sys.settrace — holds "
+            "the gate red until it lands everywhere. The disparity is the finding, not an accepted "
+            "asterisk. This is the strictest gate in the ledger, and deliberately so.",
+    },
+    children=[
+        Node(id="alt-lead-and-ports", kind="alternative",
+             name="A lead runtime (Python) with the others as ports that catch up over time",
+             payload={"why":
+                      "Where the project started, and exactly the drift this forbids: the guide "
+                      "fills with per-language badges and 'not yet' notes, and the shared-tape "
+                      "promise decays to 'portable, except for whatever your runtime has not caught "
+                      "up on'. A gap with no deadline is a gap forever."}),
+        Node(id="alt-document-gaps-honestly", kind="alternative",
+             name="Allow gaps, but document them honestly, per language",
+             payload={"why":
+                      "Honest, and still wrong: a documented gap is a gap nobody is required to "
+                      "close, so it normalises the disparity and makes it permanent. The gate makes "
+                      "the gap fail a build instead of fill a footnote."}),
+    ],
+)
+
+# Feature badges in the guide look like <span class="badge">Python · .NET</span>. A badge that
+# does not name every runtime restricts that feature to the ones it lists.
+_BADGE = re.compile(r'<span class="badge">([^<]*)</span>')
+# Notes that stand in for a missing feature. These are the shapes a "this runtime lacks X" note
+# takes; each is a parity violation to be discharged by implementing the feature, not reworded.
+_GAP_PHRASES = [
+    r'not in the [^<.]{0,30}?port',
+    r'not yet',
+    r'does not have[^.<]{0,40}?yet',
+    r'does not ship an?[^.<]{0,40}?runner',
+    r'waits on variable-level tracing',
+]
+
+
+def _feature_parity() -> Node:
+    guide = _GUIDE.read_text(encoding="utf-8") if _GUIDE.exists() else ""
+    findings: list[str] = []
+
+    for m in _BADGE.finditer(guide):
+        text = m.group(1)
+        missing = [name for name in _RUNTIME_TABS if name not in text]
+        if missing:
+            findings.append(f'badge "{text.strip()}" excludes {", ".join(missing)}')
+
+    for pat in _GAP_PHRASES:
+        for m in re.finditer(pat, guide, re.IGNORECASE):
+            findings.append(f'"{m.group(0).strip()}" — a feature a runtime lacks')
+
+    runtimes = ", ".join(_RUNTIME_TABS)
+    if not findings:
+        q = Quantity(
+            value=0, unit="disparity", provenance="measured", grounded=True,
+            source=f"the guide restricts no feature: every feature badge names all of {runtimes}, "
+                   f"and no 'not yet' note stands in for a missing one")
+    else:
+        q = Quantity(
+            value=len(findings), unit="disparity", provenance="measured", grounded=False,
+            source="the guide documents features that some runtimes lack, instead of shipping them "
+                   "everywhere: " + "; ".join(findings) + f" — bring every runtime ({runtimes}) to "
+                   "the same feature set and remove the badge/note, do not reword it")
+
+    return Node(
+        id="all-runtimes-same-features",
+        kind="gate",
+        name="Every runtime ships every feature: no guide badge restricts a feature to some "
+             "languages, and no 'not yet' note stands in for a missing one",
+        params={"disparities": q},
+        links={"admits": ["all-runtimes-same-features"]},
         payload={"note": q.source},
     )

@@ -47,6 +47,21 @@ type Boundary struct {
 	Scrub        serial.Scrub
 	Forbid       []string
 	HeaderExtras map[string]any
+	// Enabled is the per-call gate. Nil records every call. A func is consulted on every call
+	// with the tool name and its kwargs, so one running server can record a single user's request
+	// and leave the rest untouched. A gate that never admits a call leaves no session file at all.
+	Enabled func(fn string, kwargs map[string]any) bool
+	// Sink publishes the session off-box as it grows — after the header, then after every
+	// completed call — so recordings are retrievable from a machine you have no shell on.
+	Sink Sink
+}
+
+// Sink is where a session goes besides the local disk. Publish is handed the session file's name
+// and its full current bytes; it is best-effort — a Publish that panics is swallowed, because
+// recording must never be the reason a call fails. Hand the bytes off and return; a Publish that
+// blocks stalls the call that triggered it.
+type Sink interface {
+	Publish(name string, data []byte)
 }
 
 // ForbiddenValue is raised when a Boundary.Forbid pattern matches the record the recorder was
@@ -58,18 +73,26 @@ func (e *ForbiddenValue) Error() string {
 		"name the field in Boundary.Redact, or widen a rule that stopped matching, and record again", e.What, e.Pattern)
 }
 
-// Recorder owns one session file.
+// Recorder owns one session file. The file is opened lazily, by the first call the gate admits,
+// so a gate that never fires leaves nothing behind.
 type Recorder struct {
 	mu     sync.Mutex
+	dir    string
 	f      *os.File
 	path   string
+	header map[string]any
 	seq    int
 	redact serial.Rules
 	scrub  serial.Scrub
 	forbid []*regexp.Regexp
+	gate   func(fn string, kwargs map[string]any) bool
+	sink   Sink
+	mirror []byte // an in-memory copy of the file, kept only to feed a sink
 }
 
-// New opens a session file in dir and writes the header.
+// New prepares a recorder writing into dir. It does not open the session file — the first call
+// the gate admits does, so a gate that never fires leaves no file. It fails only on a bad forbid
+// pattern or an uncreatable directory.
 func New(dir string, b Boundary) (*Recorder, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -82,14 +105,6 @@ func New(dir string, b Boundary) (*Recorder, error) {
 		}
 		forbid = append(forbid, re)
 	}
-	stamp := time.Now().Format("20060102-150405")
-	path := filepath.Join(dir, fmt.Sprintf("flight-%s-%d.jsonl", stamp, os.Getpid()))
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return nil, err
-	}
-	r := &Recorder{f: f, path: path, redact: b.Redact, scrub: b.Scrub, forbid: forbid}
-
 	constants := map[string]any{}
 	for k, v := range b.Constants {
 		constants[k] = serial.ToJsonable(v)
@@ -97,23 +112,41 @@ func New(dir string, b Boundary) (*Recorder, error) {
 	header := map[string]any{
 		"ev":        "session",
 		"version":   formatVersion,
-		"started":   time.Now().Format(time.RFC3339Nano),
 		"go":        runtime.Version(),
 		"constants": constants,
 	}
 	for k, v := range b.HeaderExtras {
 		header[k] = serial.ToJsonable(v)
 	}
-	if err := r.writeObj(header, "the session record"); err != nil {
-		f.Close()
-		os.Remove(path)
-		return nil, err
-	}
-	return r, nil
+	return &Recorder{
+		dir: dir, header: header, redact: b.Redact, scrub: b.Scrub, forbid: forbid,
+		gate: b.Enabled, sink: b.Sink,
+	}, nil
 }
 
-// Path is the session file's path.
-func (r *Recorder) Path() string { return r.path }
+// ensure opens the session file and writes the header, once. Caller must hold r.mu.
+func (r *Recorder) ensure() error {
+	if r.f != nil {
+		return nil
+	}
+	stamp := time.Now().Format("20060102-150405")
+	r.path = filepath.Join(r.dir, fmt.Sprintf("flight-%s-%d.jsonl", stamp, os.Getpid()))
+	f, err := os.OpenFile(r.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	r.f = f
+	r.header["started"] = time.Now().Format(time.RFC3339Nano)
+	return r.writeLocked(r.header, "the session record")
+}
+
+// Path is the session file's path, or "" if no call has been recorded yet (a gate that never
+// admitted a call opens no file).
+func (r *Recorder) Path() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.path
+}
 
 // Close closes the session file.
 func (r *Recorder) Close() error {
@@ -136,7 +169,9 @@ func (r *Recorder) forbiddenHit(line []byte) string {
 	return ""
 }
 
-func (r *Recorder) writeObj(obj map[string]any, what string) error {
+// writeLocked marshals obj, runs the forbid tripwire, writes it to the file and (if a sink is
+// set) the in-memory mirror, and publishes. Caller must hold r.mu. Nothing is written on a hit.
+func (r *Recorder) writeLocked(obj map[string]any, what string) error {
 	line, err := json.Marshal(obj)
 	if err != nil {
 		return err
@@ -144,10 +179,31 @@ func (r *Recorder) writeObj(obj map[string]any, what string) error {
 	if hit := r.forbiddenHit(line); hit != "" {
 		return &ForbiddenValue{Pattern: hit, What: what}
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	_, err = r.f.Write(append(line, '\n'))
-	return err
+	data := append(line, '\n')
+	if _, err := r.f.Write(data); err != nil {
+		return err
+	}
+	if r.sink != nil {
+		r.mirror = append(r.mirror, data...)
+		r.publish()
+	}
+	return nil
+}
+
+// publish hands the whole session to the sink, best-effort: a panic is swallowed, because
+// recording must never be the reason a call fails. Caller holds r.mu.
+func (r *Recorder) publish() {
+	defer func() { _ = recover() }()
+	r.sink.Publish(filepath.Base(r.path), append([]byte(nil), r.mirror...))
+}
+
+func gateAdmits(gate func(string, map[string]any) bool, fn string, kwargs map[string]any) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false // a gate that raises can never break the call it was asked about
+		}
+	}()
+	return gate(fn, kwargs)
 }
 
 func (r *Recorder) scrubEvent(ev map[string]any) map[string]any {
@@ -207,6 +263,10 @@ func (c *call) emit(ev map[string]any) {
 func (r *Recorder) Call(ctx context.Context, fn string, kwargs map[string]any,
 	body func(context.Context) (any, error)) (any, error) {
 
+	if r.gate != nil && !gateAdmits(r.gate, fn, kwargs) {
+		return body(ctx) // the gate declined: run for real, record nothing, open no file
+	}
+
 	c := &call{rec: r}
 	cctx := context.WithValue(ctx, ctxKey{}, &ambient{call: c})
 	t0 := time.Now()
@@ -247,6 +307,9 @@ func (r *Recorder) writeCall(fn string, kwargs map[string]any, events []map[stri
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.ensure(); err != nil { // open the file and write the header on the first admitted call
+		return err
+	}
 	seq := r.seq + 1
 	obj := map[string]any{
 		"ev":     "call",
@@ -259,14 +322,7 @@ func (r *Recorder) writeCall(fn string, kwargs map[string]any, events []map[stri
 		"ts":     time.Now().Format(time.RFC3339Nano),
 		"ms":     round2(ms),
 	}
-	line, err := json.Marshal(obj)
-	if err != nil {
-		return err
-	}
-	if hit := r.forbiddenHit(line); hit != "" {
-		return &ForbiddenValue{Pattern: hit, What: fmt.Sprintf("the call record for %q", fn)}
-	}
-	if _, err := r.f.Write(append(line, '\n')); err != nil {
+	if err := r.writeLocked(obj, fmt.Sprintf("the call record for %q", fn)); err != nil {
 		return err
 	}
 	r.seq = seq // only a written call consumes a seq, so the tape stays 1-based and contiguous

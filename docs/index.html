@@ -123,7 +123,8 @@
   [data-lang] { display: none; }
   body[data-show="py"] [data-lang="py"],
   body[data-show="js"] [data-lang="js"],
-  body[data-show="cs"] [data-lang="cs"] { display: block; }
+  body[data-show="cs"] [data-lang="cs"],
+  body[data-show="go"] [data-lang="go"] { display: block; }
 
   @media (max-width: 900px) {
     /* minmax(0, 1fr), never a bare 1fr. A grid item's automatic minimum size is its min-content
@@ -201,6 +202,7 @@
       <button role="tab" data-set="py" aria-selected="true">Python</button>
       <button role="tab" data-set="js" aria-selected="false">Node</button>
       <button role="tab" data-set="cs" aria-selected="false">.NET</button>
+      <button role="tab" data-set="go" aria-selected="false">Go</button>
     </div>
     <nav>
       <a href="slides.html">Slides</a>
@@ -255,12 +257,10 @@ to happen again.</p>
 <pre data-lang="py"><code>pip install flight-recorder</code></pre>
 <pre data-lang="js"><code>npm install @xag/flight-recorder</code></pre>
 <pre data-lang="cs"><code>dotnet add package flight-recorder</code></pre>
+<pre data-lang="go"><code>go get github.com/xag/flight-recorder/go</code></pre>
 
 <p class="muted">Four implementations, <strong>one tape</strong> — format v1, frozen in
-<a href="https://github.com/xag/flight-recorder/blob/main/spec/tape-v1.md">spec/tape-v1.md</a>. The
-walkthrough below is shown in Python, Node and .NET; for Go, <code>go get
-github.com/xag/flight-recorder/go</code> and see the
-<a href="https://github.com/xag/flight-recorder/tree/main/go">Go quickstart</a>.
+<a href="https://github.com/xag/flight-recorder/blob/main/spec/tape-v1.md">spec/tape-v1.md</a>.
 Only <em>record</em> and <em>replay</em> are language-bound: replaying JavaScript means running
 JavaScript. Everything downstream consumes the tape, and a tape is only data.</p>
 
@@ -327,6 +327,17 @@ boundary.ErrorRevivers["ApiError"] = args =&gt; new ApiError((string)args[0]!);
 // Everything not named passes straight through, untouched and unrecorded.
 IStore store = Recorder.WrapAs(storageClient, "kv", nameof(IStore.Read), nameof(IStore.Write));</code></pre>
 
+<pre data-lang="go"><code>import (
+	fr "github.com/xag/flight-recorder/go"
+	"github.com/xag/flight-recorder/go/serial"
+)
+
+boundary := fr.Boundary{
+	Constants: map[string]any{"config.LIMIT": LIMIT},          // header-captured
+	Redact:    serial.Rules{"password": nil},                  // field-name redaction
+	Forbid:    []string{`-----BEGIN [A-Z ]*PRIVATE KEY-----`}, // the tripwire redaction can't name
+}</code></pre>
+
 <div class="note" data-lang="js">
   <p><strong>Why wrapping, and not patching modules?</strong> An ES module's namespace is immutable:
   there is no way to reach behind an <code>import</code> and swap what a caller already bound. So the
@@ -341,7 +352,17 @@ IStore store = Recorder.WrapAs(storageClient, "kv", nameof(IStore.Read), nameof(
   over the interface, records the named methods, and passes the rest through. Not a mock.</p>
 </div>
 
-<p>The clock and the RNG are the exception in all three: there the app holds nothing to wrap.</p>
+<div class="note" data-lang="go">
+  <p><strong>Why primitives, and not patching or proxying?</strong> Go can neither reach behind an
+  <code>import</code> to swap a package's functions nor synthesise a proxy over an arbitrary value at
+  run time. So the boundary is <em>explicit</em>: the app routes each read through a recorder
+  primitive — <code>fr.Effect</code>, <code>fr.Query</code>/<code>fr.QueryOne</code>,
+  <code>fr.Exec</code> — which runs the real code and records what came back. The primitive is the
+  door; nothing behind it is imitated.</p>
+</div>
+
+<p>The clock and the RNG hold nothing to wrap in any runtime — Python and Node shim the globals,
+.NET and Go read them through recorder handles.</p>
 
 <div class="note" data-lang="js">
   <p>Node shims <code>Date.now</code>, <code>new Date()</code>, <code>performance.now</code>,
@@ -358,6 +379,14 @@ IStore store = Recorder.WrapAs(storageClient, "kv", nameof(IStore.Read), nameof(
   and <code>Recorder.Random.NextDouble()</code> / <code>.Bytes(n)</code> / <code>.NextInt(a, b)</code>
   / <code>.Sample(pop, k)</code>. Under record they ask the world and write it down; under replay they
   answer from the tape.</p>
+</div>
+
+<div class="note" data-lang="go">
+  <p>Go has no global clock or RNG to shim either, so the app calls the recorder's primitives:
+  <code>fr.Now</code> / <code>fr.Perf</code> for the wall and monotonic clocks, and
+  <code>fr.SampleIndices</code> (the positions drawn) / <code>fr.RandBytes</code> /
+  <code>fr.RandFloat</code> / <code>fr.RandIntn</code> for randomness. Under record they draw for
+  real and write it down; under replay they answer from the tape.</p>
 </div>
 
 <h2 id="record">Record</h2>
@@ -382,6 +411,18 @@ object? StudyStatus(string user) =&gt; Recorder.Record("study_status", new { use
     var at = Recorder.Clock.Now();         // now
     return Compute(doc, at);
 });</code></pre>
+
+<pre data-lang="go"><code>rec, _ := fr.New("flight", boundary)   // lazy: the first admitted call opens the file
+defer rec.Close()
+
+// Wrap each tool call — that line IS the execution.
+result, err := rec.Call(ctx, "study_status", map[string]any{"user": user},
+	func(ctx context.Context) (any, error) {
+		doc, err := fr.Effect(ctx, "kv.read", []any{user},
+			func() (map[string]any, error) { return store.Read(user) })   // fx
+		at := fr.Now(ctx)                                                  // now
+		return compute(doc, at), err
+	})</code></pre>
 
 <p>Off by default. When enabled, each call writes one line — bound args, ordered boundary events,
 result.</p>
@@ -408,6 +449,12 @@ fr.install(BOUNDARY, {
 
 Recorder.Install(boundary, directory: ".flight",
                  gate: (fn, kwargs) =&gt; writes.Contains(fn));   // record what matters</code></pre>
+
+<pre data-lang="go"><code>writes := map[string]bool{"set_level": true, "record_answer": true}
+
+rec, _ := fr.New("flight", fr.Boundary{
+	Enabled: func(fn string, kwargs map[string]any) bool { return writes[fn] },   // record what matters
+})</code></pre>
 
 <p class="muted">A gate that never fires leaves no session file at all. A gate that raises is treated
 as a "no": it can never break the call it was asked about.</p>
@@ -453,6 +500,14 @@ fr.install(BOUNDARY, {
 }
 
 Recorder.Install(boundary, directory: null, sink: new KvSink());   // the sink IS the tape</code></pre>
+
+<pre data-lang="go"><code>type kvSink struct{ kv *redis.Client }   // one method: handed the WHOLE session each time
+
+func (s kvSink) Publish(name string, data []byte) {
+	s.kv.Set(ctx, "flight:"+name, data, 7*24*time.Hour)   // hand off and return; never block
+}
+
+rec, _ := fr.New("flight", fr.Boundary{Sink: kvSink{kv}})   // the sink IS the tape</code></pre>
 
 <div class="note" data-lang="cs">
   <p>The sink is handed the whole session — after the header, and after every completed call — so an
@@ -508,6 +563,16 @@ boundary.Redact["email"] = v =&gt; ((string)v!).StartsWith("tok:") ? v : "tok:" 
 // matched against the fully-redacted line; a hit raises ForbiddenValue and writes nothing.
 boundary.Forbidden(@"\b[a-f0-9]{64}\b")                        // a scrypt digest survived redaction
         .Forbidden("-----BEGIN [A-Z ]*PRIVATE KEY-----");</code></pre>
+
+<pre data-lang="go"><code>boundary := fr.Boundary{
+	Redact: serial.Rules{                                       // by FIELD NAME
+		"password": nil,                                        // nil rule → [REDACTED]
+		"email":    func(v any) any { return "tok:" + hmacHex(v) },  // …or a tokenizer
+	},
+	Scrub:  func(s string) string { return addressRe.ReplaceAllString(s, hide) }, // by VALUE
+	Forbid: []string{`\b[a-f0-9]{64}\b`,                        // THIS TAPE CARRIES NO CREDENTIAL:
+		`-----BEGIN [A-Z ]*PRIVATE KEY-----`},                 // a hit raises, and writes nothing
+}</code></pre>
 
 <div class="note" data-lang="js">
   <p>Field rules assume secrets live in named fields. Often they do not: an address handed to a store
@@ -599,6 +664,14 @@ var report = Replay.Call(call, kw =&gt; StudyStatus((string)kw["user"]!), bounda
 report.Ok           // result and error both reproduce the recording
 report.Divergence   // …or the exact point where behaviour changed</code></pre>
 
+<pre data-lang="go"><code>report, _ := fr.Replay(".flight/flight-….jsonl", 0,
+	func(fn string, kwargs map[string]any) (func(context.Context) (any, error), error) {
+		return studyStatus, nil   // the same function; its effects come off the tape, not the network
+	})
+
+report.OK()          // result and error both reproduce the recording
+report.Divergence    // …or the exact point where behaviour changed</code></pre>
+
 <h3>Divergence is the finding</h3>
 
 <p>Replay does two jobs, and the second matters as much as the first: it <strong>answers</strong>, and
@@ -683,6 +756,19 @@ public void ThePinnedSessionStillBehaves()
     Assert.True(report.Ok, Replay.FormatReport(0, report));
 }</code></pre>
 
+<pre data-lang="go"><code>func TestThePinnedSessionStillBehaves(t *testing.T) {
+	report, err := fr.Replay("tests/recordings/status.jsonl", 0,
+		func(fn string, kwargs map[string]any) (func(context.Context) (any, error), error) {
+			return studyStatus, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.OK() {
+		t.Fatalf("the pinned session diverged: %s", report.Divergence)
+	}
+}</code></pre>
+
 <h2 id="mutation">Edit the tape to visit a world that never happened</h2>
 
 <p>A recording is data, so hostile states are one edit away: empty the result, hand back an absurd
@@ -710,7 +796,16 @@ call.Clock.Reverse();                               // time runs backwards
 var report = call.Check(kw =&gt; Greet((string)kw["user"]!), invariants);
 rec.Save("tests/recordings/empty-corpus.jsonl");    // pin it: a probe suite member</code></pre>
 
-<h2 id="invariants">Invariants <span class="badge">Python · .NET</span></h2>
+<pre data-lang="go"><code>rec, _ := fr.Load(tape)
+call := rec.Call(0)
+call.Event("db", 0)["res"] = []any{}   // empty corpus — the store can never answer this
+call.MarkProbe()                       // a mutated answer changes every downstream question:
+                                       // arguments are no longer compared; name and order still gate
+
+report, _ := fr.CheckInvariantsCall(call, resolve, true, invariants)
+rec.Save("tests/recordings/empty-corpus.jsonl")   // pin it: a probe suite member</code></pre>
+
+<h2 id="invariants">Invariants <span class="badge">Python · .NET · Go</span></h2>
 
 <p>An invariant is a claim about <strong>every</strong> execution, written once and checked against any
 recording — so it can condemn the very first observation of a bug, which no recording can. A bug
@@ -734,6 +829,17 @@ def _(t: fr.Trajectory):
 
 var report = Invariants.CheckInvariants(tape, 0, body, new[] { noEmptyClaim }, boundary);</code></pre>
 
+<pre data-lang="go"><code>noEmptyClaim := fr.NewInvariant("never claims end-of-corpus while words remain",
+	func(t *fr.Trajectory) error {
+		r := t.Result.(map[string]any)
+		if r["done"] == true &amp;&amp; r["corpus"].(float64)-r["deck"].(float64) &gt; 0 {
+			return errors.New("claimed done with words remaining")
+		}
+		return nil
+	})
+
+report, _ := fr.CheckInvariants(tape, 0, resolve, []fr.Invariant{noEmptyClaim})</code></pre>
+
 <p data-lang="py">The second claim is the reason this exists: the production bug that shaped the library
 was an internal variable (<code>level=0</code>) silently emptying a whole corpus, with a perfectly
 self-consistent output.</p>
@@ -743,12 +849,12 @@ claims the code made. The trace-driven form — asserting over an internal varia
 on variable-level tracing, which the .NET port does not have yet.</p>
 
 <div class="note">
-  <p>The engines are Python and .NET — and because an invariant <strong>consumes the tape</strong>, and
-  the tape is shared, a recording made by <em>any</em> implementation can be checked against them. (Node
-  consumes the tape too; it just does not ship an invariant runner.)</p>
+  <p>The engines are Python, .NET and Go — and because an invariant <strong>consumes the tape</strong>,
+  and the tape is shared, a recording made by <em>any</em> implementation can be checked against them.
+  (Node consumes the tape too; it just does not ship an invariant runner.)</p>
 </div>
 
-<h2 id="sem">Semantic spans <span class="badge">Python · Node · .NET</span></h2>
+<h2 id="sem">Semantic spans <span class="badge">Python · Node · .NET · Go</span></h2>
 
 <p>A recording answers <strong>“same?”</strong>. An invariant answers <strong>“right?”</strong>. Neither
 answers <strong>“what was this?”</strong> — and that is the question anyone actually opens a tape with.
@@ -768,6 +874,14 @@ call to the thing that charges cards beneath it, is a claim a reader can now ref
     var holder = store.Get($"member:{who}");
     Recorder.Note("skipped", new { reason = "absent" });   // a moment worth marking, no span
 });</code></pre>
+
+<pre data-lang="go"><code>fr.Span(ctx, "assign_turn", map[string]any{"chore": chore}, func(ctx context.Context) error {
+	holder, err := fr.QueryOne(ctx, "get", "member:"+who,      // every boundary event inside the span
+		func() (fr.Snapshot, error) { return db.Get(who) })
+	fr.Note(ctx, "skipped", map[string]any{"reason": "absent"})   // a moment worth marking, no span
+	_ = holder
+	return err
+})</code></pre>
 
 <p>Which makes a tape something you can <strong>read</strong> rather than search. Load the semantic
 skeleton first and descend into the raw JSONL only inside the span that looks wrong:</p>
@@ -796,6 +910,14 @@ enrol  ok  (1 now)
     register  ERROR  (2 fx)
     - registration_failed  why="kaput"</code></pre>
 
+<pre data-lang="go"><code>&gt; rec, _ := fr.Load(tape); fmt.Println(rec.Call(0).RenderSpans())
+enrol  ok  (1 now)
+  enrol  ok
+    load_corpus  ok  (1 fx)
+    - corpus_read  found=true
+    register  ERROR  (2 fx)
+    - registration_failed  why="no such key: alice"</code></pre>
+
 <p>Spans are call-scoped and well-nested by construction (the only way to open one is the context
 manager), so enclosure is derived from order and there are no parent pointers to get wrong. A body that
 raises still closes its span, marked <code>error</code>, and the exception goes on its way untouched — a
@@ -819,12 +941,12 @@ in.</p>
 
 <div class="table-wrap">
 <table>
-  <tr><th></th><th>Python</th><th>Node</th><th>.NET</th></tr>
-  <tr><td>Boundary</td><td>name module functions; patch in place</td><td>wrap what the app <em>holds</em> — namespaces are immutable</td><td>wrap what the app <em>holds</em> — a <code>DispatchProxy</code>; bindings can't be swapped</td></tr>
-  <tr><td>Randomness</td><td><code>sample</code> — the <em>positions</em> drawn, so a mutated population still replays</td><td><code>bytes</code>/<code>float</code>/<code>int</code> — the draw <em>is</em> the value</td><td>a handle covering every shape — <code>sample</code> and <code>bytes</code>/<code>int</code>/<code>float</code></td></tr>
-  <tr><td>Nothing</td><td>one — <code>None</code></td><td>two — <code>undefined</code> earns its own marker</td><td>one — <code>null</code></td></tr>
-  <tr><td>The sink</td><td>hand the bytes to a queue</td><td>hand the promise to the host — <code>waitUntil</code></td><td>a synchronous <code>Publish</code>, handed the whole session</td></tr>
-  <tr><td>Tracing</td><td><code>sys.settrace</code> — every local, every executed line, free</td><td>the same, via the V8 Inspector from a worker thread — slower, and it sees across an <code>await</code></td><td>not yet — the CLR has no <code>sys.settrace</code>; it needs a debugger backend</td></tr>
+  <tr><th></th><th>Python</th><th>Node</th><th>.NET</th><th>Go</th></tr>
+  <tr><td>Boundary</td><td>name module functions; patch in place</td><td>wrap what the app <em>holds</em> — namespaces are immutable</td><td>wrap what the app <em>holds</em> — a <code>DispatchProxy</code>; bindings can't be swapped</td><td>explicit primitives on a <code>context.Context</code> — no patch, no proxy</td></tr>
+  <tr><td>Randomness</td><td><code>sample</code> — the <em>positions</em> drawn, so a mutated population still replays</td><td><code>bytes</code>/<code>float</code>/<code>int</code> — the draw <em>is</em> the value</td><td>a handle covering every shape — <code>sample</code> and <code>bytes</code>/<code>int</code>/<code>float</code></td><td>primitives for every shape — the <em>positions</em>, and <code>bytes</code>/<code>float</code>/<code>int</code></td></tr>
+  <tr><td>Nothing</td><td>one — <code>None</code></td><td>two — <code>undefined</code> earns its own marker</td><td>one — <code>null</code></td><td>one — <code>nil</code></td></tr>
+  <tr><td>The sink</td><td>hand the bytes to a queue</td><td>hand the promise to the host — <code>waitUntil</code></td><td>a synchronous <code>Publish</code>, handed the whole session</td><td>a <code>Publish([]byte)</code> handed the whole session — hand off and return</td></tr>
+  <tr><td>Tracing</td><td><code>sys.settrace</code> — every local, every executed line, free</td><td>the same, via the V8 Inspector from a worker thread — slower, and it sees across an <code>await</code></td><td>not yet — the CLR has no <code>sys.settrace</code>; it needs a debugger backend</td><td>not yet — Go has no <code>sys.settrace</code>; it needs a debugger backend (Delve)</td></tr>
 </table>
 </div>
 
@@ -946,7 +1068,7 @@ claim above is a survey result, not a proof.</p>
 
   let saved = null;
   try { saved = localStorage.getItem(KEY); } catch {}
-  show(['js', 'cs'].includes(saved) ? saved : 'py');
+  show(['js', 'cs', 'go'].includes(saved) ? saved : 'py');
 </script>
 
 <script>
@@ -970,12 +1092,16 @@ claim above is a survey result, not a proof.</p>
         re: /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|([$@]{0,2}"(?:[^"\\]|\\.)*")|(\b(?:using|namespace|var|new|class|struct|interface|enum|public|private|protected|internal|static|readonly|const|void|return|if|else|for|foreach|in|while|do|switch|case|break|continue|try|catch|finally|throw|null|true|false|async|await|nameof|typeof|is|as|out|ref|params|this|base|override|virtual|abstract|sealed|get|set|yield|default|when)\b)|(\b[A-Za-z_]\w*(?=\s*[(<]))|(\b[A-Z][A-Za-z0-9_]*\b)|(\b\d[\d_]*\.?\d*[fdmL]?\b)/g,
         cls: ['tok-com', 'tok-str', 'tok-key', 'tok-fn', 'tok-typ', 'tok-num'],
       },
+      go: {
+        re: /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|(`[^`]*`|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b(?:nil|true|false|iota)\b)|(\b(?:func|package|import|return|if|else|for|range|go|defer|chan|select|switch|case|default|break|continue|fallthrough|type|struct|interface|map|var|const|goto)\b)|(\b[A-Za-z_]\w*(?=\s*\())|(\b\d[\d_]*\.?\d*\b)/g,
+        cls: ['tok-com', 'tok-str', 'tok-con', 'tok-key', 'tok-fn', 'tok-num'],
+      },
       json: {
         re: /("(?:[^"\\]|\\.)*"(?=\s*:))|("(?:[^"\\]|\\.)*")|(\b(?:true|false|null)\b)|(-?\d[\d.eE+-]*)/g,
         cls: ['tok-typ', 'tok-str', 'tok-con', 'tok-num'],
       },
       shell: {
-        re: /(#[^\n]*)|("[^"]*"|'[^']*')|(\b(?:pip|npm|dotnet|python|pytest|git|node|uv)\b)|(\s--?[A-Za-z][\w-]*)/g,
+        re: /(#[^\n]*)|("[^"]*"|'[^']*')|(\b(?:pip|npm|dotnet|python|pytest|git|node|uv|go)\b)|(\s--?[A-Za-z][\w-]*)/g,
         cls: ['tok-com', 'tok-str', 'tok-fn', 'tok-con'],
       },
     };
@@ -1002,13 +1128,14 @@ claim above is a survey result, not a proof.</p>
     // shell, and console output is nobody's language. So detect from content first, tab second.
     function detectLang(code, dataLang) {
       const first = code.replace(/^\n+/, '').split('\n', 1)[0].trim();
-      if (/^(pip|npm|dotnet)\b/.test(first)) return 'shell';
+      if (/^(pip|npm|dotnet|go get)\b/.test(first)) return 'shell';
       if (/^\$\s/.test(first)) return 'shell';
       if (/^>>>\s/.test(first) || /^>\s/.test(first)) return null; // console/output — leave plain
       if (/^\{/.test(first)) return 'json';
       if (dataLang === 'py') return 'python';
       if (dataLang === 'js') return 'javascript';
       if (dataLang === 'cs') return 'csharp';
+      if (dataLang === 'go') return 'go';
       return null;
     }
 
