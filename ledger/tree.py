@@ -579,7 +579,7 @@ _DISTRIBUTIONS = {
     "cs":   {"registry": "NuGet",      "id": "flight-recorder",
              "status": "published",   "version": "0.1.0"},
     "java": {"registry": "Maven Central", "id": "io.github.xag:flight-recorder",
-             "status": "unpublished", "version": None},
+             "status": "published",   "version": "0.1.0"},
     "php":  {"registry": "Packagist",  "id": "poietic/flight-recorder",
              "status": "unpublished", "version": None},
 }
