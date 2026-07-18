@@ -1,0 +1,76 @@
+name: php-split
+
+# Publishes the PHP implementation by mirroring php/ into xag/flight-recorder-php, which is
+# what Packagist installs from.
+#
+# Why a mirror at all: Packagist.org "does not offer a way to install packages which are not
+# stored at the root of their repository" — subdirectory packages are a Private Packagist
+# feature. The alternative was moving composer.json to the repo root, and that was rejected
+# because Packagist derives versions from tags and cannot read a prefixed tag: PHP would have
+# had to share the root tag line with Python, so every `v0.8.0` cut for PyPI would publish a
+# PHP release with a version PHP never chose. The mirror keeps php/vX.Y.Z here and vX.Y.Z
+# there, and keeps five other runtimes out of every PHP consumer's vendor/ directory.
+#
+# The mirror is READ-ONLY. It is rebuilt from this repo; never commit to it directly.
+
+on:
+  push:
+    tags: ["php/v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing php/vX.Y.Z tag to (re)split, e.g. php/v0.1.0"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  split:
+    runs-on: ubuntu-latest
+    steps:
+      # subtree split walks every commit that touched the prefix, so it needs real history.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Derive the mirror version
+        id: v
+        run: |
+          set -euo pipefail
+          src="${{ inputs.tag || github.ref_name }}"
+          case "$src" in
+            php/v*) ;;
+            *) echo "::error::expected a php/vX.Y.Z tag, got '$src'"; exit 1 ;;
+          esac
+          echo "version=${src#php/}" >> "$GITHUB_OUTPUT"
+          echo "splitting $src -> ${src#php/}"
+
+      # A deploy key scoped to the mirror alone: the default GITHUB_TOKEN cannot push to
+      # another repository, and a PAT would carry rights over every repo this account owns.
+      - name: Authorise the mirror push
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.PHP_SPLIT_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Split and push
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          sha=$(git subtree split --prefix=php)
+          echo "split commit: $sha"
+          mirror=git@github.com:xag/flight-recorder-php.git
+          # --force on the branch: the mirror is a projection of this repo, not a place work
+          # is done, so its main is whatever the latest split says it is. The TAG is not
+          # forced — a published Composer version must never change under its consumers.
+          git push --force "$mirror" "$sha:refs/heads/main"
+          git push "$mirror" "$sha:refs/tags/${{ steps.v.outputs.version }}"
+
+      - name: Drop the key
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519
