@@ -68,7 +68,8 @@ def build() -> Quern:
     quern = Quern(packages=[next(r for r in refs if r.name == "ledger")])
     quern = lib.effective(quern)
     quern.root.children = [_DECISION, _no_privileged_language(), _no_doc_duplication(),
-                           _PARITY_DECISION, _feature_parity(), _JAVA_DECISION]
+                           _PARITY_DECISION, _feature_parity(), _JAVA_DECISION,
+                           _PYPI_NAME_DECISION]
     return quern
 
 
@@ -387,5 +388,63 @@ _JAVA_DECISION = Node(
                       "run looks like an unrecorded one. The residual risk (a pooled executor "
                       "silently dropping events) is met with Recorder.propagate and a note in the "
                       "guide, not with a redesign of the caller's code."}),
+    ],
+)
+
+
+_PYPI_NAME_DECISION = Node(
+    id="pypi-distribution-name",
+    kind="decision",
+    name="The Python distribution is published as `xag-flight-recorder`, carrying npm's scope "
+         "down as a prefix, while the import name stays `flight_recorder` on every runtime",
+    payload={
+        "rationale":
+            "The bare name was not available and never will be: PyPI normalises a distribution "
+            "name by collapsing separators, so `flight-recorder` and `flightrecorder` are the same "
+            "name, and `flightrecorder` was taken in 2014 by an unrelated project (Tom Payne, "
+            "utilities for paragliding GPS loggers, last release 2014-06-16). The upload is "
+            "rejected at the registry with a 400, not a warning. npm had already answered the same "
+            "question by publishing under the `@xag` scope — the unscoped `flight-recorder` there "
+            "is one of npm's reserved placeholders — so the estate already had a namespace, and "
+            "PyPI, which has no scopes, takes it as a prefix. What is deliberately NOT renamed is "
+            "the import: `import flight_recorder` is what the guide teaches in five runtimes, and "
+            "a registry's namespace collision is a distribution fact that has no business reaching "
+            "into the source of a program.",
+        "consequence":
+            "The install line and the import line disagree — `pip install xag-flight-recorder` "
+            "then `import flight_recorder` — which is a real papercut, mitigated only by being the "
+            "same shape npm users already see. The guide's install block is the one place that "
+            "must say the distribution name, so it is the one place that can drift. The prefix is "
+            "also now load-bearing for the estate: a second Python package from here inherits it "
+            "by precedent rather than by rule.",
+    },
+    children=[
+        Node(id="alt-pypi-claim-flightrecorder", kind="alternative",
+             name="File a PEP 541 name-transfer request to claim `flightrecorder`",
+             payload={"why":
+                      "The name has been dormant eleven years, which is the case PEP 541 exists "
+                      "for. Rejected as the path, not as impossible: it has five real releases and "
+                      "a living author, so it is abandonment rather than squatting and the outcome "
+                      "is genuinely uncertain; the request takes weeks of a volunteer's attention; "
+                      "and nothing ships in the meantime. Taking someone's name is also a poor "
+                      "trade for a prefix that costs nine characters."}),
+        Node(id="alt-pypi-rename-import", kind="alternative",
+             name="Rename the Python package itself to `xag_flight_recorder` so install and import "
+                  "agree",
+             payload={"why":
+                      "Removes the papercut and pays for it in the wrong currency. The import name "
+                      "is the one identifier shared verbatim across all six runtimes, and it is "
+                      "quoted throughout the guide, the spec, and every tape's own tooling; "
+                      "bending it to fit one registry's namespace would privilege that registry's "
+                      "accident over the cross-language symmetry the docs ledger's other rules "
+                      "exist to protect."}),
+        Node(id="alt-pypi-new-name", kind="alternative",
+             name="Coin a fresh unclaimed name (`flight-tape`, `flightrec`) and use it everywhere",
+             payload={"why":
+                      "Both were verified free on PyPI and npm, so this was available. Rejected "
+                      "because the project is already published as @xag/flight-recorder, lives at "
+                      "github.com/xag/flight-recorder, and is called the flight recorder in every "
+                      "document that describes the practice — a rename to dodge one registry would "
+                      "cost the identity everywhere to buy consistency in one place."}),
     ],
 )
