@@ -20,7 +20,7 @@ no waiting for the bug to happen again.
 ## → [Read the guide](https://xag.github.io/flight-recorder/)
 
 The full walkthrough — declare the boundary, record, replay, edit the tape to visit worlds that
-never happened, invariants, semantic spans — in all three languages, one tab away.
+never happened, invariants, semantic spans — in Python, Node and .NET, one tab away.
 [Slides — Testing as Simulation](https://xag.github.io/flight-recorder/slides.html).
 
 ## Install
