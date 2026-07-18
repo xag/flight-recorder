@@ -1,18 +1,18 @@
 // Package flightrecorder records what the outside world told your code — every database
 // answer, HTTP response, clock read and random draw — as one JSONL tape per call, conformant
-// to spec/tape-v1.md. Replay (a separate concern) feeds those answers back so the real code
-// re-runs the original execution exactly.
+// to spec/tape-v1.md, and replays that tape against the real code so a past run reproduces
+// exactly.
 //
 // The cardinal rule is INSTRUMENT, NEVER DUPLICATE: nothing here evaluates a query, computes a
 // date, or knows what any value means. It records the questions your code asked the world and
-// the answers it got.
+// the answers it got; on replay it feeds those answers back and checks the questions still match.
 //
 // Go cannot monkeypatch a module's functions the way the Python recorder shims `datetime` and
-// `random`, so instrumentation is explicit and idiomatic: the active call is carried on the
-// context, and boundary reads go through this package's primitives — Now, Perf, Effect,
-// SampleIndices, RandBytes, DBRead/DBWrite — each of which does the real thing and records what
-// crossed. Semantic spans (Span/Note) are the app's testimony, written in-stream next to the
-// evidence, and are well-nested by construction because a span wraps the body it encloses.
+// `random`, so instrumentation is explicit and idiomatic: the active call (recording) or feed
+// (replay) rides on the context, and every boundary read goes through this package's primitives
+// — Now, Perf, Effect, SampleIndices, RandBytes, Query/QueryOne/Exec. Each does the real thing
+// while recording, and serves the recorded answer while replaying. Semantic spans (Span/Note)
+// are the app's testimony, well-nested by construction because a span wraps the body it encloses.
 package flightrecorder
 
 import (
@@ -40,8 +40,7 @@ const formatVersion = 1
 var processStart = time.Now()
 
 // Boundary declares the app-specific inputs the recorder needs: constants to pin in the header,
-// redaction (field-name Rules and value Scrub), and the forbid tripwire. It is the one artifact
-// an app maintains as it grows a new external input.
+// redaction (field-name Rules and value Scrub), and the forbid tripwire.
 type Boundary struct {
 	Constants    map[string]any
 	Redact       serial.Rules
@@ -51,8 +50,7 @@ type Boundary struct {
 }
 
 // ForbiddenValue is raised when a Boundary.Forbid pattern matches the record the recorder was
-// about to write. It names the RULE, never the match — a tripwire that quoted the credential it
-// caught would be the leak it exists to prevent.
+// about to write. It names the RULE, never the match.
 type ForbiddenValue struct{ Pattern, What string }
 
 func (e *ForbiddenValue) Error() string {
@@ -71,8 +69,7 @@ type Recorder struct {
 	forbid []*regexp.Regexp
 }
 
-// New opens a session file in dir and writes the header. It fails if a forbidden value reaches
-// the header (constants or extras) — the header is a line like any other.
+// New opens a session file in dir and writes the header.
 func New(dir string, b Boundary) (*Recorder, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -139,8 +136,6 @@ func (r *Recorder) forbiddenHit(line []byte) string {
 	return ""
 }
 
-// writeObj marshals, runs the forbid tripwire, and appends. Nothing is written if a forbid
-// pattern matches.
 func (r *Recorder) writeObj(obj map[string]any, what string) error {
 	line, err := json.Marshal(obj)
 	if err != nil {
@@ -159,7 +154,6 @@ func (r *Recorder) scrubEvent(ev map[string]any) map[string]any {
 	if len(r.redact) == 0 && r.scrub == nil {
 		return ev
 	}
-	// Redaction rewrites payloads only, never the envelope (k/fn/op/sig/v/idx/name/phase/sid).
 	for _, key := range []string{"args", "kwargs", "res", "err", "data"} {
 		if v, ok := ev[key]; ok {
 			ev[key] = serial.Redact(v, r.redact, r.scrub)
@@ -168,19 +162,26 @@ func (r *Recorder) scrubEvent(ev map[string]any) map[string]any {
 	return ev
 }
 
-// --- the active call, carried on the context ------------------------------------------
+// --- the ambient: recording OR replay, carried on the context -------------------------
 
 type ctxKey struct{}
+
+// ambient is what a boundary primitive consults. Exactly one of its fields is set: call while
+// recording, replay while replaying.
+type ambient struct {
+	call   *call
+	replay *replayState
+}
+
+func ambientFrom(ctx context.Context) *ambient {
+	a, _ := ctx.Value(ctxKey{}).(*ambient)
+	return a
+}
 
 type call struct {
 	rec    *Recorder
 	events []map[string]any
 	sid    int
-}
-
-func callFrom(ctx context.Context) *call {
-	c, _ := ctx.Value(ctxKey{}).(*call)
-	return c
 }
 
 func (c *call) nextSid() int {
@@ -189,8 +190,8 @@ func (c *call) nextSid() int {
 }
 
 // emit scrubs, runs the forbid tripwire (panicking with *ForbiddenValue on a hit, which Call
-// recovers), and appends to the call buffer. The guard runs before the append: the buffer
-// becomes the call record, so a forbidden value must not reach it either.
+// recovers), and appends to the call buffer — the guard before the append, since the buffer
+// becomes the call record.
 func (c *call) emit(ev map[string]any) {
 	ev = c.rec.scrubEvent(ev)
 	if line, err := json.Marshal(ev); err == nil {
@@ -202,13 +203,12 @@ func (c *call) emit(ev map[string]any) {
 }
 
 // Call records one top-level tool call: it runs body with an active call on the context,
-// buffers every event body produces, and writes the call line when body returns. A
-// *ForbiddenValue raised while recording aborts the body and surfaces as the call's error.
+// buffers every event body produces, and writes the call line when body returns.
 func (r *Recorder) Call(ctx context.Context, fn string, kwargs map[string]any,
 	body func(context.Context) (any, error)) (any, error) {
 
 	c := &call{rec: r}
-	cctx := context.WithValue(ctx, ctxKey{}, c)
+	cctx := context.WithValue(ctx, ctxKey{}, &ambient{call: c})
 	t0 := time.Now()
 
 	var result any
@@ -220,7 +220,7 @@ func (r *Recorder) Call(ctx context.Context, fn string, kwargs map[string]any,
 					bodyErr = fv
 					return
 				}
-				panic(rec) // not ours — re-raise
+				panic(rec)
 			}
 		}()
 		result, bodyErr = body(cctx)
@@ -249,15 +249,15 @@ func (r *Recorder) writeCall(fn string, kwargs map[string]any, events []map[stri
 	defer r.mu.Unlock()
 	seq := r.seq + 1
 	obj := map[string]any{
-		"ev":      "call",
-		"seq":     seq,
-		"fn":      fn,
-		"kwargs":  serial.Redact(serial.ToJsonable(kwargs), r.redact, r.scrub),
-		"events":  evs,
-		"result":  serial.Redact(serial.ToJsonable(result), r.redact, r.scrub),
-		"error":   errField,
-		"ts":      time.Now().Format(time.RFC3339Nano),
-		"ms":      round2(ms),
+		"ev":     "call",
+		"seq":    seq,
+		"fn":     fn,
+		"kwargs": serial.Redact(serial.ToJsonable(kwargs), r.redact, r.scrub),
+		"events": evs,
+		"result": serial.Redact(serial.ToJsonable(result), r.redact, r.scrub),
+		"error":  errField,
+		"ts":     time.Now().Format(time.RFC3339Nano),
+		"ms":     round2(ms),
 	}
 	line, err := json.Marshal(obj)
 	if err != nil {
@@ -275,99 +275,123 @@ func (r *Recorder) writeCall(fn string, kwargs map[string]any, events []map[stri
 
 func round2(f float64) float64 { return math.Round(f*100) / 100 }
 
-// --- boundary primitives (ambient within a Call via the context) ----------------------
+// --- boundary primitives (record while recording, serve while replaying) --------------
 
-// Now records and returns the wall clock. Outside a Call it just returns time.Now().
+// Now records and returns the wall clock.
 func Now(ctx context.Context) time.Time {
-	v := time.Now()
-	if c := callFrom(ctx); c != nil {
-		c.emit(map[string]any{"k": "now", "v": v.Format(time.RFC3339Nano)})
+	a := ambientFrom(ctx)
+	if a == nil {
+		return time.Now()
 	}
+	if a.replay != nil {
+		return a.replay.now()
+	}
+	v := time.Now()
+	a.call.emit(map[string]any{"k": "now", "v": v.Format(time.RFC3339Nano)})
 	return v
 }
 
 // Perf records and returns a monotonic clock reading in milliseconds (arbitrary origin).
 func Perf(ctx context.Context) float64 {
-	v := float64(time.Since(processStart).Nanoseconds()) / 1e6
-	if c := callFrom(ctx); c != nil {
-		c.emit(map[string]any{"k": "perf", "v": v})
+	a := ambientFrom(ctx)
+	if a == nil {
+		return float64(time.Since(processStart).Nanoseconds()) / 1e6
 	}
+	if a.replay != nil {
+		return a.replay.perf()
+	}
+	v := float64(time.Since(processStart).Nanoseconds()) / 1e6
+	a.call.emit(map[string]any{"k": "perf", "v": v})
 	return v
 }
 
-// Effect records a module-level effect: it runs fn, records its args and result (or error),
-// and returns them. This is the Go analogue of the Python effect wrapper — the (args →
-// result/exception) that IS the external world. Outside a Call it just runs fn.
+// Effect records a module-level effect: the (args → result/exception) that IS the external
+// world. While replaying it serves the recorded result (or re-raises the recorded error) and
+// asserts the args match — a different question here is a path divergence.
 func Effect[T any](ctx context.Context, name string, args []any, fn func() (T, error)) (T, error) {
-	c := callFrom(ctx)
+	a := ambientFrom(ctx)
+	if a != nil && a.replay != nil {
+		return replayEffect[T](a.replay, name, args)
+	}
 	res, err := fn()
-	if c == nil {
+	if a == nil {
 		return res, err
 	}
 	ev := map[string]any{
 		"k":      "fx",
 		"fn":     name,
 		"args":   jsonableSlice(args),
-		"kwargs": map[string]any{}, // Go has no kwargs
+		"kwargs": map[string]any{},
 	}
 	if err != nil {
-		ev["err"] = map[string]any{
-			"type": errType(err),
-			"repr": truncate(err.Error(), 300),
-			"args": []any{},
-		}
+		ev["err"] = map[string]any{"type": errType(err), "repr": truncate(err.Error(), 300), "args": []any{}}
 	} else {
 		ev["res"] = serial.ToJsonable(res)
 	}
-	c.emit(ev)
+	a.call.emit(ev)
 	return res, err
 }
 
-// SampleIndices draws k distinct positions from [0, n) with the real RNG and records the
-// positions (not the members), so replay can pick the same members from a mutated population.
+// SampleIndices draws k distinct positions from [0, n) and records the positions (not the
+// members), so replay can pick the same members from a mutated population.
 func SampleIndices(ctx context.Context, n, k int) []int {
 	if k > n {
 		k = n
 	}
+	a := ambientFrom(ctx)
+	if a != nil && a.replay != nil {
+		return a.replay.sample(n, k)
+	}
 	idx := mathrand.Perm(n)[:k]
-	if c := callFrom(ctx); c != nil {
-		c.emit(map[string]any{"k": "rand", "m": "sample", "n": n, "kk": k, "idx": idx})
+	if a != nil {
+		a.call.emit(map[string]any{"k": "rand", "m": "sample", "n": n, "kk": k, "idx": idx})
 	}
 	return idx
 }
 
 // RandBytes draws n bytes of real entropy and records them as hex.
 func RandBytes(ctx context.Context, n int) ([]byte, error) {
+	a := ambientFrom(ctx)
+	if a != nil && a.replay != nil {
+		return a.replay.bytes(n)
+	}
 	b := make([]byte, n)
 	if _, err := cryptorand.Read(b); err != nil {
 		return nil, err
 	}
-	if c := callFrom(ctx); c != nil {
-		c.emit(map[string]any{"k": "rand", "m": "bytes", "n": n, "hex": hex.EncodeToString(b)})
+	if a != nil {
+		a.call.emit(map[string]any{"k": "rand", "m": "bytes", "n": n, "hex": hex.EncodeToString(b)})
 	}
 	return b, nil
 }
 
 // RandFloat draws and records a uniform float in [0, 1).
 func RandFloat(ctx context.Context) float64 {
+	a := ambientFrom(ctx)
+	if a != nil && a.replay != nil {
+		return a.replay.randFloat()
+	}
 	v := mathrand.Float64()
-	if c := callFrom(ctx); c != nil {
-		c.emit(map[string]any{"k": "rand", "m": "float", "v": v})
+	if a != nil {
+		a.call.emit(map[string]any{"k": "rand", "m": "float", "v": v})
 	}
 	return v
 }
 
 // RandIntn draws and records a uniform integer in [0, n).
 func RandIntn(ctx context.Context, n int) int {
+	a := ambientFrom(ctx)
+	if a != nil && a.replay != nil {
+		return a.replay.randInt()
+	}
 	v := mathrand.Intn(n)
-	if c := callFrom(ctx); c != nil {
-		c.emit(map[string]any{"k": "rand", "m": "int", "v": v})
+	if a != nil {
+		a.call.emit(map[string]any{"k": "rand", "m": "int", "v": v})
 	}
 	return v
 }
 
-// Snapshot is a document's recordable surface — identity, existence, data — the only surface a
-// well-behaved consumer reads.
+// Snapshot is a document's recordable surface — identity, existence, data.
 type Snapshot struct {
 	ID     *string
 	Exists bool
@@ -386,59 +410,89 @@ func (s Snapshot) jsonable() map[string]any {
 	return map[string]any{"id": id, "exists": s.Exists, "data": data}
 }
 
-// DBRead records a terminal read on a chained client — sig is the rendered chain that led to
-// it, results are the snapshots returned.
-func DBRead(ctx context.Context, op, sig string, results []Snapshot) {
-	c := callFrom(ctx)
-	if c == nil {
-		return
+// Query records and returns a terminal read that yielded several snapshots. sig is the rendered
+// chain that led to it. While replaying it serves the recorded snapshots and does not run.
+func Query(ctx context.Context, op, sig string, run func() ([]Snapshot, error)) ([]Snapshot, error) {
+	a := ambientFrom(ctx)
+	if a != nil && a.replay != nil {
+		return a.replay.query(op, sig), nil
 	}
-	arr := make([]any, len(results))
-	for i, s := range results {
+	res, err := run()
+	if err != nil || a == nil {
+		return res, err
+	}
+	arr := make([]any, len(res))
+	for i, s := range res {
 		arr[i] = s.jsonable()
 	}
-	c.emit(map[string]any{"k": "db", "op": op, "sig": sig, "res": arr})
+	a.call.emit(map[string]any{"k": "db", "op": op, "sig": sig, "res": arr})
+	return res, nil
 }
 
-// DBReadOne records a terminal read that returned a single snapshot.
-func DBReadOne(ctx context.Context, op, sig string, result Snapshot) {
-	if c := callFrom(ctx); c != nil {
-		c.emit(map[string]any{"k": "db", "op": op, "sig": sig, "res": result.jsonable()})
+// QueryOne records and returns a terminal read that yielded a single snapshot.
+func QueryOne(ctx context.Context, op, sig string, run func() (Snapshot, error)) (Snapshot, error) {
+	a := ambientFrom(ctx)
+	if a != nil && a.replay != nil {
+		return a.replay.queryOne(op, sig), nil
 	}
-}
-
-// DBWrite records a terminal write — the questions (args), not answers.
-func DBWrite(ctx context.Context, op, sig string, args []any) {
-	if c := callFrom(ctx); c != nil {
-		c.emit(map[string]any{"k": "db", "op": op, "sig": sig, "args": jsonableSlice(args)})
+	res, err := run()
+	if err != nil || a == nil {
+		return res, err
 	}
+	a.call.emit(map[string]any{"k": "db", "op": op, "sig": sig, "res": res.jsonable()})
+	return res, nil
 }
 
-// Note records that something meaningful happened at a point in the app's own vocabulary.
+// Exec records a terminal write — the questions (args), not answers. While replaying the write
+// is NOT executed: it is compared against the recording, and a mismatch is a write divergence.
+func Exec(ctx context.Context, op, sig string, args []any, run func() error) error {
+	a := ambientFrom(ctx)
+	if a != nil && a.replay != nil {
+		a.replay.execCompare(op, sig, jsonableSlice(args))
+		return nil
+	}
+	if a == nil {
+		return run()
+	}
+	if err := run(); err != nil {
+		return err
+	}
+	a.call.emit(map[string]any{"k": "db", "op": op, "sig": sig, "args": jsonableSlice(args)})
+	return nil
+}
+
+// Note records that something meaningful happened at a point, in the app's own vocabulary.
 func Note(ctx context.Context, name string, data map[string]any) {
-	c := callFrom(ctx)
-	if c == nil {
+	a := ambientFrom(ctx)
+	if a == nil {
 		return
 	}
-	ev := map[string]any{"k": "sem", "name": name, "phase": "point", "sid": c.nextSid()}
+	if a.replay != nil {
+		a.replay.note(name)
+		return
+	}
+	ev := map[string]any{"k": "sem", "name": name, "phase": "point", "sid": a.call.nextSid()}
 	if len(data) > 0 {
 		ev["data"] = jsonableMap(data)
 	}
-	c.emit(ev)
+	a.call.emit(ev)
 }
 
-// Span records that a stretch of execution constituted a domain act and encloses the raw
-// events it produced. It is well-nested by construction: the begin is emitted before body and
-// the end after, so nested spans nest and never straddle. If body returns an error or panics,
-// the end still lands with outcome "error", and the panic propagates untouched — a span that
-// vanished when its body failed would hide the very execution someone came to the tape to read.
+// Span records that a stretch of execution constituted a domain act and encloses the raw events
+// it produced. Well-nested by construction. If body errors or panics, the end still lands with
+// outcome "error" and the panic propagates untouched.
 func Span(ctx context.Context, name string, data map[string]any,
 	body func(context.Context) error) (err error) {
 
-	c := callFrom(ctx)
-	if c == nil {
+	a := ambientFrom(ctx)
+	if a == nil {
 		return body(ctx)
 	}
+	if a.replay != nil {
+		return a.replay.span(ctx, name, body)
+	}
+
+	c := a.call
 	sid := c.nextSid()
 	begin := map[string]any{"k": "sem", "name": name, "phase": "begin", "sid": sid}
 	if len(data) > 0 {
