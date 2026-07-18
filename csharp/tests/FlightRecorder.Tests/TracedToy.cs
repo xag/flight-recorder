@@ -62,6 +62,17 @@ namespace FlightRecorder.Tests
             return doubled;
         }
 
+        /// <summary>
+        /// A credential that exists ONLY as a local: it is minted inside the method, never
+        /// argued in, never returned, never handed to the boundary. Nothing on the tape can
+        /// carry it — and a trace of this method carries it on every line after the first.
+        /// </summary>
+        public static int Charge(int cents)
+        {
+            var key = "sk-live-" + (cents * 7);
+            return key.Length + cents;
+        }
+
         /// <summary>Locals of several shapes, to prove the encoder records data and not reprs.</summary>
         public static string Shapes(int n)
         {

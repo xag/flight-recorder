@@ -21,6 +21,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace FlightRecorder
 {
@@ -258,13 +259,31 @@ namespace FlightRecorder
 
         private readonly TextWriter? _writer;
 
-        public TraceSink(string? path = null)
+        // The recording's forbid patterns, captured once. A trace is the WORST place for a
+        // credential to land: it holds every local on every executed line, including values as
+        // they were BEFORE they reached any masking, and tracing is exactly what you switch on
+        // when debugging the request that went wrong. The tape beside it is masked and asserted
+        // clean; without this the trace was neither.
+        private readonly IReadOnlyList<Regex> _forbid;
+
+        private static readonly Regex[] NoPatterns = new Regex[0];
+
+        /// <param name="boundary">Whose <see cref="Boundary.Forbid"/> patterns this trace must
+        /// pass. Defaults to the boundary recording declared, so a trace taken during a recorded
+        /// run inherits the tripwire without every call site having to remember to pass it.</param>
+        public TraceSink(string? path = null, Boundary? boundary = null)
         {
             Path = path;
+            _forbid = (boundary ?? Recorder.CurrentBoundary)?.Forbid ?? (IReadOnlyList<Regex>)NoPatterns;
             if (path != null)
             {
+                var header = new Dictionary<string, object?>
+                { ["e"] = "H", ["trace_version"] = Trace.TraceVersion };
+                // Ahead of the open, not merely ahead of the write: a refused trace must leave no
+                // file at all, rather than an empty one that reads like a run which traced nothing.
+                if (_forbid.Count > 0) Tripwire.Guard(Json.Stringify(header), _forbid, "the trace header");
                 _writer = new StreamWriter(path, append: false, encoding: new UTF8Encoding(false));
-                WriteRaw(new Dictionary<string, object?> { ["e"] = "H", ["trace_version"] = Trace.TraceVersion });
+                WriteRaw(header);
             }
         }
 
@@ -393,10 +412,23 @@ namespace FlightRecorder
 
         private void WriteRaw(Dictionary<string, object?> ev)
         {
+            string? line = null;
+            if (_forbid.Count > 0)
+            {
+                line = Json.Stringify(ev);
+                // Before the buffer, not just before the file — and so also when there is no file.
+                // A pathless sink is not private: its events reach an invariant, a printed report
+                // and Trace.ToJsonl(), which is a tape a caller can write anywhere. "In memory" is
+                // a statement about latency, not about confinement, and the moment the guard is
+                // conditional on a path the secret survives to the first consumer who saves one.
+                var at = ev.GetValueOrNull("at") as string;
+                Tripwire.Guard(line, _forbid, $"a traced '{ev.GetValueOrNull("e")}' record"
+                    + (at != null ? $" at {at}" : ""));
+            }
             _events.Add(ev);
             if (_writer != null)
             {
-                _writer.Write(Json.Stringify(ev));
+                _writer.Write(line ?? Json.Stringify(ev));
                 _writer.Write('\n');
                 _writer.Flush();
             }

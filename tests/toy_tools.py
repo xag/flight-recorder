@@ -202,6 +202,22 @@ async def leak_everywhere(email: str, token: str) -> dict:
     return {"email": email, "probe": probe["v"], "keyed": keyed["key"], "body": body}
 
 
+async def derive_key(email: str) -> dict:
+    """A credential that lives only between two lines of code.
+
+    It is not a kwarg, not a result, not an argument to any effect and not an answer from one
+    — so it never touches the tape, and the tape's tripwire has nothing to fire on. It is a
+    local, which is precisely what a trace records: on the first executed line it is in the
+    delta, raw, and it stays in every subsequent delta of the frame.
+
+    Built by concatenation so the module's own source is not a file carrying a live-looking
+    key around for a scanner to find."""
+    secret = "sk-live-" + "9f8e7d6c5b4a39281706"
+    fingerprint = f"len:{len(secret)}"
+    probe = await fx.fetch_remote(email)
+    return {"email": email, "fingerprint": fingerprint, "v": probe["v"]}
+
+
 async def remote_sum(email: str, a: str, b: str) -> dict:
     x = await fx.fetch_remote(a)
     y = await fx.fetch_remote(b)

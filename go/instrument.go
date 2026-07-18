@@ -38,6 +38,7 @@ package flightrecorder
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -48,6 +49,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -411,6 +413,14 @@ type TraceSpec struct {
 	Package string
 	// Env adds "K=V" entries to the child's environment.
 	Env []string
+	// Forbid is the tripwire, and it is normally your Boundary.Forbid verbatim. A trace records
+	// every local on every executed line — values as they were BEFORE any redaction touched them —
+	// so it is the artifact a credential is most likely to land on, not the least. Leaving this
+	// empty is the free path: the child pays nothing and behaves exactly as it did before the
+	// tripwire existed.
+	//
+	// A hit in the child destroys the trace and comes back here as *ForbiddenValue from RunTraced.
+	Forbid []string
 }
 
 // TracedRun is what came back: the trace, and the child's own account of itself.
@@ -436,6 +446,13 @@ func RunTraced(spec TraceSpec) (*TracedRun, error) {
 	}
 	if len(spec.Command) == 0 {
 		return nil, fmt.Errorf("RunTraced: no command to run")
+	}
+	// Compile the patterns HERE, before a temp tree exists or a child is started. A bad pattern is
+	// a declaration error, and it fails at declaration time — the same bargain New makes — rather
+	// than arriving in a child that would then have to decide what an unusable tripwire means.
+	forbidEnv, err := forbidEnviron(spec.Forbid)
+	if err != nil {
+		return nil, err
 	}
 
 	work, err := os.MkdirTemp("", "flight-traced-")
@@ -469,10 +486,23 @@ func RunTraced(spec TraceSpec) (*TracedRun, error) {
 	cmd := exec.Command(goBin, spec.Command...)
 	cmd.Dir = filepath.Join(copyRoot, filepath.FromSlash(spec.Package))
 	cmd.Env = append(os.Environ(), tracehook.EnvPath+"="+tracePath)
+	if forbidEnv != "" {
+		cmd.Env = append(cmd.Env, tracehook.EnvForbid+"="+forbidEnv)
+	}
 	cmd.Env = append(cmd.Env, spec.Env...)
 	out, runErr := cmd.CombinedOutput()
 
 	run := &TracedRun{Output: string(out), ExitErr: runErr, Files: touched, TraceDir: copyRoot}
+
+	// The refusal is read BEFORE the trace, and it wins. The child cannot raise into this process,
+	// and a `go test` that traced a forbidden value still exits 0 — so a guard that only shouted
+	// into the child's stderr would be a guard nobody enforces. It leaves a file instead, and this
+	// is where that file is turned back into the error the caller would have got in-process.
+	if pattern, err := os.ReadFile(tracehook.RefusalPath(tracePath)); err == nil {
+		run.Trace = &Trace{}
+		return run, &ForbiddenValue{Pattern: string(pattern), What: "a traced local"}
+	}
+
 	if data, err := os.ReadFile(tracePath); err == nil {
 		if tr, err := ParseTrace(string(data)); err == nil {
 			run.Trace = tr
@@ -483,6 +513,25 @@ func RunTraced(spec TraceSpec) (*TracedRun, error) {
 		run.Trace = &Trace{}
 	}
 	return run, nil
+}
+
+// forbidEnviron validates the patterns and encodes them for the child, returning "" when there are
+// none — which keeps the variable off the child's environment entirely, so a run with no tripwire
+// is byte-for-byte the run it always was.
+func forbidEnviron(patterns []string) (string, error) {
+	if len(patterns) == 0 {
+		return "", nil
+	}
+	for _, p := range patterns {
+		if _, err := regexp.Compile(p); err != nil {
+			return "", fmt.Errorf("bad forbid pattern %q: %w", p, err)
+		}
+	}
+	b, err := json.Marshal(patterns)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // goCommand finds the toolchain. PATH first; GOROOT second, because a `go test` run can perfectly

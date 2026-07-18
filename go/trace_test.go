@@ -17,12 +17,17 @@ package flightrecorder
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/parser"
 	"go/token"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/xag/flight-recorder/go/tracehook"
 )
 
 // --- the instrumented half ---------------------------------------------------------------
@@ -89,6 +94,27 @@ func TestTraceChild(t *testing.T) {
 		defer func() { fmt.Printf("CHILD-RECOVERED %v\n", recover()) }()
 		_ = toyBoom(1)
 	}()
+}
+
+// TestTraceForbidChild runs instrumented, holds a credential in a local, and then reports on the
+// artifact it was supposed to have written. It reports rather than asserts because the interesting
+// verdict is the PARENT's; what the child is uniquely able to say is whether the file exists on the
+// disk it was writing to, which the parent's temp tree is gone by the time it could look.
+func TestTraceForbidChild(t *testing.T) {
+	if !Tracing() {
+		t.Skip("the instrumented half of the forbid trace test; TestTracedForbidden* drives it")
+	}
+	_ = toyLeak()
+
+	path := os.Getenv(tracehook.EnvPath)
+	data, err := os.ReadFile(path)
+	fmt.Printf("CHILD-TRACE-FILE-EXISTS %v\n", err == nil)
+	fmt.Printf("CHILD-TRACE-HOLDS-SECRET %v\n", strings.Contains(string(data), "AKIAABCDEFGHIJKLMNOP"))
+	fmt.Printf("CHILD-REFUSED %q\n", tracehook.Refused())
+	fmt.Printf("CHILD-STILL-TRACING %v\n", Tracing())
+	// The tracer refused; the RUN carries on. Recording must never be the reason a program dies,
+	// and that holds for the guard too — it destroys the trace, not the process.
+	fmt.Printf("CHILD-ALIVE true\n")
 }
 
 // --- the orchestrating half --------------------------------------------------------------
@@ -344,6 +370,128 @@ func TestTraceIsEmptyAndHonestOutsideAnInstrumentedRun(t *testing.T) {
 	if nilTrace.Len() != 0 || len(nilTrace.Values("x")) != 0 || len(nilTrace.Names()) != 0 {
 		t.Errorf("a nil trace is not queryable without a panic")
 	}
+}
+
+// --- the tripwire, across the process boundary ---------------------------------------------
+
+const tracedCredential = "AKIAABCDEFGHIJKLMNOP"
+const credentialPattern = `\bAKIA[0-9A-Z]{16}\b`
+
+func runForbidChild(t *testing.T, forbid []string) (*TracedRun, error) {
+	t.Helper()
+	return RunTraced(TraceSpec{
+		Include: []string{"tracedtoy_test.go"},
+		Command: []string{"test", "-run", "^TestTraceForbidChild$", "-count=1", "-v", "-vet=off", "."},
+		Forbid:  forbid,
+	})
+}
+
+// The hole this closes: Boundary.Forbid is declared in THIS process, and the trace is written by a
+// child process — so an unguarded tracer would happily write, on another machine's disk, the value
+// the boundary swore would never be recorded. The patterns cross; the refusal comes back.
+func TestTracedForbiddenLocalRefusesTheTraceAndTellsTheParent(t *testing.T) {
+	if Tracing() {
+		t.Skip("this process is the instrumented child")
+	}
+	run, err := runForbidChild(t, []string{credentialPattern})
+
+	var fv *ForbiddenValue
+	if !errors.As(err, &fv) {
+		t.Fatalf("a forbidden value was traced and RunTraced returned %v\n%s", err, output(run))
+	}
+	if fv.Pattern != credentialPattern {
+		t.Errorf("the refusal names the pattern %q", fv.Pattern)
+	}
+	// Names the rule, never the match — this string goes into logs and stack traces.
+	if strings.Contains(fv.Error(), tracedCredential) {
+		t.Errorf("the tripwire quoted the secret it caught: %s", fv.Error())
+	}
+
+	// NOTHING WAS WRITTEN. Not "an error was returned" — the file itself, on the child's own disk,
+	// which is the only claim worth making. The child looked, because by now the tree is gone.
+	if got := childLine(t, run.Output, "CHILD-TRACE-FILE-EXISTS "); got != "false" {
+		t.Errorf("the trace file survived the refusal (exists=%s)", got)
+	}
+	if got := childLine(t, run.Output, "CHILD-TRACE-HOLDS-SECRET "); got != "false" {
+		t.Errorf("the credential reached the trace file")
+	}
+	if run.Trace.Len() != 0 {
+		t.Errorf("the parent was handed %d trace events from a refused run", run.Trace.Len())
+	}
+	if strings.Contains(run.Output, tracedCredential) {
+		t.Errorf("the credential appeared in the child's output:\n%s", run.Output)
+	}
+
+	// The child knew, stopped, and lived. A tracer that took the run down with it would have
+	// destroyed the execution it exists to explain.
+	if got := childLine(t, run.Output, "CHILD-REFUSED "); got != strconv.Quote(credentialPattern) {
+		t.Errorf("the child reported the refusal as %s", got)
+	}
+	if got := childLine(t, run.Output, "CHILD-STILL-TRACING "); got != "false" {
+		t.Errorf("the child went on tracing after the refusal")
+	}
+	if got := childLine(t, run.Output, "CHILD-ALIVE "); got != "true" {
+		t.Errorf("the child did not survive its own tripwire")
+	}
+	if run.ExitErr != nil {
+		t.Errorf("the traced run failed rather than merely losing its trace: %v\n%s", run.ExitErr, run.Output)
+	}
+}
+
+// The control, and it is the load-bearing one: the SAME fixture, traced by a boundary that forbids
+// nothing, writes the credential straight into the trace. Without this, the test above would pass
+// just as well if the value had never been traced at all — and would be proving nothing.
+func TestTracedWithoutForbidIsUntouchedAndTracesEverything(t *testing.T) {
+	if Tracing() {
+		t.Skip("this process is the instrumented child")
+	}
+	run, err := runForbidChild(t, nil)
+	if err != nil {
+		t.Fatalf("a run with no tripwire failed: %v\n%s", err, output(run))
+	}
+	if run.ExitErr != nil {
+		t.Fatalf("the traced child failed: %v\n%s", run.ExitErr, run.Output)
+	}
+	if got := childLine(t, run.Output, "CHILD-REFUSED "); got != `""` {
+		t.Errorf("a boundary that forbids nothing refused %s", got)
+	}
+	if got := childLine(t, run.Output, "CHILD-TRACE-FILE-EXISTS "); got != "true" {
+		t.Errorf("no trace was written at all")
+	}
+	obs := run.Trace.Final("token")
+	if obs == nil {
+		t.Fatalf("token was never traced, so the tripwire test above proves nothing:\n%s",
+			run.Trace.Timeline())
+	}
+	if obs.Value != tracedCredential {
+		t.Errorf("the traced local held %v", obs.Value)
+	}
+	if got := childLine(t, run.Output, "CHILD-TRACE-HOLDS-SECRET "); got != "true" {
+		t.Errorf("the credential was not in the trace file even unguarded")
+	}
+}
+
+// A bad pattern is a declaration error, caught here — before a module is copied or a child is
+// started — exactly as New catches it before a tape is opened.
+func TestTracedRejectsABadForbidPatternBeforeRunningAnything(t *testing.T) {
+	if Tracing() {
+		t.Skip("this process is the instrumented child")
+	}
+	_, err := RunTraced(TraceSpec{
+		Include: []string{"tracedtoy_test.go"},
+		Command: []string{"test", "-run", "^$", "."},
+		Forbid:  []string{"AKIA[unclosed"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "bad forbid pattern") {
+		t.Fatalf("a bad forbid pattern was accepted: %v", err)
+	}
+}
+
+func output(run *TracedRun) string {
+	if run == nil {
+		return ""
+	}
+	return run.Output
 }
 
 // --- the transform itself, without compiling anything --------------------------------------

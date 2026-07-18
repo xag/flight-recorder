@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"regexp"
 	"sync"
 
 	"github.com/xag/flight-recorder/go/serial"
@@ -39,18 +40,61 @@ const TraceVersion = 2
 // instrumented binary run without it is a normal binary that pays for a few map lookups.
 const EnvPath = "FLIGHT_RECORDER_TRACE"
 
+// EnvForbid carries the parent's Boundary.Forbid patterns — a JSON array of strings — into this
+// process. It exists because of an asymmetry that is easy to miss: the Boundary is declared in the
+// parent, and the TRACE IS WRITTEN HERE, in a separate process the parent started. A tripwire
+// enforced only where it was declared guards nothing at all in the one place that opens a file.
+//
+// A trace is the worst artifact to leave unguarded, not the least: it records every local on every
+// executed line, which means values BEFORE they reach any redaction — and tracing is precisely what
+// you switch on when you are debugging the request that went wrong, which is to say the request
+// that carried the real credential.
+//
+// WHY THE ENVIRONMENT, AND WHAT WAS REJECTED
+//
+//   - A file of patterns beside the trace: a second artifact to write, find, and clean up, with its
+//     own set of "what if it is missing" states. Nothing is gained over the channel already in use.
+//   - Compiling the patterns into the instrumented copy as generated Go: needs codegen, is a
+//     compile error away from breaking every traced run, and is not free for the boundary that
+//     declares nothing.
+//   - Scanning the finished trace in the parent and deleting it on a hit: too late by definition.
+//     The bytes reached the disk. The guard's whole claim is that they never do.
+//
+// The environment is how the trace PATH already crosses (EnvPath), so the rules ride the same
+// channel as the thing they govern: they arrive together, or there is no tracing to guard. What
+// travels is the PATTERN — declared configuration, not a credential — and never a match.
+const EnvForbid = "FLIGHT_RECORDER_TRACE_FORBID"
+
+// RefusalSuffix is appended to the trace path to name the refusal file the tracer leaves when a
+// pattern hits. Both halves derive the name from this, so parent and child cannot disagree.
+const RefusalSuffix = ".forbidden"
+
+// RefusalPath is where a refusal for the trace at path would be reported.
+func RefusalPath(tracePath string) string { return tracePath + RefusalSuffix }
+
 var (
-	mu      sync.Mutex
-	out     *os.File
-	events  []map[string]any
-	started bool
-	live    bool
+	mu       sync.Mutex
+	out      *os.File
+	path     string
+	events   []map[string]any
+	started  bool
+	live     bool
+	forbid   []*regexp.Regexp
+	refused  string
+	failShut bool
 )
 
 func start() {
 	started = true
-	path := os.Getenv(EnvPath)
+	path = os.Getenv(EnvPath)
 	if path == "" {
+		return
+	}
+	if !loadForbid() {
+		// Fail SHUT. The patterns were compiled once already, in the parent, so arriving here
+		// unreadable means the channel is broken — and the one thing worse than no trace is a trace
+		// written with the tripwire silently disarmed.
+		fmt.Fprintf(os.Stderr, "flight-recorder: %s is unreadable — tracing is off\n", EnvForbid)
 		return
 	}
 	f, err := os.Create(path)
@@ -61,6 +105,83 @@ func start() {
 	}
 	out, live = f, true
 	emit(map[string]any{"e": "H", "trace_version": TraceVersion})
+}
+
+// loadForbid compiles the patterns handed over in the environment. Caller holds mu.
+func loadForbid() bool {
+	raw := os.Getenv(EnvForbid)
+	if raw == "" {
+		return true // no tripwire declared: the free path, and the only one that existed before
+	}
+	var pats []string
+	if err := json.Unmarshal([]byte(raw), &pats); err != nil {
+		return false
+	}
+	for _, p := range pats {
+		re, err := regexp.Compile(p)
+		if err != nil {
+			return false
+		}
+		forbid = append(forbid, re)
+	}
+	return true
+}
+
+// vet is the tripwire, run on the encoded event BEFORE it reaches the in-memory tape or the file.
+// It reports whether the event may be recorded. Caller holds mu.
+//
+// An event that will not marshal cannot be inspected, and something that cannot be inspected cannot
+// be cleared — so it is refused too, rather than waved through unread.
+func vet(ev map[string]any) bool {
+	b, err := json.Marshal(ev)
+	if err != nil {
+		refuse("<an event that could not be encoded for inspection>")
+		return false
+	}
+	for _, re := range forbid {
+		if re.Match(b) {
+			refuse(re.String())
+			return false
+		}
+	}
+	return true
+}
+
+// refuse shuts the tracer down for good and destroys the trace. Caller holds mu.
+//
+// Three things happen here, and each is deliberate. The file is REMOVED, not merely closed: the
+// lines already on disk are clean, but a trace with a hole in it where the interesting value was
+// is evidence that misleads, and the refusal is the finding — not a partial trace. Tracing is
+// switched off permanently, so no later line can carry the same value past a guard that has
+// already fired. And the refusal is written where the PARENT will find it, because a guard that
+// fires in a child process and is swallowed there is not a guard.
+//
+// It names the pattern and never the match. This message goes to a log; a tripwire that quotes the
+// secret it caught has become the leak it was there to prevent.
+func refuse(pattern string) {
+	if refused != "" {
+		return
+	}
+	refused, live = pattern, false
+	events = nil
+	if out != nil {
+		out.Close()
+		out = nil
+	}
+	if path != "" {
+		os.Remove(path)
+		os.WriteFile(RefusalPath(path), []byte(pattern), 0o644)
+	}
+	fmt.Fprintf(os.Stderr,
+		"flight-recorder: a traced value matches a forbidden pattern (%q) — the trace was refused "+
+			"and nothing was written\n", pattern)
+}
+
+// Refused is the pattern that shut this process's tracer down, or "" if none did.
+func Refused() string {
+	mu.Lock()
+	defer mu.Unlock()
+	return refused
 }
 
 // Live reports whether this process is running with the tracer armed.
@@ -74,7 +195,14 @@ func Live() bool {
 }
 
 // emit writes one event. Caller holds mu.
+//
+// The tripwire runs FIRST — before the in-memory tape, not merely before the file. An invariant
+// running inside this process reads Events() while the run is still going, so the buffer is an
+// artifact like any other and a value refused to the disk must not be handed to it either.
 func emit(ev map[string]any) {
+	if len(forbid) > 0 && !vet(ev) {
+		return
+	}
 	events = append(events, ev)
 	if out == nil {
 		return

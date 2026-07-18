@@ -37,6 +37,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Optional
 
+from flight_recorder.boundary import Boundary
+from flight_recorder.record import _guard
 from flight_recorder.replay import load_session
 from flight_recorder.serial import short, to_jsonable
 
@@ -324,16 +326,25 @@ class CallHandle:
 
 
 class Recording:
-    """A session file as an editable object: load, mutate calls, check or pin."""
+    """A session file as an editable object: load, mutate calls, check or pin.
 
-    def __init__(self, header: dict, calls: list):
+    Pass the recording's own `boundary` to carry its `forbid` tripwire onto the save path.
+    The tape was checked once, on the way in; every value on it since then has been through
+    an API whose entire purpose is to change recorded values. A mutation is the one edit that
+    can put a credential on a tape that was clean when it was written — an oversized string
+    built from a real key, a hand-written result pasted out of a live response — and until the
+    boundary comes with it, `save()` writes whatever it is handed. Omit it and nothing is
+    checked, which is what every caller written before this got."""
+
+    def __init__(self, header: dict, calls: list, boundary: Optional[Boundary] = None):
         self.header = header
         self.calls = calls
+        self._forbid = boundary.forbid_patterns() if boundary is not None else []
 
     @classmethod
-    def load(cls, path: Path) -> "Recording":
+    def load(cls, path: Path, boundary: Optional[Boundary] = None) -> "Recording":
         header, calls = load_session(Path(path))
-        return cls(header, calls)
+        return cls(header, calls, boundary)
 
     def call(self, index: int) -> CallHandle:
         if not 0 <= index < len(self.calls):
@@ -351,9 +362,19 @@ class Recording:
                            for i, tree in enumerate(self.spans()))
 
     def _write(self, path: Path) -> Path:
+        # Every line is serialized and judged before the open(), so a refused save leaves no
+        # file at all — not an empty one, not a truncated one holding the clean lines that
+        # came before the bad one. Guarding here rather than in save() is deliberate: check()
+        # writes the mutated tape to a temp directory to replay it, and a temp file is a file.
+        lines = []
+        for obj in [self.header, *self.calls]:
+            line = json.dumps(obj, ensure_ascii=False, default=repr)
+            what = ("the saved session header" if obj is self.header
+                    else f"the saved record of call {obj.get('fn')!r}")
+            _guard(line, self._forbid, what)
+            lines.append(line + "\n")
         with Path(path).open("w", encoding="utf-8") as f:
-            for obj in [self.header, *self.calls]:
-                f.write(json.dumps(obj, ensure_ascii=False, default=repr) + "\n")
+            f.writelines(lines)
         return Path(path)
 
     def save(self, path: Path) -> Path:

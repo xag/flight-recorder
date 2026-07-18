@@ -55,6 +55,15 @@ func toyBoom(n int) int {
 	return n
 }
 
+// toyLeak is the fixture for the tripwire on the trace: a credential that lives ONLY in a local.
+// It is never returned, never recorded on a tape, and never printed — so the only artifact that
+// can ever carry it is the trace, which is the whole point. Nothing masks it, because nothing
+// masks a local: a trace sees values before any redaction is anywhere near them.
+func toyLeak() int {
+	token := "AKIAABCDEFGHIJKLMNOP"
+	return len(token)
+}
+
 // toyStudyResolver re-executes studyStatus on replay against a store that would scream if it were
 // touched — the recorded answers are the only world the replayed code gets.
 func toyStudyResolver(fn string, kwargs map[string]any) (func(context.Context) (any, error), error) {

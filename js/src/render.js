@@ -48,7 +48,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { FORMAT_VERSION, isoLocal } from './record.js';
+import { FORMAT_VERSION, isoLocal, compileForbid, guard } from './record.js';
 
 /**
  * Walk the rendered document and return what the browser computed. Runs IN THE PAGE.
@@ -416,29 +416,63 @@ export async function renderCall(page, cell) {
   };
 }
 
-/** A render tape: format v1, `fn: "render"`. A reader that already reads tapes reads this one. */
+/**
+ * A render tape: format v1, `fn: "render"`. A reader that already reads tapes reads this one.
+ *
+ * IT IS A TAPE, SO IT CARRIES THE TRIPWIRE
+ *
+ * This class holds its own file handle and writes its own session-format lines — the recorder's
+ * `Recorder.write` never sees them. A `forbid` declaration that stopped at the recorder would
+ * therefore be a property that holds for `flight-*.jsonl` and quietly fails for the design tape
+ * written beside it, and a credential kept off one file while landing in the other has not been
+ * kept off disk at all. A render is a rich place for one to turn up: `text`, `name` and `title`
+ * are whatever the page painted, and a page can paint a token straight out of localStorage.
+ *
+ * `forbid` takes the same patterns a boundary does — strings or RegExps — so
+ * `new RenderTape(f, { forbid: boundary.forbid })` also works: compiling an already-compiled
+ * pattern returns it unchanged.
+ */
 export class RenderTape {
-  constructor(file, { constants = {} } = {}) {
+  constructor(file, { constants = {}, forbid = [] } = {}) {
     this.path = file;
     this.seq = 0;
+    // Compiled here, at the one place this tape is declared, so a pattern that does not parse
+    // fails in the line that wrote it rather than at the first render — a tripwire that reports
+    // a broken rule only when it fires looked installed and was inert the whole time.
+    this.forbid = compileForbid(forbid);
+
+    const line = JSON.stringify({
+      ev: 'session',
+      version: FORMAT_VERSION,
+      started: isoLocal(new Date()),
+      node: process.versions.node,
+      constants,
+    }) + '\n';
+
+    // AHEAD OF THE mkdir AND THE open, exactly as the Python sidecar guards ahead of its own.
+    // A refusal must leave no artefact behind to go and delete: not a truncated tape, not an
+    // empty one, not the directory that was made to hold it.
+    guard(line, this.forbid, 'the render tape header');
+
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(
-      file,
-      JSON.stringify({
-        ev: 'session',
-        version: FORMAT_VERSION,
-        started: isoLocal(new Date()),
-        node: process.versions.node,
-        constants,
-      }) + '\n',
-      'utf8',
-    );
+    fs.writeFileSync(file, line, 'utf8');
   }
 
   write(call) {
+    const record = { ...call, seq: this.seq + 1, ts: isoLocal(new Date()) };
+    const line = JSON.stringify(record) + '\n';
+
+    // Before the append, and before the record is handed back to the caller. Returning it would
+    // put the captured layout — the credential and all — in the caller's hands to assert over,
+    // print, or write somewhere else; the refusal has to come first for "nothing was written" to
+    // mean anything.
+    guard(line, this.forbid, `the render record for state ${JSON.stringify(call.kwargs?.state)}`);
+
+    // The counter advances only once the line is on disk. A refused write must not consume a
+    // sequence number: the next call would then land at seq n+2 and the tape would carry a gap
+    // reading as a lost record, when in fact nothing was ever lost.
     this.seq += 1;
-    const line = { ...call, seq: this.seq, ts: isoLocal(new Date()) };
-    fs.appendFileSync(this.path, JSON.stringify(line) + '\n', 'utf8');
-    return line;
+    fs.appendFileSync(this.path, line, 'utf8');
+    return record;
   }
 }
