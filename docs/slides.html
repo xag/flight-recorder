@@ -682,11 +682,13 @@
 
   <!-- 13 · two runtimes -->
   <section class="slide">
-    <p class="eyebrow">14 · Two runtimes</p>
-    <h2>One tape, two languages</h2>
-    <p class="lead">Two implementations, <em>one tape</em>. Only <em>record</em> and <em>replay</em> are language-bound —
-    replaying JavaScript means running JavaScript. Invariants and mutation consume the <em>tape</em>, and a tape is only
-    data: freeze the data and the analysis is written once, for every language.</p>
+    <p class="eyebrow">14 · Six runtimes</p>
+    <h2>One tape, six languages</h2>
+    <p class="lead">Six implementations — Python, Node, .NET, Go, Java, PHP — and <em>one tape</em>. Only
+    <em>record</em> and <em>replay</em> are language-bound: replaying JavaScript means running JavaScript.
+    Invariants and mutation consume the <em>tape</em>, and a tape is only data: freeze the data and the
+    analysis is written once, for every language.</p>
+    <p class="note">Two of the six, side by side — the rest differ just as sharply, and for the same kind of reason:</p>
     <div class="table-wrap"><table>
       <tr><th></th><th>Python</th><th>Node</th></tr>
       <tr><td>Boundary</td><td>name module functions; patch in place</td><td>wrap what the app <em>holds</em> — namespaces are immutable</td></tr>
@@ -696,8 +698,8 @@
       <tr><td>The tracer</td><td><span class="mono">sys.settrace</span> — every local, every line</td><td>the V8 Inspector, driven from a worker</td></tr>
     </table></div>
     <p class="note" style="margin-top:1rem">Not preferences — <em>consequences</em>. Every difference is forced by the language.<br>
-    The format is frozen (<span class="mono">spec/tape-v1.md</span>) and its checker written <em>twice, independently</em> —
-    each language validating the other's fixtures. A disagreement means the tape has forked.</p>
+    The format is frozen (<span class="mono">spec/tape-v1.md</span>) and its checker written <em>six times, independently</em> —
+    every language validating every other's fixtures. A disagreement means the tape has forked.</p>
   </section>
 
   <!-- 14 · beyond regression -->

@@ -75,6 +75,7 @@ def build() -> Quern:
                            _PARITY_DECISION, _feature_parity(), _JAVA_DECISION,
                            _PYPI_NAME_DECISION, _PHP_DECISION,
                            _DISTRIBUTION_DECISION, _install_claims_match_reality(),
+                           _SLIDES_DECISION, _slides_name_every_runtime(),
                            _CANONICAL_DECISION, _fixture_parity()]
     return quern
 
@@ -857,5 +858,122 @@ _CANONICAL_DECISION = Node(
                       "whole premise is that claims drift while measurements do not. The matrix "
                       "would have said Node supports db for as long as somebody believed it. The "
                       "fixtures are already the measurement; gate on those."}),
+    ],
+)
+
+
+# --- the deck: the one doc surface nothing was reading ------------------------------------
+
+_SLIDES = _ROOT / "docs" / "slides.html"
+
+_COUNT_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+                6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten"}
+
+
+def _slides_name_every_runtime() -> Node:
+    raw = _SLIDES.read_text(encoding="utf-8") if _SLIDES.exists() else ""
+    n = len(_RUNTIME_TABS)
+    # Read the deck as a reader does: tags stripped, entities left alone. The claims below
+    # are split across <em> spans ("written <em>six times</em>"), so matching the markup
+    # would silently match nothing — a gate that scans the wrong text is a gate that passes.
+    deck = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", raw))
+
+    # Not \b: a word boundary before "." requires a word character before it, so \b\.NET\b
+    # can never match ".NET" written after a space. These bounds mean "not glued to more
+    # name-ish characters", which is what was meant.
+    unnamed = [name for name in _RUNTIME_TABS
+               if not re.search(rf"(?<![\w.]){re.escape(name)}(?![\w])", deck)]
+
+    # A claim that counts implementations has exactly one right answer. "two languages" is
+    # left alone deliberately: the deck contrasts a PAIR in detail, and saying so is true.
+    # What cannot be true is miscounting the implementations themselves.
+    miscounts = [f"'{m} implementations' but there are {n}"
+                 for m in re.findall(r"\b(\w+) implementations\b", deck)
+                 if m.lower() in _COUNT_WORDS.values() and m.lower() != _COUNT_WORDS[n]]
+    # Same for the checker-written-N-times claim, which drifted the same way. Scoped to the
+    # CHECKER: "the analysis is written once, for every language" is a different sentence
+    # making a true point, and an earlier draft of this gate went red on it.
+    miscounts += [f"checker 'written {m}' but there are {n} implementations"
+                  for m in re.findall(r"checker written ([a-z]+(?: times)?|twice|once)", deck)
+                  if m.lower() != f"{_COUNT_WORDS[n]} times"]
+
+    problems = []
+    if unnamed:
+        problems.append("the deck never names shipped runtime(s): " + ", ".join(unnamed))
+    if miscounts:
+        problems.append("; ".join(miscounts))
+
+    if not problems:
+        q = Quantity(
+            value=0, unit="finding", provenance="measured", grounded=True,
+            source=f"docs/slides.html names all {n} shipped runtimes "
+                   f"({', '.join(_RUNTIME_TABS)}) and counts them correctly")
+    else:
+        q = Quantity(
+            value=len(unnamed) + len(miscounts), unit="finding", provenance="measured",
+            grounded=False,
+            source="; ".join(problems) + " — the deck may contrast two runtimes in detail, "
+                   "but it may not claim the project is smaller than it is")
+
+    return Node(
+        id="slides-count-every-runtime",
+        kind="gate",
+        name="The deck names every shipped runtime and counts them correctly — it may show a "
+             "pair in detail, it may not present that pair as the whole project",
+        params={"stale_claims": q},
+        links={"admits": ["slides-count-every-runtime"]},
+        payload={"note":
+                 "docs/slides.html sat at 'Two runtimes / One tape, two languages' for a week "
+                 "after Java and PHP shipped, claiming a checker 'written twice' when six exist. "
+                 "Nothing caught it: every doc gate here read docs/index.html or a README, and "
+                 "the deck is neither. An unread doc is an unchecked claim, and it drifts."},
+    )
+
+
+_SLIDES_DECISION = Node(
+    id="the-deck-is-a-doc",
+    kind="decision",
+    name="The slide deck is held to the same counting rule as the guide, but is allowed to "
+         "teach with two runtimes rather than exhibit all six",
+    payload={
+        "rationale":
+            "Adding Java and PHP updated the guide, the READMEs and the ledger, and left the deck "
+            "saying 'Two implementations'. It drifted for a week in public because no gate read "
+            "it — every doc rule here scans docs/index.html or a README, and slides.html is "
+            "neither. The obvious repair was to widen the comparison table to six columns and be "
+            "done. Rejected: that table is the argument, not a reference — five rows contrasting "
+            "how each language FORCES a different mechanism, and the force of it comes from being "
+            "able to hold two designs in your head at once. Six columns of dense text is a table "
+            "nobody reads from the back of a room, and a slide that cannot be read has lost more "
+            "than it gained in completeness. So the gate polices the CLAIM, not the layout: name "
+            "every runtime, count them correctly, and show whichever pair teaches best.",
+        "consequence":
+            "The deck can stay legible while runtime seven arrives, and the check will still go "
+            "red until the deck admits that seven exists. The cost is that the comparison table "
+            "will keep showing Python and Node while other runtimes make choices just as "
+            "interesting — a real loss, priced deliberately, and the note above the table now "
+            "says out loud that it is a sample rather than the set.",
+    },
+    children=[
+        Node(id="alt-slides-six-columns", kind="alternative",
+             name="Widen the comparison table to one column per runtime",
+             payload={"why":
+                      "Complete, and unreadable: six columns times five rows is thirty cells of "
+                      "prose at projection size. It also flattens the point — the rows exist to "
+                      "show that a difference was FORCED, which lands as a contrast between two "
+                      "and dissolves into a matrix at six."}),
+        Node(id="alt-slides-drop-the-slide", kind="alternative",
+             name="Delete the slide rather than maintain it",
+             payload={"why":
+                      "It is the only place the talk shows that the tape is a real standard and "
+                      "not one library's file format — the whole 'implementations are welcome' "
+                      "claim rests on it. Deleting the evidence to avoid maintaining it is the "
+                      "same move as deleting a failing test."}),
+        Node(id="alt-slides-ungated", kind="alternative",
+             name="Fix the wording now and leave the deck unchecked, as before",
+             payload={"why":
+                      "This is what was already in place, and it is exactly how the deck got a "
+                      "week out of date. The wording is fixed either way; the gate is what makes "
+                      "the fix hold when the seventh runtime lands and the author is in a hurry."}),
     ],
 )
