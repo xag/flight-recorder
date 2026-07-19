@@ -316,86 +316,75 @@ _JAVA_DECISION = Node(
     name="Java reaches parity with a reflective proxy at the boundary, a hand-rolled JSON codec, "
          "and variable-level tracing by rewriting sources with javac's own parser and compiling "
          "them to memory in-process",
+    meta={"amended": "5d3affa924a7 tightened under the 600-word budget; every "
+                     "mechanism, cost and rejection kept"},
     payload={
         "rationale":
-            "Three mechanisms had to be chosen, and each was forced by the language rather than "
-            "preferred. (1) THE BOUNDARY. Java can patch a loaded class, but only through a "
-            "-javaagent — a launch flag, and a library has no business dictating the command line "
-            "that starts someone's app. So the boundary is the object the app holds: "
-            "java.lang.reflect.Proxy over an interface, as Node and .NET already do. (2) JSON. "
-            "Java ships none in the platform, and this library ships no dependencies, because a "
-            "recorder is installed into someone else's app and every jar it drags in is a version "
-            "conflict it can cause in a codebase it was supposed to observe silently. .NET made "
-            "the same call in Json.cs even though it had System.Text.Json, because the thing "
-            "actually needed is not a general parser: it is a codec with two disciplines the "
-            "general ones get wrong — integer-vs-float preserved on the way in (so the checker can "
-            "reject `seq: 1.0`), and comparison by canonical form (so 30 and 30.0 compare equal "
-            "across the file/live-object divide). (3) TRACING, the hard one. The JVM exposes no "
-            "per-line hook, so the choice was JDI, a bytecode agent, or a source rewriter. JDI was "
-            "rejected for the reasons Go rejected Delve: an out-of-process debug agent, a socket "
-            "round trip per variable per line, and values arriving as the DEBUGGER's renderings "
-            "when trace version 2 exists precisely so values are data an invariant can do "
-            "arithmetic on. A bytecode agent was rejected because it needs -javaagent (so a test "
-            "cannot start a traced run from inside itself) and reads locals by slot, making a "
-            "variable's NAME depend on the consumer having compiled with -g. What is left is "
-            ".NET's road, and the JDK happens to ship the parts: com.sun.source is javac's own "
-            "parser and position table, exported and supported, so the rewriter is stdlib-only and "
-            "the traced copy compiles and runs IN PROCESS — sharing this jar, and therefore "
-            "sharing the hook statics and the tape.",
+            "Three mechanisms, each forced by the language. (1) THE BOUNDARY. Java patches a "
+            "loaded class only through -javaagent — a launch flag, and a library has no business "
+            "dictating the command line that starts someone's app. So the boundary is the object "
+            "the app holds: java.lang.reflect.Proxy over an interface, as Node and .NET do. "
+            "(2) JSON. The platform ships none and this library ships no dependencies — every "
+            "jar a recorder drags in is a version conflict in a codebase it was supposed to "
+            "observe silently. "
+            "What is needed is not a general parser but a codec with two disciplines the general "
+            "ones get wrong: integer-vs-float preserved on the way in (the checker can reject "
+            "`seq: 1.0`) and comparison by canonical form (30 equals 30.0 across the "
+            "file/live-object divide) — the call .NET already made in Json.cs. (3) TRACING, the "
+            "hard one. The JVM has no per-line hook: JDI, a bytecode agent, or a source "
+            "rewriter. JDI fails as Delve did for Go — out-of-process, a round trip per "
+            "variable per line, values as the DEBUGGER's renderings where trace v2 wants data "
+            "an invariant can do arithmetic on. A bytecode agent needs -javaagent and reads "
+            "locals by slot. What is left is .NET's road, and the JDK ships the parts: "
+            "com.sun.source is javac's own parser and position table, so the rewriter is "
+            "stdlib-only and the traced copy compiles and runs IN PROCESS — sharing this jar, "
+            "the hook statics, the tape.",
         "consequence":
-            "Java is the second runtime to trace in-process rather than out (with .NET), and the "
-            "first to do it with no third-party compiler library. The costs, stated plainly: "
-            "tracing needs a JDK at run time, not a JRE — a JRE-only deployment loses Tracer and "
-            "nothing else. The ambient rides on an InheritableThreadLocal, which does NOT follow "
-            "work handed to a pooled executor, so a fan-out needs Recorder.propagate; this is "
-            "weaker than .NET's AsyncLocal and is documented at the point of use rather than "
-            "hidden, because the failure mode is silent under-recording. And definite assignment "
-            "had to be approximated: .NET asks Roslyn's own AnalyzeDataFlow, javac exposes no "
-            "equivalent, so the rewriter tracks scope syntactically as Go's does and observes a "
-            "local only from the statement after an initialised declaration. Conservative in the "
-            "safe direction — it may miss a variable; it can never emit one javac would reject, "
-            "and a traced copy that does not compile is not a degraded trace but no trace at all.",
+            "Second runtime to trace in-process (with .NET), first with no third-party "
+            "compiler. Costs, plainly: tracing needs a JDK, not a JRE — JRE-only loses Tracer "
+            "and nothing else. The ambient is an InheritableThreadLocal, which does NOT follow "
+            "pooled-executor work: fan-outs need Recorder.propagate — weaker than .NET's "
+            "AsyncLocal, documented at the point of use; the failure mode is silent "
+            "under-recording. Definite assignment is approximated: javac exposes no "
+            "AnalyzeDataFlow, so the rewriter tracks scope syntactically as Go's does, "
+            "observing a local only after an initialised declaration — it may miss a variable, "
+            "it can never emit one javac rejects, and a traced copy that does not compile is "
+            "no trace at all.",
     },
     children=[
         Node(id="alt-java-jdi-tracing", kind="alternative",
+             meta={"amended": "3e1c1d4ba97a tightened with its entry; claim kept"},
              name="Drive variable tracing through JDI/JDWP, the debugger protocol",
              payload={"why":
-                      "The structural analogue of what Node does over the V8 Inspector, and the "
-                      "same trap Go found with Delve: it needs the traced code launched under a "
-                      "debug agent in a separate process, costs a round trip per variable per "
-                      "line, and hands back the debugger's own truncated strings — which would "
-                      "silently demote trace version 2 back to version 1's reprs, the exact "
-                      "regression both readers now refuse outright."}),
+                      "Node's V8-Inspector analogue and Go's Delve trap: a separate debug-agent "
+                      "process, a round trip per variable per line, and the debugger's truncated "
+                      "strings — silently demoting trace v2 back to v1 reprs, the regression "
+                      "both readers refuse outright."}),
         Node(id="alt-java-bytecode-agent", kind="alternative",
+             meta={"amended": "ba1b66eec888 tightened with its entry; claim kept"},
              name="Instrument bytecode with a java.lang.instrument agent and ASM",
              payload={"why":
-                      "Genuinely the most powerful option, and it would sidestep definite "
-                      "assignment entirely since the local variable table carries each slot's live "
-                      "range. Rejected on two counts a library cannot pay: it requires -javaagent "
-                      "on the launch command, so a test cannot begin a traced run once it is "
-                      "already running; and it reads locals by slot, so a variable's name survives "
-                      "only if the consumer compiled with -g — making the trace's usefulness "
-                      "depend on someone else's build flags."}),
+                      "The most powerful option — the local variable table even solves "
+                      "definite assignment. But it needs -javaagent, so a test cannot begin a "
+                      "traced run from inside itself, and it reads locals by slot, so names "
+                      "survive only under the consumer's -g."}),
         Node(id="alt-java-json-dependency", kind="alternative",
+             meta={"amended": "0789f7b9e25a tightened with its entry; claim kept"},
              name="Depend on Jackson or Gson instead of hand-rolling the codec",
              payload={"why":
-                      "Less code, and the wrong trade for this library. A recorder is installed "
-                      "into an app that did not ask for it; Jackson is among the most "
-                      "version-conflicted jars on the JVM, so the instrument would become a "
-                      "cause of the breakages it exists to explain. It also would not give the "
-                      "two behaviours actually needed — an integral/fractional distinction the "
-                      "checker can reject on, and canonical comparison — both of which would have "
-                      "to be built on top regardless."}),
+                      "A recorder is installed into an app that did not ask for it, and Jackson "
+                      "is among the most version-conflicted jars on the JVM — the instrument "
+                      "would cause the breakages it exists to explain. And the two behaviours "
+                      "actually needed would have to be built on top regardless."}),
         Node(id="alt-java-explicit-context", kind="alternative",
+             meta={"amended": "e89224c42c74 tightened with its entry; claim kept"},
              name="Thread an explicit context parameter through every boundary call, as Go does",
              payload={"why":
-                      "Honest across executors, and what Go had to do because it has no ambient at "
-                      "all. Rejected for Java because Java DOES have one, and forcing a context "
-                      "parameter through every signature is a change to the app's own API that the "
-                      "recorder has no right to demand — the library's promise is that a recorded "
-                      "run looks like an unrecorded one. The residual risk (a pooled executor "
-                      "silently dropping events) is met with Recorder.propagate and a note in the "
-                      "guide, not with a redesign of the caller's code."}),
+                      "What Go had to do, having no ambient at all. Java has one, and forcing a "
+                      "context parameter through every signature redesigns the caller's API — "
+                      "the promise is that a recorded run looks like an unrecorded one. The "
+                      "pooled-executor risk is met with Recorder.propagate and a note in the "
+                      "guide."}),
     ],
 )
 
@@ -463,102 +452,83 @@ _PYPI_NAME_DECISION = Node(
 _PHP_DECISION = Node(
     id="php-port-mechanisms",
     kind="decision",
-    name="PHP reaches parity with a __call decorator at the boundary, the core JSON codec with "
-         "two of its defaults overridden, and variable-level tracing by rewriting sources with "
-         "PHP's own tokenizer and including the copy in-process",
+    name="PHP reaches parity: a __call decorator at the boundary, two JSON defaults "
+         "overridden, and tracing by source rewrite with PHP's own tokenizer, included "
+         "in-process",
+    meta={"amended": "c8854134b1d2 tightened under the 600-word budget; every "
+                     "mechanism, cost and rejection kept"},
     payload={
         "rationale":
-            "Three forced choices, and one that only PHP has to make. "
-            "(1) THE BOUNDARY. A PHP function name is not a rebindable binding — you cannot point "
-            "file_get_contents somewhere else without runkit or uopz, which are extensions, and a "
-            "library that needs an extension in someone else's php.ini has dictated their "
-            "deployment. So the boundary is the OBJECT, as it is in Node, .NET, Go and Java. PHP "
-            "then makes this the cheapest of the six: __call intercepts undefined methods at run "
-            "time, so the decorator needs no interface (Java's reflect.Proxy does, .NET's "
-            "DispatchProxy does) and no code generation. "
-            "(2) JSON. PHP ships a codec, so unlike Java and .NET there was none to hand-roll — "
-            "but both disciplines those ports implemented by hand still had to be CHOSEN, because "
-            "PHP's defaults get both wrong. Integer-vs-float: json_encode(1.0) is '1' by default, "
-            "which would let a seq that had become a float sail past a checker built to reject it; "
-            "JSON_PRESERVE_ZERO_FRACTION fixes it. Float round-tripping: serialize_precision = -1 "
-            "gives the shortest exactly-reversible form, which is what makes a PHP tape compare "
-            "equal to the one another runtime wrote for the same value — and because that is an "
-            "ini setting a host can change, the suite ASSERTS it rather than assuming it. "
-            "(3) TRACING, the hard one everywhere. Xdebug was rejected for the reason above: an "
-            "extension is not a library's to require. declare(ticks=1) with register_tick_function "
-            "needs nothing installed, but a tick handler cannot read the locals of the frame that "
-            "triggered it, so it can say a statement ran and nothing about what it did — a "
-            "profiler, not a trace. That leaves rewriting, which is where .NET, Go and Java "
-            "already are, and PHP ships the parts: token_get_all is the engine's own lexer, in "
-            "core, so the parse guiding the splice is the same one PHP performs. The copy is "
-            "included in-process, sharing this package and therefore the same boundary and the "
-            "same tape. "
-            "(4) THE ONE ONLY PHP FACES: an empty array. PHP has a single array type that is both "
-            "sequence and map, so an empty one is genuinely ambiguous where it is not in any other "
-            "runtime — and the tape distinguishes them (fx.kwargs must be an object, fx.args an "
-            "array). The encoder follows PHP's own convention: array_is_list of an empty array is "
-            "true, so it writes as a JSON array. Where the tape REQUIRES an object the recorder "
-            "passes an empty stdClass, and a caller who needs an empty map inside a value does the "
-            "same. Guessing 'map' was the other choice and it is worse: it would silently turn "
-            "every empty list an app returns into an object.",
+            "Three forced choices, one only PHP faces. "
+            "(1) THE BOUNDARY. Repointing a PHP function needs runkit or uopz, and a library "
+            "needing an extension in someone's php.ini has dictated their deployment. So the "
+            "boundary is the OBJECT, as in the other five runtimes, and PHP makes it "
+            "cheapest: __call intercepts undefined methods — no interface, no code "
+            "generation. "
+            "(2) JSON. PHP ships a codec, but the two disciplines the other ports hand-rolled "
+            "still had to be CHOSEN — the defaults get both wrong: json_encode(1.0) is '1' "
+            "(JSON_PRESERVE_ZERO_FRACTION; a float seq must still fail the checker), and "
+            "serialize_precision = -1, the shortest exactly-reversible float that makes a PHP "
+            "tape compare equal to another runtime's — an ini setting a host can change, so "
+            "the suite ASSERTS it. "
+            "(3) TRACING. Xdebug is an extension, not a library's to require; a tick handler "
+            "cannot read the triggering frame's locals — a profiler, not a trace. That leaves "
+            "rewriting, where .NET, Go and Java already are: token_get_all is the engine's "
+            "own lexer, in core, and the copy is included in-process, sharing this package, "
+            "the boundary and the tape. "
+            "(4) THE EMPTY ARRAY, PHP's own: one array type is both sequence and map, so an "
+            "empty one is ambiguous, and the tape distinguishes (fx.kwargs an object, fx.args "
+            "an array). The encoder follows PHP's convention — array_is_list([]) is true, so "
+            "a JSON array; where the tape REQUIRES an object, an explicit empty stdClass. "
+            "Guessing 'map' silently turns every empty list an app returns into an object.",
         "consequence":
-            "The costs, stated plainly. The __call decorator does not satisfy a type declaration "
-            "for the class it wraps — there is no interface being implemented — so code that "
-            "declares a parameter type needs unwrap(); Java's proxy has no such gap because it IS "
-            "the interface. A traced class must not have been loaded from its original source "
-            "first, since PHP has no class-loader isolation to hide a second definition behind; "
-            "the tracer says so plainly rather than letting a redeclaration fatal take the process "
-            "down, and the suite keeps its subject in a namespace no PSR-4 rule maps. A sink runs "
-            "on the request that triggered it with no background thread to hide the latency in, "
-            "which is weaker than Python's queue or Node's waitUntil and is documented at the "
+            "The costs, plainly. __call satisfies no type declaration, so typed parameters "
+            "need unwrap() — Java's proxy IS the interface, no gap. A traced class must not "
+            "already be loaded (no class-loader isolation to hide a second definition); the "
+            "tracer says so instead of letting a redeclaration fatal, and the suite keeps "
+            "its subject in a namespace no PSR-4 rule maps. A sink runs on the triggering "
+            "request — weaker than Python's queue or Node's waitUntil, documented at the "
             "point of use. "
-            "AND ONE PLACE PHP IS SIMPLY EASIER, worth recording because the ledger has spent four "
-            "runtimes' worth of words on the opposite: get_defined_vars() returns every local in "
-            "scope, so the rewriter never names a variable and never reasons about whether one is "
-            "assigned. The definite-assignment problem that .NET solves by asking Roslyn's "
-            "AnalyzeDataFlow, and that Java and Go approximate syntactically and conservatively, "
-            "has no counterpart here at all.",
+            "AND ONE PLACE PHP IS EASIER, worth a line after four runtimes of the opposite: "
+            "get_defined_vars() returns every local, so the rewriter never names a variable — "
+            "the definite-assignment problem the other ports solve or approximate has no "
+            "counterpart here.",
     },
     children=[
         Node(id="alt-php-xdebug-tracing", kind="alternative",
-             name="Drive variable tracing through Xdebug, which already has per-line hooks and "
-                  "full access to locals",
+             meta={"amended": "22e85c14c3de tightened with its entry; claim kept"},
+             name="Drive variable tracing through Xdebug, which has per-line hooks and full "
+                  "locals access",
              payload={"why":
-                      "It is the obvious answer and it is the -javaagent mistake in another "
-                      "costume: Xdebug is a compiled extension the host must install and enable in "
-                      "php.ini. A library cannot require that of the application it was supposed "
-                      "to be observing quietly, and a tracer nobody can switch on is not a tracer. "
-                      "It also hands back a debugger's rendering of a value, when the whole point "
-                      "of trace version 2 is that a value is data an invariant can do arithmetic "
-                      "on."}),
+                      "The -javaagent mistake in another costume: an extension the host must "
+                      "enable in php.ini, which a library cannot require — a tracer nobody can "
+                      "switch on is not a tracer. And a debugger's renderings, where trace v2 "
+                      "wants data invariants can do arithmetic on."}),
         Node(id="alt-php-tick-functions", kind="alternative",
+             meta={"amended": "802d974d40df tightened with its entry; claim kept"},
              name="Use declare(ticks=1) with register_tick_function for a per-statement hook",
              payload={"why":
-                      "Needs no extension, and that is its only virtue. A tick handler runs in its "
-                      "own frame and PHP exposes no way to read the locals of the frame that "
-                      "triggered it, so it can report that a statement executed and nothing about "
-                      "what changed. It also requires a declare() in every traced file, which is "
-                      "an edit to the user's source either way — so it costs what rewriting costs "
-                      "and buys a profiler instead of a trace."}),
+                      "Needs no extension — its only virtue: a tick handler cannot read the "
+                      "triggering frame's locals, so it reports a statement ran and nothing "
+                      "more. And declare() in every traced file: rewriting's cost, a "
+                      "profiler's yield."}),
         Node(id="alt-php-parser-dependency", kind="alternative",
+             meta={"amended": "ff5b27319ed2 tightened with its entry; claim kept"},
              name="Rewrite with nikic/php-parser, a real AST rather than a token stream",
              payload={"why":
-                      "A better parser, and a runtime dependency. A recorder is a thing you "
-                      "install into someone else's app, and every package it drags in is a version "
-                      "conflict it can cause in a codebase it was meant to observe silently — the "
-                      "same reason Java hand-rolled a JSON codec rather than taking Jackson. "
-                      "token_get_all is in core, is the engine's own lexer, and the rewriter needs "
-                      "statement boundaries and the function bodies containing them, which is a "
-                      "token-stream question rather than an AST one."}),
+                      "A better parser, and a runtime dependency — the same reason Java "
+                      "hand-rolled JSON over Jackson. token_get_all is core, and the rewriter "
+                      "needs statement boundaries and enclosing bodies: a token-stream "
+                      "question, not an AST one."}),
         Node(id="alt-php-empty-array-is-map", kind="alternative",
-             name="Encode an empty PHP array as an object rather than an array, since object "
-                  "positions are the ones that most often turn up empty",
+             meta={"amended": "e4d506adfbf7 tightened with its entry; claim kept"},
+             name="Encode an empty PHP array as an object, since object positions most often "
+                  "turn up empty",
              payload={"why":
-                      "It would fix the recorder's own empty-kwargs case and break every "
-                      "application's empty-list case, silently, in a value the app returned. The "
-                      "recorder knows which of ITS positions are objects and can say so with an "
-                      "explicit stdClass; it cannot know that about a value it was handed. Guess "
-                      "where you have knowledge, not where the caller does."}),
+                      "Fixes the recorder's own empty-kwargs case and silently breaks every "
+                      "app's empty-list case. The recorder knows which of ITS positions are "
+                      "objects (explicit stdClass); it cannot know that of a handed value. "
+                      "Guess where you have knowledge, not where the caller does."}),
     ],
 )
 
@@ -794,45 +764,39 @@ _CANONICAL_DECISION = Node(
     kind="decision",
     name="All six runtimes record ONE canonical scenario into spec/fixtures, and each suite "
          "checks the others' tapes render character for character alike",
+    meta={"amended": "f7370dd8072d tightened under the 600-word budget; every "
+                     "finding kept, including the leak and the remaining disparity"},
     payload={
         "rationale":
-            "The fixtures existed to prove the tape is one format, and they proved it: every "
-            "checker accepted every tape. But they had quietly split into two families - Python "
-            "and .NET recorded a chained read, an email user and a 'kaput' failure; Node, Go, "
-            "Java and PHP recorded an effect, a named user and 'no such key: alice'. Both "
-            "families were conformant, so nothing was red, and Java's own Toy javadoc asserted "
-            "the property the fixtures no longer had: that they differ only in the runtime key "
-            "and the timestamps. An unchecked claim about a system that changes underneath it "
-            "drifts, which is the argument the no-doc-duplication gate already won. "
-            "So the scenario is now one shape, chosen as the UNION rather than the intersection: "
-            "the canonical `enrol` keeps family B's naming and takes family A's chained read, "
-            "because a `db` event enclosed by a span is the enclosure a reader most wants to see "
-            "and an fx-only span never demonstrates it. Converging on the simpler family would "
-            "have cost that coverage to save work, which is the wrong trade for the artifact "
-            "every other runtime's suite trusts.",
+            "The fixtures existed to prove the tape is one format, and they proved it - while "
+            "quietly splitting into two families: Python and .NET recorded a chained read, an "
+            "email user and a 'kaput' failure; Node, Go, Java and PHP an effect, a named user "
+            "and 'no such key: alice'. Both were conformant, so nothing was red, and Java's Toy "
+            "javadoc asserted the property the fixtures no longer had (differ only in runtime "
+            "key and timestamps) - an unchecked claim drifting exactly as the "
+            "no-doc-duplication gate predicted. The scenario is now one shape, the UNION not "
+            "the intersection: canonical `enrol` keeps family B's naming and takes family A's "
+            "chained read, because a `db` event enclosed by a span is the enclosure a reader "
+            "most wants and an fx-only span never demonstrates it. Converging on the simpler "
+            "family would have bought agreement by deleting coverage from the evidence every "
+            "suite trusts.",
         "consequence":
-            "What it cost, and it was not the fixture edit. Porting one scenario to six runtimes "
-            "meant IMPLEMENTING what a runtime could not express, and Node could not express "
-            "most of it: it had no chained-client support at all - no query, no queryOne, no "
-            "exec, no snapshot - so it could not emit a `db` event, and no `sampleIndices`, so "
-            "it could not emit a `sample` draw. Five runtimes had both. Nothing was red, because "
-            "the parity gate reads the guide for badges and gap-phrases, and a feature nobody "
-            "ever claimed is a feature nobody can catch you lacking. That is the same shape as "
-            "the [^<.] hole this ledger already confesses: a check is evidence about what it can "
-            "see. The new fixture-parity gate closes it from the other side - it reads the tapes "
-            "rather than the prose, and a tape cannot omit a `db` event tactfully. "
-            "Python was the other one, and worse: it had no `perf` clock at all, and its "
-            "RandomShim implemented only `sample` while `__getattr__` passed every other draw "
-            "through to the real random module UNRECORDED. That is not a missing feature, it is "
-            "a nondeterminism LEAK - an app calling random.random() inside a recorded call got a "
-            "value the tape never held, and replay re-rolled it. Both are now shimmed, which is "
-            "the uncomfortable part of this whole exercise: the lead implementation was the "
-            "least complete, and only a fixture nobody could satisfy made it visible. "
-            "One disparity remains, recorded rather than papered over: Python qualifies effect "
-            "names with the defining module (`tests.canonical.store_set` where the others write "
-            "`store.set`), because the qualname is built as f\"{module.__name__}.{name}\" with no "
-            "prefix option. So the six tapes agree on structure, on event kinds, and on what "
-            "they render - but not yet byte for byte.",
+            "The cost was not the fixture edit: porting one scenario to six runtimes meant "
+            "IMPLEMENTING what a runtime could not express. Node could not express most of it - "
+            "no chained client (query, queryOne, exec, snapshot), so no `db` event; no "
+            "`sampleIndices`, so no `sample` draw. Nothing was red, because the parity gate "
+            "reads the guide for badges, and a feature nobody claimed is a feature nobody can "
+            "catch you lacking - the [^<.] hole's shape again: a check is evidence about what "
+            "it can see. The fixture-parity gate closes it from the other side; a tape cannot "
+            "omit a `db` event tactfully. Python was worse: no `perf` clock, and RandomShim "
+            "passed every draw but `sample` through to the real random module UNRECORDED - not "
+            "a missing feature, a nondeterminism LEAK: replay re-rolled what the tape never "
+            "held. Both now shimmed. The uncomfortable finding: the lead implementation was "
+            "the least complete, and only a fixture nobody could satisfy made it visible. One "
+            "disparity remains, recorded: Python qualifies effect names with the defining "
+            "module (`tests.canonical.store_set` vs `store.set`; the qualname has no prefix "
+            "option), so the six tapes agree on structure, kinds and rendering - not yet byte "
+            "for byte.",
     },
     children=[
         Node(id="alt-canon-converge-on-the-simpler-family", kind="alternative",

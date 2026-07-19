@@ -77,32 +77,32 @@
   {
     "path": "java-port-mechanisms",
     "kind": "decision",
-    "digest": "c5707b3ecc9b"
+    "digest": "5d3affa924a7"
   },
   {
     "path": "java-port-mechanisms/alt-java-bytecode-agent",
     "kind": "alternative",
-    "digest": "07b72f5b34db"
+    "digest": "ba1b66eec888"
   },
   {
     "path": "java-port-mechanisms/alt-java-explicit-context",
     "kind": "alternative",
-    "digest": "1992a2a8f52a"
+    "digest": "e89224c42c74"
   },
   {
     "path": "java-port-mechanisms/alt-java-jdi-tracing",
     "kind": "alternative",
-    "digest": "59342a9aa8fc"
+    "digest": "3e1c1d4ba97a"
   },
   {
     "path": "java-port-mechanisms/alt-java-json-dependency",
     "kind": "alternative",
-    "digest": "565ee19ca6c5"
+    "digest": "0789f7b9e25a"
   },
   {
     "path": "one-canonical-fixture-scenario",
     "kind": "decision",
-    "digest": "3ad043dcde60"
+    "digest": "f7370dd8072d"
   },
   {
     "path": "one-canonical-fixture-scenario/alt-canon-converge-on-the-simpler-family",
@@ -122,27 +122,27 @@
   {
     "path": "php-port-mechanisms",
     "kind": "decision",
-    "digest": "d3509d401f4e"
+    "digest": "c8854134b1d2"
   },
   {
     "path": "php-port-mechanisms/alt-php-empty-array-is-map",
     "kind": "alternative",
-    "digest": "16055cb2f116"
+    "digest": "e4d506adfbf7"
   },
   {
     "path": "php-port-mechanisms/alt-php-parser-dependency",
     "kind": "alternative",
-    "digest": "dbb97ecd9e68"
+    "digest": "ff5b27319ed2"
   },
   {
     "path": "php-port-mechanisms/alt-php-tick-functions",
     "kind": "alternative",
-    "digest": "20abd9845456"
+    "digest": "802d974d40df"
   },
   {
     "path": "php-port-mechanisms/alt-php-xdebug-tracing",
     "kind": "alternative",
-    "digest": "e9dcf2a946a8"
+    "digest": "22e85c14c3de"
   },
   {
     "path": "pypi-distribution-name",
