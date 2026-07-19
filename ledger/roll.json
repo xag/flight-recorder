@@ -1,154 +1,192 @@
 [
   {
     "path": "all-runtimes-record-the-same-kinds",
-    "kind": "gate"
+    "kind": "gate",
+    "digest": "9662d0b7ef89"
   },
   {
     "path": "all-runtimes-same-features",
-    "kind": "gate"
+    "kind": "gate",
+    "digest": "9d5b86504a00"
   },
   {
     "path": "distribution-parity-is-checked-offline",
-    "kind": "decision"
+    "kind": "decision",
+    "digest": "3c43c18b7b5a"
   },
   {
     "path": "distribution-parity-is-checked-offline/alt-dist-drop-unshipped-runtimes",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "9cb878ab85d1"
   },
   {
     "path": "distribution-parity-is-checked-offline/alt-dist-live-registry-query",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "07b8fea58ac3"
   },
   {
     "path": "distribution-parity-is-checked-offline/alt-dist-trust-the-guide",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "30557e02c9cb"
   },
   {
     "path": "docs-carry-no-duplicated-tutorial",
-    "kind": "gate"
+    "kind": "gate",
+    "digest": "44c9b68e4271"
   },
   {
     "path": "docs-name-no-privileged-language",
-    "kind": "gate"
+    "kind": "gate",
+    "digest": "07e7e36b6762"
   },
   {
     "path": "docs-single-source",
-    "kind": "decision"
+    "kind": "decision",
+    "digest": "370d8bfe5536"
   },
   {
     "path": "docs-single-source/alt-per-language-readmes",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "cbae9394355c"
   },
   {
     "path": "docs-single-source/alt-readme-is-source-of-truth",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "7596cfde6487"
   },
   {
     "path": "feature-parity",
-    "kind": "decision"
+    "kind": "decision",
+    "digest": "d7667469b65f"
   },
   {
     "path": "feature-parity/alt-document-gaps-honestly",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "26ff3750cabb"
   },
   {
     "path": "feature-parity/alt-lead-and-ports",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "770156b67377"
   },
   {
     "path": "install-claims-match-registries",
-    "kind": "gate"
+    "kind": "gate",
+    "digest": "16639c151e87"
   },
   {
     "path": "java-port-mechanisms",
-    "kind": "decision"
+    "kind": "decision",
+    "digest": "c5707b3ecc9b"
   },
   {
     "path": "java-port-mechanisms/alt-java-bytecode-agent",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "07b72f5b34db"
   },
   {
     "path": "java-port-mechanisms/alt-java-explicit-context",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "1992a2a8f52a"
   },
   {
     "path": "java-port-mechanisms/alt-java-jdi-tracing",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "59342a9aa8fc"
   },
   {
     "path": "java-port-mechanisms/alt-java-json-dependency",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "565ee19ca6c5"
   },
   {
     "path": "one-canonical-fixture-scenario",
-    "kind": "decision"
+    "kind": "decision",
+    "digest": "3ad043dcde60"
   },
   {
     "path": "one-canonical-fixture-scenario/alt-canon-converge-on-the-simpler-family",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "49692660922f"
   },
   {
     "path": "one-canonical-fixture-scenario/alt-canon-leave-the-families-and-correct-the-claim",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "820aca949633"
   },
   {
     "path": "one-canonical-fixture-scenario/alt-canon-live-registry-of-features",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "aa44961e675d"
   },
   {
     "path": "php-port-mechanisms",
-    "kind": "decision"
+    "kind": "decision",
+    "digest": "d3509d401f4e"
   },
   {
     "path": "php-port-mechanisms/alt-php-empty-array-is-map",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "16055cb2f116"
   },
   {
     "path": "php-port-mechanisms/alt-php-parser-dependency",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "dbb97ecd9e68"
   },
   {
     "path": "php-port-mechanisms/alt-php-tick-functions",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "20abd9845456"
   },
   {
     "path": "php-port-mechanisms/alt-php-xdebug-tracing",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "e9dcf2a946a8"
   },
   {
     "path": "pypi-distribution-name",
-    "kind": "decision"
+    "kind": "decision",
+    "digest": "78de951b2617"
   },
   {
     "path": "pypi-distribution-name/alt-pypi-claim-flightrecorder",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "e991c6515fc9"
   },
   {
     "path": "pypi-distribution-name/alt-pypi-new-name",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "473139b153e9"
   },
   {
     "path": "pypi-distribution-name/alt-pypi-rename-import",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "39a61cb2b281"
   },
   {
     "path": "slides-count-every-runtime",
-    "kind": "gate"
+    "kind": "gate",
+    "digest": "f76ff6c5f5de"
   },
   {
     "path": "the-deck-is-a-doc",
-    "kind": "decision"
+    "kind": "decision",
+    "digest": "694a5c873e67"
   },
   {
     "path": "the-deck-is-a-doc/alt-slides-drop-the-slide",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "1d4990015444"
   },
   {
     "path": "the-deck-is-a-doc/alt-slides-six-columns",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "11f3a123c6ad"
   },
   {
     "path": "the-deck-is-a-doc/alt-slides-ungated",
-    "kind": "alternative"
+    "kind": "alternative",
+    "digest": "2b005c8774b9"
   }
 ]

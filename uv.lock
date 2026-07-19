@@ -192,7 +192,7 @@ wheels = [
 [[package]]
 name = "quern"
 version = "0.1.0"
-source = { git = "https://github.com/xag/quern?rev=eb7e451#eb7e4518d84da9798b0a15d1b635d81c813e6804" }
+source = { git = "https://github.com/xag/quern?rev=c6d8cbc#c6d8cbc422f2fbcc05690e75727daa28912f8951" }
 dependencies = [
     { name = "pydantic" },
     { name = "wasmtime" },
@@ -255,4 +255,4 @@ ledger = [
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.0.0" }]
-ledger = [{ name = "quern", git = "https://github.com/xag/quern?rev=eb7e451" }]
+ledger = [{ name = "quern", git = "https://github.com/xag/quern?rev=c6d8cbc" }]
