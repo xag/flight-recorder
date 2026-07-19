@@ -1,0 +1,73 @@
+# The design ledger's gate, wired to the events it actually claims to gate.
+#
+# Two things run here, and they fail for different reasons.
+#
+# The RULES ask whether what is in the ledger is sound: a decision naming no rejected
+# alternative, a belief with nothing that could kill it, an entry resting on grounds
+# that have since been superseded or deleted, an unsound param travelling through a
+# gate. A red rule does not mean the code is broken - the test suite says whether the
+# code is broken. It means something unsound is being carried and has not been paid for.
+#
+# The ROLL asks the question no rule can. Every rule runs against the tree as it is
+# now, so an entry that was DELETED is not red - it is absent, and a gate counting the
+# ungrounded params on a debt that no longer exists counts zero and passes. The check
+# compares the build against ledger/roll.json as committed at the BASE revision, so a
+# removal has to be announced - superseded, discharged, or retracted with a tombstone -
+# instead of arriving as a diff nobody reads.
+#
+# WHY ON EVERY LEDGER CHANGE AND NOT ONLY ON A TAG. The roll comparison is inductive:
+# each commit is checked against its parent, and that is what makes it sound without
+# reading whole history. Run it only at release and the induction breaks - a deletion
+# in one commit and an unrelated re-addition in the next cancel out in the aggregate
+# diff, and the erasure this exists to catch passes cleanly.
+#
+# The gate watches its own definition as well as the ledger: a change to HOW the check
+# runs is exactly as capable of blinding it as a change to what it checks.
+name: ledger-gate
+
+on:
+  push:
+    branches: [main]
+    paths: ["ledger/**", ".github/workflows/ledger-gate.yml"]
+  pull_request:
+    paths: ["ledger/**", ".github/workflows/ledger-gate.yml"]
+  workflow_dispatch:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # the check reads a roll out of history; give it history
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - run: uv sync --all-extras --group ledger
+
+      # The vocabulary arrives as pinned data and the pin carries a digest, so which
+      # registry serves the bytes is a transport question, not a trust one. If the
+      # bytes ever differed from what quern.lock names, `effective` would refuse them
+      # rather than quietly run a different meaning.
+      - name: Fetch the registry the lock pins against
+        run: git clone --depth 1 https://github.com/xag/quern-registry "$RUNNER_TEMP/registry"
+
+      # The base to compare against, and the reason the default is wrong here: locally
+      # the working tree holds the edit and HEAD is the last good state, but in CI the
+      # commit under judgement IS HEAD and carries the roll written beside it. Compare
+      # against HEAD and the tree is compared with itself - a gate that reports it
+      # looked, and passes whatever it is handed.
+      - name: Name the base revision
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "LEDGER_ROLL_REV=origin/${{ github.base_ref }}" >> "$GITHUB_ENV"
+          else
+            echo "LEDGER_ROLL_REV=HEAD^" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run the gate
+        env:
+          QUERN_REGISTRY: ${{ runner.temp }}/registry
+        run: uv run --no-sync --group ledger python -m ledger.check

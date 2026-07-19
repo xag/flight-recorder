@@ -30,7 +30,7 @@ dev = [
 ledger = ["quern"]
 
 [tool.uv.sources]
-quern = { git = "https://github.com/xag/quern", rev = "3233a0f" }
+quern = { git = "https://github.com/xag/quern", rev = "eb7e451" }
 
 [build-system]
 requires = ["hatchling"]

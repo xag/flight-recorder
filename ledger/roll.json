@@ -1,0 +1,154 @@
+[
+  {
+    "path": "all-runtimes-record-the-same-kinds",
+    "kind": "gate"
+  },
+  {
+    "path": "all-runtimes-same-features",
+    "kind": "gate"
+  },
+  {
+    "path": "distribution-parity-is-checked-offline",
+    "kind": "decision"
+  },
+  {
+    "path": "distribution-parity-is-checked-offline/alt-dist-drop-unshipped-runtimes",
+    "kind": "alternative"
+  },
+  {
+    "path": "distribution-parity-is-checked-offline/alt-dist-live-registry-query",
+    "kind": "alternative"
+  },
+  {
+    "path": "distribution-parity-is-checked-offline/alt-dist-trust-the-guide",
+    "kind": "alternative"
+  },
+  {
+    "path": "docs-carry-no-duplicated-tutorial",
+    "kind": "gate"
+  },
+  {
+    "path": "docs-name-no-privileged-language",
+    "kind": "gate"
+  },
+  {
+    "path": "docs-single-source",
+    "kind": "decision"
+  },
+  {
+    "path": "docs-single-source/alt-per-language-readmes",
+    "kind": "alternative"
+  },
+  {
+    "path": "docs-single-source/alt-readme-is-source-of-truth",
+    "kind": "alternative"
+  },
+  {
+    "path": "feature-parity",
+    "kind": "decision"
+  },
+  {
+    "path": "feature-parity/alt-document-gaps-honestly",
+    "kind": "alternative"
+  },
+  {
+    "path": "feature-parity/alt-lead-and-ports",
+    "kind": "alternative"
+  },
+  {
+    "path": "install-claims-match-registries",
+    "kind": "gate"
+  },
+  {
+    "path": "java-port-mechanisms",
+    "kind": "decision"
+  },
+  {
+    "path": "java-port-mechanisms/alt-java-bytecode-agent",
+    "kind": "alternative"
+  },
+  {
+    "path": "java-port-mechanisms/alt-java-explicit-context",
+    "kind": "alternative"
+  },
+  {
+    "path": "java-port-mechanisms/alt-java-jdi-tracing",
+    "kind": "alternative"
+  },
+  {
+    "path": "java-port-mechanisms/alt-java-json-dependency",
+    "kind": "alternative"
+  },
+  {
+    "path": "one-canonical-fixture-scenario",
+    "kind": "decision"
+  },
+  {
+    "path": "one-canonical-fixture-scenario/alt-canon-converge-on-the-simpler-family",
+    "kind": "alternative"
+  },
+  {
+    "path": "one-canonical-fixture-scenario/alt-canon-leave-the-families-and-correct-the-claim",
+    "kind": "alternative"
+  },
+  {
+    "path": "one-canonical-fixture-scenario/alt-canon-live-registry-of-features",
+    "kind": "alternative"
+  },
+  {
+    "path": "php-port-mechanisms",
+    "kind": "decision"
+  },
+  {
+    "path": "php-port-mechanisms/alt-php-empty-array-is-map",
+    "kind": "alternative"
+  },
+  {
+    "path": "php-port-mechanisms/alt-php-parser-dependency",
+    "kind": "alternative"
+  },
+  {
+    "path": "php-port-mechanisms/alt-php-tick-functions",
+    "kind": "alternative"
+  },
+  {
+    "path": "php-port-mechanisms/alt-php-xdebug-tracing",
+    "kind": "alternative"
+  },
+  {
+    "path": "pypi-distribution-name",
+    "kind": "decision"
+  },
+  {
+    "path": "pypi-distribution-name/alt-pypi-claim-flightrecorder",
+    "kind": "alternative"
+  },
+  {
+    "path": "pypi-distribution-name/alt-pypi-new-name",
+    "kind": "alternative"
+  },
+  {
+    "path": "pypi-distribution-name/alt-pypi-rename-import",
+    "kind": "alternative"
+  },
+  {
+    "path": "slides-count-every-runtime",
+    "kind": "gate"
+  },
+  {
+    "path": "the-deck-is-a-doc",
+    "kind": "decision"
+  },
+  {
+    "path": "the-deck-is-a-doc/alt-slides-drop-the-slide",
+    "kind": "alternative"
+  },
+  {
+    "path": "the-deck-is-a-doc/alt-slides-six-columns",
+    "kind": "alternative"
+  },
+  {
+    "path": "the-deck-is-a-doc/alt-slides-ungated",
+    "kind": "alternative"
+  }
+]

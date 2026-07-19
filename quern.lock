@@ -2,8 +2,8 @@
   "packages": [
     {
       "name": "ledger",
-      "version": "0.1.0",
-      "sha256": "422ca2c0b65f4fe0c0c9583952dc989206311a8fc6d9da5197800f257a4453d4"
+      "version": "0.2.0",
+      "sha256": "c5a5cfed72c63920e9431de6879203a68a7f25197424a9123d0437ea990af8c7"
     },
     {
       "name": "grounding",
