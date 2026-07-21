@@ -2,13 +2,13 @@
   "packages": [
     {
       "name": "ledger",
-      "version": "0.4.1",
-      "sha256": "61e481aae969a9cb0c5957b9296568de6aea467f92af387a40d6876d4c818d5e"
+      "version": "0.5.0",
+      "sha256": "3c3827b1e9b7e727c439837e33e659ca86227a902d6485f52fee71eaba33e431"
     },
     {
       "name": "grounding",
-      "version": "1.0.0",
-      "sha256": "0214f91c1094ef8d4aa0aca6d103653dbd05befdb5a312c88ab2dcb996c6ebe7"
+      "version": "1.1.0",
+      "sha256": "4229507b3a8162d815a73ba37e9f204d23c8f6c07a6698ff5620e51ba3ef402b"
     }
   ]
 }
