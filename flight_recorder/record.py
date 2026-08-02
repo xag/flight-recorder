@@ -825,11 +825,13 @@ def patch_boundary(boundary: Boundary) -> None:
             _patch(target.holder, target.attr, ChainNode(real, "", target))
     for module in boundary.clock_modules:
         _patch(module, "datetime", DatetimeShim)
-        # Only if the module actually holds the name. A boundary declares `clock_modules` to
-        # have its clock reads recorded, and most such modules import `datetime` and not
-        # `time` — patching a name that is not there would raise on a declaration that was
-        # correct before this shim existed.
-        if hasattr(module, "time"):
+        # Only if the module's `time` IS the stdlib module. Presence is not enough: TimeShim
+        # stands in for `import time`, and `from datetime import time` binds the same name to
+        # a CLASS. Patching that one by name replaced a constructor with a clock and turned
+        # `time(9)` into a TypeError — inside recording only, so the tape faithfully recorded
+        # a program the instrumentation had broken, which is the one failure a recorder must
+        # never have. Identity, not name: nothing else can tell the two apart.
+        if getattr(module, "time", None) is time:  # `time` here is the stdlib module
             _patch(module, "time", TimeShim())
     for module in boundary.random_modules:
         _patch(module, "random", RandomShim())
