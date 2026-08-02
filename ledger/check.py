@@ -1,11 +1,12 @@
 """Run the docs ledger's rules.
 
-    uv run --no-project --with "quern @ git+https://github.com/xag/quern@290ea38" python -m ledger.check
+    uv run --no-project --with "quern @ git+https://github.com/xag/quern" python -m ledger.check
 
 Out of the project environment on purpose: quern depends on this package, so inside this
 checkout the dependency is circular and uv refuses it. `--no-project` leaves the root
 package uninstalled, and nothing here needs it — the ledger imports quern and reads the
-tree from source. See the note in pyproject.toml.
+tree from source. Unpinned on purpose: quern is the checker here and not the content — the
+packages whose rules decide the verdict are pinned by digest in quern.lock. See pyproject.toml.
 
 Exit 1 while any rule is red. The gates measure the real tree at build time, so a per-language
 README that grows a walkthrough, or a runtime that ships without a guide tab, turns red here and

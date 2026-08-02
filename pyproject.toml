@@ -35,10 +35,14 @@ dev = [
 # So the check runs OUT of the project environment, where the root package is not installed and
 # there is nothing to collide with. It needs quern and nothing from this tree but the source:
 #
-#     uv run --no-project --with "quern @ git+https://github.com/xag/quern@290ea38" python -m ledger.check
+#     uv run --no-project --with "quern @ git+https://github.com/xag/quern" python -m ledger.check
 #
-# The rev is a TOOL pin, bumped when quern moves. What actually decides the verdict is pinned by
-# digest in quern.lock, which is the file to read if a rule's meaning is ever in question.
+# Deliberately UNPINNED, which is the one place in this estate that is right. quern here is the
+# checker, not the content: it evaluates rules, it does not supply them. What decides a verdict
+# is pinned by digest in quern.lock, and that is the file to read if a rule's meaning is ever in
+# question. A rev here would be a second pin governing nothing, going stale in a comment nobody
+# runs — and the failure mode of pinning the tool is a check that quietly stops matching the
+# substrate it is meant to be checked against.
 
 [build-system]
 requires = ["hatchling"]
