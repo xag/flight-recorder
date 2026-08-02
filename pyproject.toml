@@ -24,13 +24,21 @@ flight_recorder = "flight_recorder.pytest_plugin"
 dev = [
     "pytest>=8.0.0",
 ]
-# The docs ledger — the doc-architecture decision and its two rules as data a check can go
-# red on. Design-time only (never shipped in the wheel), same as everywhere in the estate.
-#     uv run --group ledger python -m ledger.check
-ledger = ["quern"]
 
-[tool.uv.sources]
-quern = { git = "https://github.com/xag/quern", rev = "57c4ae1" }
+# The ledger is NOT a dependency group, and cannot be one. quern depends on this package at
+# runtime — it records its own boundary — so in this checkout, and only in this one, the
+# dependency is circular: uv would need `xag-flight-recorder` from git and from the editable
+# root at once, and refuses two URLs for one name. That is not a packaging accident. A recorder
+# cannot record itself, any more than an eye can see itself; quern sits downstream of this
+# package and the arrow only points one way.
+#
+# So the check runs OUT of the project environment, where the root package is not installed and
+# there is nothing to collide with. It needs quern and nothing from this tree but the source:
+#
+#     uv run --no-project --with "quern @ git+https://github.com/xag/quern@290ea38" python -m ledger.check
+#
+# The rev is a TOOL pin, bumped when quern moves. What actually decides the verdict is pinned by
+# digest in quern.lock, which is the file to read if a rule's meaning is ever in question.
 
 [build-system]
 requires = ["hatchling"]
