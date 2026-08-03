@@ -98,3 +98,30 @@ def test_an_episode_id_is_stable_across_sources():
     a = episodes.mine({"x": ["a", "b"], "y": ["a", "b"]})[0]["id"]
     b = episodes.mine({"p": ["a", "b"], "q": ["a", "b"]})[0]["id"]
     assert a == b, "a judgment against an episode must name it wherever it was mined"
+
+
+def test_successors_keep_what_mining_discards():
+    """Mining keeps only what recurs, so every rare branch is thrown away by design — and the
+    rare branch is the whole object of the question "why does hardly anyone go that way"."""
+    got = episodes.successors({
+        "r1": ["open", "act", "open", "read"],
+        "r2": ["open", "act"],
+        "r3": ["open", "rare"],
+    })
+    assert got["open"] == {"act": 2, "read": 1, "rare": 1}, "one-offs survive here"
+    assert not any("rare" in e["acts"] for e in episodes.mine({
+        "r1": ["open", "act"], "r2": ["open", "act"], "r3": ["open", "rare"]})), \
+        "...and are correctly absent from the mined patterns"
+
+
+def test_an_act_nothing_follows_is_where_journeys_end():
+    """Sometimes completion, sometimes abandonment — unreadable from a tape, and worth asking
+    about precisely because people arrive and go no further."""
+    got = episodes.successors({"r1": ["open", "act"], "r2": ["open", "act"]})
+    assert "act" not in got
+
+
+def test_successors_share_the_miner_s_world():
+    """Same collapse, same noise. A caller reading both is reading one world, not two."""
+    stories = {"r1": ["hello", "open", "open", "hello", "act"]}
+    assert episodes.successors(stories, noise=frozenset({"hello"})) == {"open": {"act": 1}}

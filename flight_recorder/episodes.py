@@ -132,6 +132,36 @@ def mine(stories: Mapping[str, Sequence[str]],
     return out
 
 
+def successors(stories: Mapping[str, Sequence[str]],
+               noise: frozenset[str] = frozenset()) -> dict[str, dict[str, int]]:
+    """What follows each act, counted: `{act: {next_act: times}}`.
+
+    The primitive `mine` throws away. Mining keeps only what recurs, so anything below the
+    support threshold — every rare branch — is discarded by design, and the rare branch is
+    exactly the interesting object for two questions n-grams cannot answer.
+
+    WHERE DOES A JOURNEY END. An act with no successors is where sessions stop. Sometimes
+    that is completion and sometimes it is abandonment, and which one it is cannot be read
+    off a tape — but knowing that people arrive and go no further is what makes the question
+    worth asking.
+
+    WHAT IS THE NARROW WORLD. An act followed by exactly one thing, every time, describes a
+    place with one exit. That may be a well-designed funnel or a missing door.
+
+    Counts are OCCURRENCES, not sessions, and normalising is left to the caller: a share is
+    only meaningful once the denominator is known to be large enough, and this cannot know
+    that. Same collapse and the same `noise` as `mine`, so a caller reading both is reading
+    one world rather than two.
+    """
+    out: dict[str, dict[str, int]] = {}
+    for acts in stories.values():
+        seq = collapse([a for a in acts if a not in noise])
+        for a, b in zip(seq, seq[1:]):
+            tally = out.setdefault(a, {})
+            tally[b] = tally.get(b, 0) + 1
+    return out
+
+
 def merge(scripted: list[dict], live: list[dict]) -> list[dict]:
     """One deck from two sources, the live one on top.
 
