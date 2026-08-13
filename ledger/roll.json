@@ -100,6 +100,21 @@
     "digest": "0789f7b9e25a"
   },
   {
+    "path": "mining-is-pre-semantic",
+    "kind": "decision",
+    "digest": "7f8f146e7c27"
+  },
+  {
+    "path": "mining-is-pre-semantic/alt-frequency-stopwords",
+    "kind": "alternative",
+    "digest": "fd17dda12cc7"
+  },
+  {
+    "path": "mining-is-pre-semantic/alt-mine-the-sem-spans",
+    "kind": "alternative",
+    "digest": "d0968f26dca5"
+  },
+  {
     "path": "one-canonical-fixture-scenario",
     "kind": "decision",
     "digest": "f7370dd8072d"
@@ -170,6 +185,31 @@
     "digest": "f76ff6c5f5de"
   },
   {
+    "path": "successors-keep-what-mining-throws-away",
+    "kind": "decision",
+    "digest": "c3aa7ff28115"
+  },
+  {
+    "path": "successors-keep-what-mining-throws-away/alt-normalise-in-the-library",
+    "kind": "alternative",
+    "digest": "f538fb398a80"
+  },
+  {
+    "path": "testimony-is-not-evidence",
+    "kind": "decision",
+    "digest": "ead55f9e60f8"
+  },
+  {
+    "path": "testimony-is-not-evidence/alt-parent-pointers",
+    "kind": "alternative",
+    "digest": "6123e3d693c5"
+  },
+  {
+    "path": "testimony-is-not-evidence/alt-recorder-validates-claims",
+    "kind": "alternative",
+    "digest": "17538da9efdb"
+  },
+  {
     "path": "the-deck-is-a-doc",
     "kind": "decision",
     "digest": "694a5c873e67"
@@ -188,5 +228,25 @@
     "path": "the-deck-is-a-doc/alt-slides-ungated",
     "kind": "alternative",
     "digest": "2b005c8774b9"
+  },
+  {
+    "path": "the-recorders-next-value-is-reading",
+    "kind": "hypothesis",
+    "digest": "043378708270"
+  },
+  {
+    "path": "the-recorders-next-value-is-reading/reading-goes-unconsumed",
+    "kind": "falsification",
+    "digest": "cb65e327d529"
+  },
+  {
+    "path": "the-target-size-check-cries-wolf",
+    "kind": "debt",
+    "digest": "5d5a85e4483f"
+  },
+  {
+    "path": "the-target-size-check-cries-wolf/implement-the-spacing-exception",
+    "kind": "discharge",
+    "digest": "11405b232159"
   }
 ]

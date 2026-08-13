@@ -14,15 +14,7 @@ The full walkthrough — declare the boundary, record, replay, edit the tape to 
 
 ## What a pile of tapes says that one tape cannot
 
-A tape is one execution. A directory of them is a record of how the software is actually used — and `flight_recorder.episodes` reads that: the recurring **act-sequences**, mined from each tape's call envelopes.
-
-```python
-from flight_recorder.episodes import story, mine
-
-stories = {p.name: story(p.read_text().splitlines()) for p in tapes}
-for e in mine(stories, noise=frozenset({"authenticate"})):
-    print(e["support"], "×", " → ".join(e["acts"]))
-```
+A tape is one execution. A directory of them is a record of how the software is actually used — and `flight_recorder.episodes` reads that: the recurring **act-sequences**, mined from each tape's call envelopes. Turn each tape into a story with `story()`, hand the stories to `mine()` with the acts you know to be plumbing as `noise`, and each episode comes back as its acts with the number of tapes that walked them; `successors()` reads the same stories for the branches mining throws away. The module's own docstrings are the walkthrough until the guide grows its episodes chapter.
 
 Counting what each call touched answers *what did this do*; it destroys the order, which is usually the part worth having. `open → act → open → read` is a conversation; `{open: 2, act: 1, read: 1}` is not. Deliberately pre-semantic — it reads each envelope's `fn` and nothing else, no spans and no model — because a workflow is visible before anyone has drawn a model of it, and a mined workflow is often what reveals a model missing an act.
 

@@ -76,7 +76,10 @@ def build() -> Quern:
                            _PYPI_NAME_DECISION, _PHP_DECISION,
                            _DISTRIBUTION_DECISION, _install_claims_match_reality(),
                            _SLIDES_DECISION, _slides_name_every_runtime(),
-                           _CANONICAL_DECISION, _fixture_parity()]
+                           _CANONICAL_DECISION, _fixture_parity(),
+                           _TESTIMONY_DECISION, _MINING_DECISION,
+                           _SUCCESSORS_DECISION, _READER_HYPOTHESIS,
+                           _TARGET_SIZE_DEBT]
     return quern
 
 
@@ -939,5 +942,199 @@ _SLIDES_DECISION = Node(
                       "This is what was already in place, and it is exactly how the deck got a "
                       "week out of date. The wording is fixed either way; the gate is what makes "
                       "the fix hold when the seventh runtime lands and the author is in a hurry."}),
+    ],
+)
+
+
+# --- the semantic turn ------------------------------------------------------------------
+# Everything above this line is the ports era: parity, distribution, docs governance. The
+# entries below journal the direction all 2026-08 work actually took — the recorder as a
+# reader of tapes, not only a writer of them — which shipped without a single entry here
+# (issue #46). Journaled 2026-08-13.
+
+_TESTIMONY_DECISION = Node(
+    id="testimony-is-not-evidence",
+    kind="decision",
+    name="A sem event is the app's own claim and the recorder judges it never: boundary "
+         "events are evidence, spans are testimony, and both go on one tape in order so a "
+         "reader can hold them against each other",
+    payload={
+        "rationale":
+            "Every other event kind records what the world answered; a sem event records "
+            "what the app SAID it was doing, in its own free-text vocabulary, in-stream "
+            "beside the raw events it encloses. The recorder writes both down and judges "
+            "neither — whether a claim is licensed by the evidence beneath it is a "
+            "reader's question, and it has teeth only because both are on the same tape in "
+            "order. Order IS the meaning: enclosure derives from sequence, spans are "
+            "well-nested and call-scoped, and a recorder that cannot guarantee nesting "
+            "must not emit sem at all. Replay never feeds a sem event back; changed "
+            "testimony is its own divergence signal, distinct from boundary divergence "
+            "and from an invariant violation.",
+        "consequence":
+            "The spec's frozen sem section is the hook the estate's verification story "
+            "hangs on: epure's licensing and totality checks, and the tape store's "
+            "alphabet-bound traces, both consume exactly this shape. The recorder stays "
+            "the sensory system; judgment lives upstream.",
+    },
+    children=[
+        Node(id="alt-parent-pointers", kind="alternative",
+             name="Give sem events explicit parent ids instead of deriving enclosure "
+                  "from order",
+             payload={"why":
+                      "Structure that can contradict the sequence is a second source of "
+                      "truth: a pointer can claim an enclosure the order refutes, and "
+                      "every reader must then decide which to believe. Deriving from "
+                      "order makes a malformed tape detectable instead of ambiguous."}),
+        Node(id="alt-recorder-validates-claims", kind="alternative",
+             name="Have the recorder refuse a span whose enclosed events do not support "
+                  "its name",
+             payload={"why":
+                      "Requires the recorder to understand every app's vocabulary, which "
+                      "ends the domain-blindness that lets six runtimes share one frozen "
+                      "spec — and a claim rejected at write time is lost testimony, where "
+                      "a false claim kept on tape is exactly what a reader can catch."}),
+    ],
+)
+
+
+_MINING_DECISION = Node(
+    id="mining-is-pre-semantic",
+    kind="decision",
+    name="Episode mining reads each envelope's fn and nothing else — no spans, no model, "
+         "no vocabulary — because a workflow is visible before anybody has drawn a model "
+         "of it",
+    payload={
+        "rationale":
+            "A tape is a sequence of call envelopes each naming its act; counting events "
+            "per act answers 'what did this call touch' and destroys the order, which is "
+            "the part a reader wants — open, act, open, read is a conversation, a "
+            "histogram is not. Mining stays below the sem layer on purpose: a mined "
+            "workflow is often what reveals a model is missing an act, so it must not "
+            "require the model to exist first. Three shaping rules, each a bug before it "
+            "was a rule: collapse consecutive repeats (twelve ticks are one act of "
+            "ticking); stopwords are named by the caller, never inferred (which acts are "
+            "plumbing is a fact about an application, not a statistic — in the first live "
+            "run a session handshake was 35 of 40 mined lines); scripted and live tapes "
+            "merge so rehearsal stays distinguishable from performance.",
+        "consequence":
+            "episodes.py imports json and typing and nothing else, so any consumer of "
+            "tapes can mine without adopting the semantic layer. chores' spec sheet is "
+            "the first live consumer.",
+    },
+    children=[
+        Node(id="alt-mine-the-sem-spans", kind="alternative",
+             name="Mine over semantic span names instead of call envelopes",
+             payload={"why":
+                      "Only works for apps that already testify, which inverts the "
+                      "discovery order: the mined ritual is how you learn what the "
+                      "vocabulary should contain. The sem layer is a later, richer view, "
+                      "not the entry ticket."}),
+        Node(id="alt-frequency-stopwords", kind="alternative",
+             name="Drop high-frequency acts automatically instead of asking the caller",
+             payload={"why":
+                      "A threshold that eats the handshake also eats the tick loop that "
+                      "IS the application's heartbeat. Plumbing is domain knowledge; a "
+                      "statistic guessing at it fails silently in both directions."}),
+    ],
+)
+
+
+_SUCCESSORS_DECISION = Node(
+    id="successors-keep-what-mining-throws-away",
+    kind="decision",
+    name="Successor analysis answers the two questions n-grams cannot — where journeys "
+         "end, and which worlds are narrow — and leaves normalising to the caller",
+    links={"rests_on": ["mining-is-pre-semantic"]},
+    payload={
+        "rationale":
+            "mine keeps only what recurs, so every rare branch is discarded by "
+            "construction — right for rituals, useless for terminal acts (where sessions "
+            "stop: completion or abandonment, and a tape cannot say which) and for "
+            "single-successor acts (one exit, every time: a well-made funnel or a missing "
+            "door). Counts stay occurrences, not shares, because a share means something "
+            "only once the denominator is known to be big enough, and a library cannot "
+            "know that. Same collapse, same caller-named noise as mine, so a reader of "
+            "both reads one world.",
+        "consequence":
+            "The pair covers the tape from both sides: what recurs and what the "
+            "recurrence filter was built to lose.",
+    },
+    children=[
+        Node(id="alt-normalise-in-the-library", kind="alternative",
+             name="Return successor shares instead of raw counts",
+             payload={"why":
+                      "Three occurrences out of three reads as 100% with the same "
+                      "confidence as three hundred out of three hundred; only the caller "
+                      "knows whether the denominator carries any weight at all."}),
+    ],
+)
+
+
+_READER_HYPOTHESIS = Node(
+    id="the-recorders-next-value-is-reading",
+    kind="hypothesis",
+    name="The recorder's next value is reading fleets of tapes — episodes, successors, "
+         "session invariants, design invariants — not more runtimes writing them",
+    links={"rests_on": ["testimony-is-not-evidence"]},
+    payload={
+        "held_because":
+            "Six runtimes at parity closed the breadth question; every 2026-08 commit is "
+            "a reading capability. Session invariants already judge claims no single tape "
+            "can carry (no retry after failure, no tool bounce, no wasted repeats — with "
+            "failed= a caller-supplied predicate, because what failure means is the "
+            "app's fact); design invariants read a render tape for contrast and target "
+            "sizes; mining reads the raw envelopes. The bet is that fleets of recorded "
+            "apps now need their tapes READ more than new languages need recorders.",
+        "consequence_if_wrong":
+            "The reading modules become a side gallery and the roadmap returns to ports "
+            "(Rust and Ruby are filed and waiting, #40 #39). Nothing is torn out — "
+            "recording keeps its value either way.",
+    },
+    children=[
+        Node(id="reading-goes-unconsumed", kind="falsification",
+             payload={
+                 "claim": "Two release cycles after Successors, chores' spec sheet is "
+                          "still the only consumer of any reading capability — no second "
+                          "app mines, no fleet-level reader ships (dev-tools#28 open), "
+                          "and no session-invariant verdict has influenced a decision "
+                          "anywhere in the estate.",
+                 "cadence": "at each flight-recorder release, and at any fleet review",
+             }),
+    ],
+)
+
+
+_TARGET_SIZE_DEBT = Node(
+    id="the-target-size-check-cries-wolf",
+    kind="debt",
+    name="The target-size design invariant omits WCAG's spacing exception, so every "
+         "isolated small target reads as a violation — a checker that overclaims teaches "
+         "readers to ignore it",
+    params={
+        "false_positives": Quantity(
+            value=0, unit="finding", provenance="asserted", grounded=False,
+            source="issue #21: isolated small targets pass WCAG 2.5.8 via the spacing "
+                   "exception and this check flags them anyway; how many real findings "
+                   "are spurious is uncounted, and grounding this means counting them "
+                   "on a real app's render tape after the exception is implemented"),
+    },
+    payload={
+        "note":
+            "Carried since 2026-07-12 and worth carrying loudly: a design invariant that "
+            "cries wolf converts red from a signal into a texture, which is the exact "
+            "failure the ledger's own gates exist to prevent. First debt in this ledger — "
+            "its previous shape (decisions and gates only, nothing owed, nothing "
+            "falsifiable) described a finished project, and this project is not "
+            "finished.",
+    },
+    children=[
+        Node(id="implement-the-spacing-exception", kind="discharge",
+             payload={
+                 "condition":
+                     "Implement WCAG 2.5.8's spacing exception per #21 (a small target "
+                     "with enough clear space around it passes), re-run the design "
+                     "invariants over a real app's render tape, and ground "
+                     "false_positives with the before/after count.",
+             }),
     ],
 )
