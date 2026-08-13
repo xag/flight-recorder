@@ -45,7 +45,15 @@ jobs:
         with:
           python-version: "3.13"
 
-      - run: uv sync --all-extras --group ledger
+      # No `uv sync --group ledger`: this project deliberately has no ledger group and
+      # cannot have one — quern depends on this package at runtime, so in this checkout
+      # alone the dependency is circular and uv refuses two URLs for one name (see
+      # pyproject.toml's note, and quern's `the-recorder-is-upstream-and-the-circle-is-
+      # not-closed`). The step below is the invocation that comment documents: run OUT
+      # of the project environment, where the root package is not installed and there is
+      # nothing to collide with. The gate had been failing at `uv sync` since that
+      # decision landed on 2026-08-02 — it never reached the check, so the ledger it
+      # guards went unjudged by any machine while the workflow reported it had looked.
 
       # The vocabulary arrives as pinned data and the pin carries a digest, so which
       # registry serves the bytes is a transport question, not a trust one. If the
@@ -70,4 +78,6 @@ jobs:
       - name: Run the gate
         env:
           QUERN_REGISTRY: ${{ runner.temp }}/registry
-        run: uv run --no-sync --group ledger python -m ledger.check
+        run: >
+          uv run --no-project --with "quern @ git+https://github.com/xag/quern"
+          python -m ledger.check
