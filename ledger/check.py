@@ -19,7 +19,7 @@ import os
 import sys
 from pathlib import Path
 
-from quern import get_node, run_rules
+from quern import expectations, get_node, reckon, run_rules
 from quern.roll import audit, write
 
 from .tree import build
@@ -39,7 +39,13 @@ _REV = os.environ.get("LEDGER_ROLL_REV", "HEAD")
 def main() -> int:
     tree = build()
     results = run_rules(tree)
-    red = [r for r in results if not r.ok]
+    # NOT `any red`. Gating on red means a ledger cannot carry a deliberate red
+    # without going permanently dark, and a check that never passes says nothing when
+    # it fails (quern#42). news = red nobody accounted for; carried = red a node
+    # declares it expects, by rule name, in meta['expected:<rule>']; stale = an
+    # expectation whose red has gone, which must be withdrawn rather than left
+    # standing as a licence nobody revisits.
+    news, carried, stale = reckon(tree, results)
     # A tombstone with no `was` excuses nothing - the right way round, because
     # forgetting it leaves the check red, never green.
     excused = {n.payload["was"] for _, n in tree.walk("")
@@ -48,7 +54,9 @@ def main() -> int:
 
     # ASCII only: cp1252 consoles mangle anything prettier.
     for r in sorted(results, key=lambda r: (r.ok, r.rule, r.node)):
-        mark = "ok  " if r.ok else "RED "
+        mark = ("ok  " if r.ok else
+                "red*" if (r.node, r.rule) in {(c.node, c.rule) for c in carried}
+                else "RED ")
         at = f" @ {r.node}" if r.node else ""
         detail = f" - {r.detail}" if r.detail else ""
         print(f"{mark}{r.rule}{at}{detail}")
@@ -69,18 +77,35 @@ def main() -> int:
     # launder the very thing the check just caught.
     if not removals:
         write(tree, _ROOT / _ROLL)
-    if not red and not removals:
-        print(f"{len(results)} rule(s), all green; roll written.")
+    # Carried reds are reported on a PASSING run too: going quiet about a debt the
+    # moment it is accounted for would trade one silence for another.
+    if carried:
+        print(f"{len(carried)} red carried on purpose, of {len(results)} rule(s):")
+        for r in carried:
+            node = get_node(tree, r.node) if r.node else None
+            print(f"  red* {r.node or r.rule}: "
+                  f"{(expectations(node).get(r.rule) if node else '') or ''}")
+        print()
+
+    if not news and not stale and not removals:
+        print(f"{len(results)} rule(s), nothing unaccounted for; roll written.")
         return 0
-    if red:
-        print(f"{len(red)} of {len(results)} rule(s) RED.")
+    if news:
+        print(f"{len(news)} of {len(results)} rule(s) RED and unaccounted for.")
+    if stale:
+        print(f"{len(stale)} expectation(s) outlived the red they excused.")
     if removals:
         print(f"{len(removals)} entr(y/ies) left the record without saying so.")
-    for r in red:
+    for r in news:
         node = get_node(tree, r.node) if r.node else None
         why = (node.payload.get("note") if node else None) or r.detail or ""
         print(f"  {r.node or r.rule}: {why}")
     print("Discharge a red node by doing the work it names - never by editing the ledger.")
+    for line in stale:
+        print(f"  {line}")
+    print("If a red is intended, say so where it is red: the node's")
+    print("meta['expected:<rule>'] = '<why>'. It is refused once "
+          "that rule goes green.")
     return 1
 
 
