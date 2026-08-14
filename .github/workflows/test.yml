@@ -38,7 +38,20 @@ jobs:
       # quern.lock pins both packages by sha256, so the clone cannot smuggle in different rules.
       - name: Fetch the quern registry
         run: git clone --depth 1 https://github.com/xag/quern-registry "$RUNNER_TEMP/quern-registry"
-      - run: uv run --group ledger python -m ledger.check
+      # NOT `--group ledger`: this project deliberately has no such group and cannot
+      # have one. quern depends on this package at runtime, so in this checkout alone the
+      # dependency is circular and uv refuses two URLs for one name (see pyproject.toml's
+      # note). This is the invocation that comment documents - run OUT of the project
+      # environment, where the root package is not installed and nothing collides, with
+      # quern unpinned because here it is the checker and not the content.
+      #
+      # ledger-gate.yml carried the identical broken line and was fixed on its own in
+      # d320962; this copy was not, and went on failing for eleven more days. Two
+      # workflows running the same command is two places to fix it, and the second is
+      # the one nobody looks at - the same shape as the pin written in three files.
+      - run: >
+          uv run --no-project --with "quern @ git+https://github.com/xag/quern"
+          python -m ledger.check
         env:
           QUERN_REGISTRY: ${{ runner.temp }}/quern-registry
 
