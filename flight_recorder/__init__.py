@@ -26,7 +26,7 @@ from flight_recorder.boundary import (
 from flight_recorder.record import (
     ChainNode, DatetimeShim, ForbiddenValue, Gate, RandomShim, SessionSink, TimeShim,
     FORMAT_VERSION,
-    declare, hook, install, install_mcp, note, session_path, span, uninstall,
+    clock_at, declare, hook, install, install_mcp, note, session_path, span, uninstall,
 )
 from flight_recorder.replay import (
     Feed, PlaybackChain, ProbeUnanswerable, ReplayAdapter, ReplayDivergence,

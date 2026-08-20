@@ -59,3 +59,38 @@ def test_a_module_with_no_time_at_all_is_left_alone():
     module.datetime = datetime  # a clock module reads the clock somehow; this one only here
     patch_boundary(fr.Boundary(clock_modules=[module]))
     assert not hasattr(module, "time")
+
+
+def test_a_pinned_clock_answers_the_pin_and_records_it_as_now():
+    """`clock_at` makes a recorded now() answer the pinned instant - in the asked timezone -
+    and the tape carries that answer as its `now` event, exactly as if the machine's clock
+    had said so. The pin is lifted on exit, nested or not."""
+    from datetime import timedelta, timezone
+
+    from flight_recorder.record import DatetimeShim, _active, hook
+
+    at = datetime(2026, 8, 16, 8, 0, tzinfo=timezone.utc)
+    buf: list = []
+    hook.mode = "record"
+    token = _active.set(buf)
+    try:
+        with fr.clock_at(at):
+            assert DatetimeShim.now(timezone.utc) == at
+            assert DatetimeShim.now(timezone(timedelta(hours=2))).hour == 10
+            with fr.clock_at(at + timedelta(days=1)):
+                assert DatetimeShim.now(timezone.utc).day == 17
+            assert DatetimeShim.now(timezone.utc) == at
+        assert hook.pinned_now is None
+        assert abs((DatetimeShim.now(timezone.utc) - datetime.now(timezone.utc)).total_seconds()) < 5
+    finally:
+        hook.mode = "off"
+        _active.reset(token)
+    nows = [e for e in buf if e.get("k") == "now"]
+    assert len(nows) == 5
+    assert nows[0]["v"] == at.isoformat()
+
+
+def test_a_pin_is_a_datetime():
+    with pytest.raises(TypeError):
+        with fr.clock_at("2026-08-16"):  # type: ignore[arg-type]
+            pass

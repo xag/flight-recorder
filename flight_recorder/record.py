@@ -25,6 +25,7 @@ import random as _random
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
@@ -107,6 +108,9 @@ class _Hook:
     # fed back — it is testimony, and replay serves evidence — so the replayed code makes its
     # claims afresh and they are captured here, to be compared with the recorded ones.
     sems: Any = None    # a _SemCapture during replay, None otherwise
+    # The harness's clock pin (see `clock_at`): while set, a recorded now() answers this
+    # instant instead of the machine's. Recording only; replay serves the tape's `now`.
+    pinned_now: Optional[datetime] = None
 
 
 hook = _Hook()
@@ -321,10 +325,37 @@ class DatetimeShim(metaclass=_DatetimeShimMeta):
         if hook.mode == "replay":
             ev = hook.feed.pop_expect("now")
             return datetime.fromisoformat(ev["v"])
-        v = datetime.now(tz)
+        if hook.pinned_now is not None:
+            v = hook.pinned_now.astimezone(tz) if tz is not None else hook.pinned_now
+        else:
+            v = datetime.now(tz)
         if hook.mode == "record":
             _emit({"k": "now", "v": v.isoformat()})
         return v
+
+
+@contextmanager
+def clock_at(instant: datetime):
+    """Record with the clock pinned at `instant`: every now() the boundary's clock modules
+    read inside the block answers it, and the tape records that answer as its `now` event -
+    faithfully, since that IS what the code was told the time was.
+
+    For the harness that drives a simulated week - ticks taking their moment as an argument
+    - and then reads a board that asks the clock itself: without the pin the board is read
+    on the machine's day, days after the week it is meant to show, and a model holding the
+    board's statement to the simulated day convicts a disagreement the harness created.
+    The pin is a recording affordance, not a tape feature: replay never consults it, and a
+    tape recorded under it is indistinguishable from one recorded at that instant. Nested
+    pins restore the outer one on exit. An aware instant is expected; a naive one is taken
+    as-is and answers naive."""
+    if not isinstance(instant, datetime):
+        raise TypeError(f"clock_at pins a datetime, not {type(instant).__name__}")
+    outer = hook.pinned_now
+    hook.pinned_now = instant
+    try:
+        yield
+    finally:
+        hook.pinned_now = outer
 
 
 class RandomShim:
