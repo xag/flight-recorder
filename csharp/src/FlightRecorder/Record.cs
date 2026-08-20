@@ -470,10 +470,46 @@ namespace FlightRecorder
 
         private static CallBuffer? SemSink() => Hook.Mode == Mode.Replay ? Hook.Sems : Active.Value;
 
+        // The app's own alphabet, if it chose to state one. Declare() installs it; from then on a
+        // span or note whose name is not in it, or that lacks an argument the declaration names,
+        // is refused AT THE CALL - but only while a tape is being written or replayed. Off, the
+        // check does not run: this code sits on production paths and the contract there is no
+        // failure modes. The recorder learns no vocabulary from this; the table is the app's.
+        private static Dictionary<string, string[]>? _declared;
+
+        /// <summary>Install the app's table of acts - name to {"args": [...]} - the same table a
+        /// model generates its declarations from, so Span/Note refuse, while recording, a name
+        /// the app never declared or an emission missing a declared argument. Null withdraws it.</summary>
+        public static void Declare(IDictionary<string, object?>? acts)
+        {
+            if (acts == null) { _declared = null; return; }
+            var d = new Dictionary<string, string[]>();
+            foreach (var kv in acts)
+            {
+                var args = new List<string>();
+                if (kv.Value is IDictionary<string, object?> spec && spec.TryGetValue("args", out var a) && a is IEnumerable<object?> list)
+                    foreach (var x in list) if (x != null) args.Add(x.ToString()!);
+                d[kv.Key] = args.ToArray();
+            }
+            _declared = d;
+        }
+
+        private static void Admit(string name, object? data)
+        {
+            if (_declared == null) return;
+            if (!_declared.TryGetValue(name, out var args))
+                throw new InvalidOperationException($"'{name}' is not an act this app declared (Declare); declared: {string.Join(", ", _declared.Keys.OrderBy(k => k))}");
+            var present = Serial.ToJsonable(data) as IDictionary<string, object?>;
+            var missing = args.Where(a => present == null || !present.ContainsKey(a)).ToList();
+            if (missing.Count > 0)
+                throw new InvalidOperationException($"act '{name}' testifies with [{string.Join(", ", args)}]; this emission lacks [{string.Join(", ", missing)}]");
+        }
+
         private static int? EmitSem(string name, string phase, object? data, int? sid, string? outcome)
         {
             var sink = SemSink();
             if (sink == null) return null;
+            if (phase != "end") Admit(name, data);
             if (sid == null) sid = ++sink.Sid;
             var ev = new Dictionary<string, object?> { ["k"] = "sem", ["name"] = name, ["phase"] = phase, ["sid"] = (long)sid.Value };
             if (outcome != null) ev["outcome"] = outcome;

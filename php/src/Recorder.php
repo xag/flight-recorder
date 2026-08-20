@@ -486,6 +486,58 @@ final class Recorder
     // --- semantic events: the app's own testimony ---------------------------------------
 
     /**
+     * The app's own alphabet, if it chose to state one: name => ['args' => [...]]. Installed by
+     * declare(); from then on a span or note whose name is not in it, or that lacks an argument
+     * the declaration names, is refused AT THE CALL - but only while a tape is being written or
+     * replayed. Off, the check does not run: this code sits on production paths and the contract
+     * there is no failure modes. The recorder learns no vocabulary; the table is the app's.
+     *
+     * @var array<string, list<string>>|null
+     */
+    private static ?array $declared = null;
+
+    /**
+     * Install the app's table of acts - the same table a model generates its declarations from -
+     * so span()/note() refuse, while recording, a name the app never declared or an emission
+     * missing a declared argument. null withdraws it.
+     *
+     * @param array<string, array<string, mixed>>|null $acts
+     */
+    public static function declare(?array $acts): void
+    {
+        if ($acts === null) {
+            self::$declared = null;
+            return;
+        }
+        $d = [];
+        foreach ($acts as $name => $spec) {
+            $args = [];
+            foreach ((array) ($spec['args'] ?? []) as $a) {
+                $args[] = (string) $a;
+            }
+            $d[(string) $name] = $args;
+        }
+        self::$declared = $d;
+    }
+
+    /** @param array<string, mixed> $data */
+    private static function admit(string $name, array $data): void
+    {
+        if (self::$declared === null) {
+            return;
+        }
+        if (!array_key_exists($name, self::$declared)) {
+            $names = array_keys(self::$declared);
+            sort($names);
+            throw new \LogicException("'$name' is not an act this app declared (declare); declared: " . implode(', ', $names));
+        }
+        $missing = array_values(array_filter(self::$declared[$name], fn ($a) => !array_key_exists($a, $data)));
+        if ($missing !== []) {
+            throw new \LogicException("act '$name' testifies with [" . implode(', ', self::$declared[$name]) . "]; this emission lacks [" . implode(', ', $missing) . "]");
+        }
+    }
+
+    /**
      * Mark a moment in the app's own vocabulary.
      *
      * Testimony, never evidence: nothing interprets `$name`, and replay never feeds one back.
@@ -494,14 +546,15 @@ final class Recorder
      */
     public static function note(string $name, array $data = []): void
     {
+        if (self::$feed === null && self::$call === null) {
+            return;
+        }
+        self::admit($name, $data);
         if (self::$feed !== null) {
             self::$feed->note($name);
             return;
         }
         $call = self::$call;
-        if ($call === null) {
-            return;
-        }
         $ev = ['k' => 'sem', 'name' => $name, 'phase' => 'point', 'sid' => $call->nextSid()];
         if ($data !== []) {
             $ev['data'] = self::semData($data);
@@ -524,13 +577,14 @@ final class Recorder
      */
     public static function span(string $name, array $data, callable $body): mixed
     {
+        if (self::$feed === null && self::$call === null) {
+            return $body();
+        }
+        self::admit($name, $data);
         if (self::$feed !== null) {
             return self::$feed->span($name, $body);
         }
         $call = self::$call;
-        if ($call === null) {
-            return $body();
-        }
         $sid = $call->nextSid();
         $begin = ['k' => 'sem', 'name' => $name, 'phase' => 'begin', 'sid' => $sid];
         if ($data !== []) {

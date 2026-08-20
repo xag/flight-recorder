@@ -165,4 +165,42 @@ final class SemTest extends TestCase
         self::assertStringContainsString('register  ERROR  (2 fx)', $render);
         self::assertStringContainsString('- corpus_read  found=true', $render);
     }
+
+    /** The app's own alphabet, held at the call - while recording, never when off. */
+    public function testADeclaredAlphabetRefusesAnUndeclaredActWhileRecording(): void
+    {
+        try {
+            Recorder::declare(['only-this' => []]);
+            Recorder::note('anything_at_all', ['n' => 1]);   // off: no throw, no failure mode
+
+            $b = Toy::semBoundary();
+            $all = ['enrol' => ['args' => ['user']], 'load_corpus' => [], 'corpus_read' => [],
+                    'register' => [], 'registration_failed' => []];
+            Recorder::declare($all);
+            $rec = Recorder::open($this->tempDir(), $b);
+            $rec->call('enrol', self::KWARGS, static fn (): array => Toy::enrol(self::KWARGS));
+            self::assertSame('enrol', Recording::load($rec->path())->call(0)->spans()->children[0]->name);
+
+            Recorder::declare(['enrol' => []]);
+            $rec = Recorder::open($this->tempDir(), $b);
+            try {
+                $rec->call('enrol', self::KWARGS, static fn (): array => Toy::enrol(self::KWARGS));
+                self::fail('an undeclared act was written');
+            } catch (\LogicException $e) {
+                self::assertStringContainsString("'load_corpus' is not an act this app declared", $e->getMessage());
+            }
+
+            $all['enrol'] = ['args' => ['user', 'tenant']];
+            Recorder::declare($all);
+            $rec = Recorder::open($this->tempDir(), $b);
+            try {
+                $rec->call('enrol', self::KWARGS, static fn (): array => Toy::enrol(self::KWARGS));
+                self::fail('an under-bound act was written');
+            } catch (\LogicException $e) {
+                self::assertStringContainsString('lacks [tenant]', $e->getMessage());
+            }
+        } finally {
+            Recorder::declare(null);
+        }
+    }
 }

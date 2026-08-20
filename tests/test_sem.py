@@ -203,3 +203,41 @@ def test_the_tripwire_names_the_event_kind_and_never_the_secret(tmp_path):
         assert "'sem'" in str(e.value), "the message should name the event kind that carried it"
 
     record(tmp_path, run, forbid=[r"\bT{64}\b"])
+
+
+# --- the app's own alphabet, held at the call ------------------------------------------
+
+def test_a_declared_alphabet_refuses_an_undeclared_act_while_recording(tmp_path):
+    """The app states its acts once (`declare`), the same table a model generates its
+    declarations from; a span the table does not know is refused where it is written — but
+    only while a tape is being made, because production keeps the no-failure-modes contract.
+    The recorder learns no vocabulary: the list is the app's own word, held to."""
+    fr.declare({"enrol": {"args": []}, "load_corpus": {}, "corpus_read": {},
+                "register": {}, "registration_failed": {}})
+    try:
+        session = record(tmp_path, lambda: asyncio.run(
+            toy_tools.enrol("t@example.com", password="x")))
+        assert [e["name"] for e in sems(session)][0] == "enrol"   # declared: written
+
+        fr.declare({"enrol": {}})
+        with pytest.raises(ValueError, match="'load_corpus' is not an act this app declared"):
+            record(tmp_path, lambda: asyncio.run(
+                toy_tools.enrol("t@example.com", password="x")))
+
+        fr.declare({"enrol": {"args": ["email", "tenant"]}, "load_corpus": {},
+                    "corpus_read": {}, "register": {}, "registration_failed": {}})
+        with pytest.raises(ValueError, match="lacks \['tenant'\]"):
+            record(tmp_path, lambda: asyncio.run(
+                toy_tools.enrol("t@example.com", password="x")))
+    finally:
+        fr.declare(None)
+
+
+def test_the_alphabet_is_not_checked_when_nothing_records():
+    fr.declare({"only-this": {}})
+    try:
+        fr.note("anything_at_all", n=1)          # off: no raise, no failure mode
+        with fr.span("anything_else"):
+            pass
+    finally:
+        fr.declare(None)

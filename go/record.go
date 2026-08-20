@@ -28,6 +28,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
@@ -524,12 +525,69 @@ func Exec(ctx context.Context, op, sig string, args []any, run func() error) err
 	return nil
 }
 
+// The app's own alphabet, if it chose to state one. Declare installs it; from then on a span or
+// note whose name is not in it, or that lacks an argument the declaration names, is refused AT
+// THE CALL (a panic, the way any misuse of a recording API is) - but only while a tape is being
+// written or replayed. Off, the check does not run: this code sits on production paths and the
+// contract there is no failure modes. The recorder learns no vocabulary; the table is the app's.
+var declaredActs map[string][]string
+
+// Declare installs the app's table of acts - name to {"args": [...]} - the same table a model
+// generates its declarations from, so Span/Note refuse, while recording, a name the app never
+// declared or an emission missing a declared argument. nil withdraws it.
+func Declare(acts map[string]map[string]any) {
+	if acts == nil {
+		declaredActs = nil
+		return
+	}
+	declaredActs = map[string][]string{}
+	for name, spec := range acts {
+		var args []string
+		if raw, ok := spec["args"]; ok {
+			switch v := raw.(type) {
+			case []string:
+				args = append(args, v...)
+			case []any:
+				for _, x := range v {
+					args = append(args, fmt.Sprint(x))
+				}
+			}
+		}
+		declaredActs[name] = args
+	}
+}
+
+func admit(name string, data map[string]any) {
+	if declaredActs == nil {
+		return
+	}
+	args, ok := declaredActs[name]
+	if !ok {
+		names := make([]string, 0, len(declaredActs))
+		for n := range declaredActs {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		panic(fmt.Sprintf("flight-recorder: '%s' is not an act this app declared (Declare); declared: %v", name, names))
+	}
+	var missing []string
+	for _, arg := range args {
+		if _, present := data[arg]; !present {
+			missing = append(missing, arg)
+		}
+	}
+	if len(missing) > 0 {
+		panic(fmt.Sprintf("flight-recorder: act '%s' testifies with %v; this emission lacks %v", name, args, missing))
+	}
+}
+
 // Note records that something meaningful happened at a point, in the app's own vocabulary.
 func Note(ctx context.Context, name string, data map[string]any) {
 	a := ambientFrom(ctx)
 	if a == nil {
 		return
 	}
+	admit(name, data)
 	if a.replay != nil {
 		a.replay.note(name)
 		return
@@ -551,6 +609,7 @@ func Span(ctx context.Context, name string, data map[string]any,
 	if a == nil {
 		return body(ctx)
 	}
+	admit(name, data)
 	if a.replay != nil {
 		return a.replay.span(ctx, name, body)
 	}

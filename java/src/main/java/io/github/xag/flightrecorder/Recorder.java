@@ -622,10 +622,50 @@ public final class Recorder implements AutoCloseable {
 
     // ------------------------------------------------------- semantic spans
 
+    // The app's own alphabet, if it chose to state one. declare() installs it; from then on a
+    // span or note whose name is not in it, or that lacks an argument the declaration names, is
+    // refused AT THE CALL - but only while a tape is being written or replayed. Off, the check
+    // does not run: this code sits on production paths and the contract there is no failure
+    // modes. The recorder learns no vocabulary from this; the table is the app's own word.
+    private static volatile Map<String, List<String>> declared = null;
+
+    /**
+     * Installs the app's table of acts - name to {@code {"args": [...]}}, the same table a model
+     * generates its declarations from - so that span/note refuse, while recording, a name the
+     * app never declared or an emission missing a declared argument. {@code null} withdraws it.
+     */
+    public static void declare(Map<String, Map<String, Object>> acts) {
+        if (acts == null) { declared = null; return; }
+        Map<String, List<String>> d = new LinkedHashMap<>();
+        for (Map.Entry<String, Map<String, Object>> e : acts.entrySet()) {
+            List<String> args = new ArrayList<>();
+            Object raw = e.getValue() == null ? null : e.getValue().get("args");
+            if (raw instanceof Iterable<?>) for (Object x : (Iterable<?>) raw) if (x != null) args.add(String.valueOf(x));
+            d.put(e.getKey(), args);
+        }
+        declared = d;
+    }
+
+    private static void admit(String name, Map<String, Object> data) {
+        Map<String, List<String>> d = declared;
+        if (d == null) return;
+        List<String> args = d.get(name);
+        if (args == null) {
+            List<String> names = new ArrayList<>(d.keySet());
+            java.util.Collections.sort(names);
+            throw new IllegalStateException("'" + name + "' is not an act this app declared (declare); declared: " + names);
+        }
+        List<String> missing = new ArrayList<>();
+        for (String arg : args) if (data == null || !data.containsKey(arg)) missing.add(arg);
+        if (!missing.isEmpty())
+            throw new IllegalStateException("act '" + name + "' testifies with " + args + "; this emission lacks " + missing);
+    }
+
     /** Records that something meaningful happened at a point, in the app's own vocabulary. */
     public static void note(String name, Map<String, Object> data) {
         Ambient a = ambient();
         if (a == null) return;
+        admit(name, data);
         if (a.feed != null) { a.feed.note(name); return; }
         Map<String, Object> e = new LinkedHashMap<>();
         e.put("k", "sem"); e.put("name", name); e.put("phase", "point"); e.put("sid", a.call.nextSid());
@@ -651,6 +691,7 @@ public final class Recorder implements AutoCloseable {
         if (a == null) {
             try { return body.run(); } catch (Exception e) { throw sneak(e); }
         }
+        admit(name, data);
         if (a.feed != null) return a.feed.span(name, body);
 
         CallBuffer c = a.call;

@@ -167,4 +167,32 @@ class SemTest {
         assertTrue(rendered.contains("register  ERROR  (2 fx)"), rendered);
         assertTrue(rendered.contains("- corpus_read  found=true"), rendered);
     }
+
+    @Test
+    void aDeclaredAlphabetRefusesAnUndeclaredActWhileRecording(@TempDir Path tmp) throws Exception {
+        // The app states its acts once (declare), the same table a model generates its
+        // declarations from; a span the table does not know is refused where it is written -
+        // only while a tape is being made. The recorder learns no vocabulary: the list is the app's.
+        try {
+            Recorder.declare(Map.of("only-this", Map.of()));
+            Recorder.note("anything_at_all", Map.of("n", 1));   // off: no throw, no failure mode
+
+            Recorder.declare(Map.of("enrol", Map.of("args", List.of("user")), "load_corpus", Map.of(),
+                    "corpus_read", Map.of(), "register", Map.of(), "registration_failed", Map.of()));
+            assertEquals("enrol", recordEnrol(tmp.resolve("a")).call(0).spans().children.get(0).name);
+
+            Recorder.declare(Map.of("enrol", Map.of()));
+            IllegalStateException undeclared = assertThrows(IllegalStateException.class,
+                    () -> recordEnrol(tmp.resolve("b")));
+            assertTrue(undeclared.getMessage().contains("'load_corpus' is not an act this app declared"));
+
+            Recorder.declare(Map.of("enrol", Map.of("args", List.of("user", "tenant")), "load_corpus", Map.of(),
+                    "corpus_read", Map.of(), "register", Map.of(), "registration_failed", Map.of()));
+            IllegalStateException underbound = assertThrows(IllegalStateException.class,
+                    () -> recordEnrol(tmp.resolve("c")));
+            assertTrue(underbound.getMessage().contains("lacks [tenant]"));
+        } finally {
+            Recorder.declare(null);
+        }
+    }
 }

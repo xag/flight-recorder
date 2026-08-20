@@ -28,7 +28,7 @@ import time
 from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Union
 
 from flight_recorder.boundary import Boundary, ChainTarget
 from flight_recorder.serial import (
@@ -448,6 +448,42 @@ def _expect_rand(method: str) -> dict:
 # Spans are CALL-SCOPED. A span never crosses a call boundary, and session-level meaning
 # ("this user's whole conversation") is a reader's composition, not a recorder's.
 
+# The app's own alphabet, if it chose to state one. `declare()` installs it; from then on a
+# span or note whose name is not in it, or that lacks an argument the declaration names, is
+# refused AT THE CALL — but only while a tape is being written or replayed. When recording is
+# off the check does not run, because this code sits on production paths and the contract
+# there is no failure modes. Tests and flights always record, which is where an undeclared
+# act should be found. The recorder learns no vocabulary from this: the list is the app's,
+# the recorder only holds the app to its own word.
+_DECLARED: Optional[Dict[str, List[str]]] = None
+
+
+def declare(acts: Optional[Mapping[str, Any]]) -> None:
+    """Install the app's table of acts — `{name: {"args": [...], ...}}`, the same table a
+    model generates its declarations from — so that `span()`/`note()` refuse, while
+    recording, a name the app never declared or an emission missing a declared argument.
+    Pass None to withdraw it. Keys other than `args` are ignored here: the recorder reads
+    the alphabet and nothing else."""
+    global _DECLARED
+    if acts is None:
+        _DECLARED = None
+        return
+    _DECLARED = {str(name): list((spec or {}).get("args") or [])
+                 for name, spec in acts.items()}
+
+
+def _admit(name: str, data: dict) -> None:
+    if _DECLARED is None:
+        return
+    if name not in _DECLARED:
+        raise ValueError(f"'{name}' is not an act this app declared (flight_recorder.declare); "
+                         f"declared: {sorted(_DECLARED)}")
+    missing = [a for a in _DECLARED[name] if a not in data]
+    if missing:
+        raise ValueError(f"act '{name}' testifies with {_DECLARED[name]}; this emission "
+                         f"lacks {missing}")
+
+
 def _sem(name: str, phase: str, data: dict, sid: Optional[int] = None,
          outcome: Optional[str] = None) -> Optional[int]:
     """Emit one semantic event, or nothing at all. Returns the sid, or None if nothing was
@@ -465,6 +501,8 @@ def _sem(name: str, phase: str, data: dict, sid: Optional[int] = None,
     if sink is None:
         return None
 
+    if phase != "end":
+        _admit(name, data)
     if sid is None:
         sid = sink.next_sid()
     ev = {"k": "sem", "name": name, "phase": phase, "sid": sid}

@@ -284,3 +284,31 @@ test('regenerate the node sem fixture (FR_REGEN_FIXTURES=1)', async (t) => {
   fs.mkdirSync(FIXTURES, { recursive: true });
   fs.writeFileSync(path.join(FIXTURES, 'node-sem-toy.jsonl'), text, 'utf8');
 });
+
+// --- the app's own alphabet, held at the call ------------------------------------------
+
+test('a declared alphabet refuses an undeclared act while recording, and nothing when off', async () => {
+  // The app states its acts once (`declare`), the same table a model generates its
+  // declarations from; a span the table does not know is refused where it is written -
+  // only while a tape is being made. The recorder learns no vocabulary: the list is the app's.
+  fr.declare({ 'only-this': {} });
+  fr.note('anything_at_all', { n: 1 });                       // off: no raise
+  fr.declare(null);
+
+  const { tools } = install();
+  const names = [...new Set((await (async () => {
+    await tools.enrol('t@example.com', 'x');
+    return sems().map((e) => e.name);
+  })()))];
+  assert.ok(names.length > 0);
+
+  fr.declare(Object.fromEntries(names.map((n) => [n, {}])));
+  await tools.enrol('t@example.com', 'x');                   // every name declared: written
+
+  fr.declare({ [names[0]]: {} });
+  await assert.rejects(() => tools.enrol('t@example.com', 'x'), /is not an act this app declared/);
+
+  fr.declare(Object.fromEntries(names.map((n) => [n, n === names[0] ? { args: ['tenant'] } : {}])));
+  await assert.rejects(() => tools.enrol('t@example.com', 'x'), /lacks \[tenant\]/);
+  fr.declare(null);
+});

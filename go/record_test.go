@@ -3,6 +3,7 @@ package flightrecorder
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -171,4 +172,48 @@ func TestRecordingForbidRejectsABadPattern(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "bad forbid pattern") {
 		t.Errorf("unhelpful error for a bad pattern: %v", err)
 	}
+}
+
+// The app's own alphabet, held at the call: Declare installs it, and a span or note the table
+// does not know is refused where it is written - while recording, never when off.
+func TestDeclaredAlphabetRefusesAnUndeclaredActWhileRecording(t *testing.T) {
+	defer Declare(nil)
+	ctx := context.Background()
+
+	Declare(map[string]map[string]any{"only-this": {}})
+	Note(ctx, "anything_at_all", map[string]any{"n": 1}) // off: no ambient, no panic
+
+	rec, err := New(t.TempDir(), Boundary{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rec.Close()
+
+	Declare(map[string]map[string]any{"step": {"args": []string{"who"}}})
+	if _, err := rec.Call(ctx, "tool", map[string]any{}, func(ctx context.Context) (any, error) {
+		return nil, Span(ctx, "step", map[string]any{"who": "a"}, func(context.Context) error { return nil })
+	}); err != nil {
+		t.Fatalf("a declared act with its argument must record: %v", err)
+	}
+
+	expectPanic := func(what string, run func()) {
+		t.Helper()
+		defer func() {
+			if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), what) {
+				t.Fatalf("expected a refusal mentioning %q, got %v", what, r)
+			}
+		}()
+		run()
+	}
+	expectPanic("is not an act this app declared", func() {
+		_, _ = rec.Call(ctx, "tool", map[string]any{}, func(ctx context.Context) (any, error) {
+			Note(ctx, "undeclared", nil)
+			return nil, nil
+		})
+	})
+	expectPanic("lacks [who]", func() {
+		_, _ = rec.Call(ctx, "tool", map[string]any{}, func(ctx context.Context) (any, error) {
+			return nil, Span(ctx, "step", nil, func(context.Context) error { return nil })
+		})
+	})
 }

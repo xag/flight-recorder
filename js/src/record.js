@@ -643,9 +643,36 @@ function semSink() {
   return active.getStore() ?? null;
 }
 
+// The app's own alphabet, if it chose to state one. `declare()` installs it; from then on a span
+// or note whose name is not in it, or that lacks an argument the declaration names, is refused AT
+// THE CALL - but only while a tape is being written or replayed. Off, the check does not run: this
+// code sits on production paths and the contract there is no failure modes. The recorder learns no
+// vocabulary from this; the table is the app's, the recorder holds the app to its own word.
+let declared = null;
+
+/**
+ * Install the app's table of acts - `{ name: { args: [...] } }`, the same table a model generates
+ * its declarations from - so that span()/note() refuse, while recording, a name the app never
+ * declared or an emission missing a declared argument. Pass null to withdraw it.
+ */
+export function declare(acts) {
+  if (acts == null) { declared = null; return; }
+  declared = new Map(Object.entries(acts).map(([name, spec]) => [name, [...((spec && spec.args) || [])]]));
+}
+
+function admit(name, data) {
+  if (!declared) return;
+  if (!declared.has(name)) {
+    throw new Error(`'${name}' is not an act this app declared (declare); declared: ${[...declared.keys()].sort().join(', ')}`);
+  }
+  const missing = declared.get(name).filter((a) => !(data && a in data));
+  if (missing.length) throw new Error(`act '${name}' testifies with [${declared.get(name).join(', ')}]; this emission lacks [${missing.join(', ')}]`);
+}
+
 function emitSem(name, phase, data, sid, outcome) {
   const sink = semSink();
   if (!sink) return null;
+  if (phase !== 'end') admit(name, data);
   if (sid == null) {
     sink.sid = (sink.sid ?? 0) + 1;
     sid = sink.sid;

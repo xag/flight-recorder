@@ -210,6 +210,21 @@
     "digest": "17538da9efdb"
   },
   {
+    "path": "the-app-declares-its-alphabet-to-the-recorder",
+    "kind": "decision",
+    "digest": "ffad36f762dc"
+  },
+  {
+    "path": "the-app-declares-its-alphabet-to-the-recorder/alt-refuse-in-production-too",
+    "kind": "alternative",
+    "digest": "4d451d7a305b"
+  },
+  {
+    "path": "the-app-declares-its-alphabet-to-the-recorder/alt-scan-the-source",
+    "kind": "alternative",
+    "digest": "cacdf2502777"
+  },
+  {
     "path": "the-deck-is-a-doc",
     "kind": "decision",
     "digest": "694a5c873e67"

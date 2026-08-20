@@ -77,7 +77,7 @@ def build() -> Quern:
                            _DISTRIBUTION_DECISION, _install_claims_match_reality(),
                            _SLIDES_DECISION, _slides_name_every_runtime(),
                            _CANONICAL_DECISION, _fixture_parity(),
-                           _TESTIMONY_DECISION, _MINING_DECISION,
+                           _TESTIMONY_DECISION, _DECLARED_DECISION, _MINING_DECISION,
                            _SUCCESSORS_DECISION, _READER_HYPOTHESIS,
                            _TARGET_SIZE_DEBT]
     return quern
@@ -993,6 +993,52 @@ _TESTIMONY_DECISION = Node(
                       "ends the domain-blindness that lets six runtimes share one frozen "
                       "spec — and a claim rejected at write time is lost testimony, where "
                       "a false claim kept on tape is exactly what a reader can catch."}),
+    ],
+)
+
+
+_DECLARED_DECISION = Node(
+    id="the-app-declares-its-alphabet-to-the-recorder",
+    kind="decision",
+    name="An app may hand the recorder its table of acts, and the recorder then refuses a "
+         "span or note the table does not know — at the call, while recording, and never "
+         "when recording is off",
+    links={"rests_on": ["testimony-is-not-evidence"]},
+    payload={
+        "rationale":
+            "testimony-is-not-evidence rejected a recorder that validates claims, because "
+            "that recorder would have to understand every app's vocabulary. This is not "
+            "that: the vocabulary is the app's, stated once as data (the same table a model "
+            "generates its effect declarations from, upstream), and the recorder only holds "
+            "the app to its own word — a name it never declared, an argument it said it "
+            "would carry and did not. The alternative, a source scan over emission literals "
+            "in the app's tests, catches the same drift one step later and misses a name "
+            "computed at runtime; the call site is where the author is.",
+        "consequence":
+            "Checked only while a tape is written or replayed — tests and flights always "
+            "record, production may not, and the production contract (no failure modes, "
+            "zero cost when off) is untouched. All six recorders ship it, each with the "
+            "same three-case test (declared, undeclared, under-bound), because feature-parity "
+            "is this ledger's standing decision and a feature in one runtime is a port "
+            "trailing. The tape format is unchanged; a refused span is never written, so no "
+            "tape carries a name its app disowns.",
+    },
+    children=[
+        Node(id="alt-scan-the-source", kind="alternative",
+             name="Hold the source to the table in the app's tests: grep every span/note "
+                  "literal",
+             payload={"why":
+                      "One step later than the call, blind to a name built at runtime, and "
+                      "it puts the guard in every app's test-suite instead of once in the "
+                      "emitter every app already carries. Kept as a second reader where an "
+                      "app cannot run its flights, never as the first."}),
+        Node(id="alt-refuse-in-production-too", kind="alternative",
+             name="Raise on an undeclared act whether or not recording is on",
+             payload={"why":
+                      "A recorder that can break the app it observes is worse than no "
+                      "recorder — the library's first contract. An undeclared act in "
+                      "production is found the first time a tape is made of that path, "
+                      "which is the same moment anything else about it is found."}),
     ],
 )
 
