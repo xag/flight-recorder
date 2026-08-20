@@ -1,5 +1,20 @@
 [
   {
+    "path": "a-harness-sets-the-clock-and-it-runs",
+    "kind": "decision",
+    "digest": "4c558680837d"
+  },
+  {
+    "path": "a-harness-sets-the-clock-and-it-runs/alt-fake-outside-the-recorder",
+    "kind": "alternative",
+    "digest": "a3ff8acc9cae"
+  },
+  {
+    "path": "a-harness-sets-the-clock-and-it-runs/alt-freeze-the-clock",
+    "kind": "alternative",
+    "digest": "18d12e015d4f"
+  },
+  {
     "path": "all-runtimes-record-the-same-kinds",
     "kind": "gate",
     "digest": "9662d0b7ef89"
