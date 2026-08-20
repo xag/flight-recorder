@@ -77,7 +77,8 @@ def build() -> Quern:
                            _DISTRIBUTION_DECISION, _install_claims_match_reality(),
                            _SLIDES_DECISION, _slides_name_every_runtime(),
                            _CANONICAL_DECISION, _fixture_parity(),
-                           _TESTIMONY_DECISION, _DECLARED_DECISION, _MINING_DECISION,
+                           _TESTIMONY_DECISION, _DECLARED_DECISION, _SET_CLOCK_DECISION,
+                           _MINING_DECISION,
                            _SUCCESSORS_DECISION, _READER_HYPOTHESIS,
                            _TARGET_SIZE_DEBT]
     return quern
@@ -1039,6 +1040,49 @@ _DECLARED_DECISION = Node(
                       "recorder — the library's first contract. An undeclared act in "
                       "production is found the first time a tape is made of that path, "
                       "which is the same moment anything else about it is found."}),
+    ],
+)
+
+
+_SET_CLOCK_DECISION = Node(
+    id="a-harness-sets-the-clock-and-it-runs",
+    kind="decision",
+    name="A recording harness may set the clock - `clock_at(instant)` - and a set clock "
+         "RUNS from the instant; the tape records each answer as its ordinary `now` event, "
+         "and replay never consults the pin",
+    payload={
+        "rationale":
+            "A harness that simulates a week hands each tick its moment as an argument, but "
+            "the code it exercises also asks the clock itself - a board read at the end of "
+            "the week was read on the machine's day, a week later, and nothing on the tape "
+            "could say so until a model held the board's statement to the simulated day "
+            "and convicted the disagreement the harness had made. The set clock is the "
+            "recorder's affordance because the clock is the recorder's boundary: the tape "
+            "records what the code was told the time was, which is the contract, and a "
+            "tape made under a set clock is indistinguishable from one made at that "
+            "instant. It runs because a stopped clock is a world no code was written for: "
+            "the first frozen run stamped six writes with one revision and a strong-"
+            "validator law convicted the app for the harness's act.",
+        "consequence":
+            "All six recorders carry it with the same test (answers the instant running, "
+            "nested answers its own, outer restored, lifted after, recorded as now.v). The "
+            "tape format is unchanged; replay takes its branch before the pin is read.",
+    },
+    children=[
+        Node(id="alt-freeze-the-clock", kind="alternative",
+             name="A stopped clock: every now() in the block answers exactly the instant",
+             payload={"why":
+                      "Deterministic to look at and false to run: two writes carry one "
+                      "timestamp, an ask and the doing that answers it share an instant, and "
+                      "every law over a wall-time stamp goes red for the harness's sake. "
+                      "Tried first, refuted on the first real app (2026-08-21)."}),
+        Node(id="alt-fake-outside-the-recorder", kind="alternative",
+             name="The harness patches the app's clock itself, beside the recorder",
+             payload={"why":
+                      "Two hands on one boundary: the recorder would record a time the "
+                      "harness invented without knowing it was invented, and the patch "
+                      "would race the recorder's own shim for the same module attribute. "
+                      "The clock has one owner while a tape is being written."}),
     ],
 )
 

@@ -44,6 +44,14 @@ final class Recorder
 
     private static ?int $perfOrigin = null;
 
+    /**
+     * The harness's clock pin (see {@see clockAt}): while set, a recorded now() answers this
+     * instant plus the monotonic time since $pinnedAt, instead of the machine's clock.
+     * Recording only; replay serves the tape's `now`.
+     */
+    private static ?\DateTimeImmutable $pinnedNow = null;
+    private static float $pinnedAt = 0.0;
+
     private ?string $path = null;
     private int $seq = 0;
     private string $text = '';
@@ -254,9 +262,50 @@ final class Recorder
         if (self::$feed !== null) {
             return self::$feed->now();
         }
-        $t = new \DateTimeImmutable();
+        // Under a pin the clock answers the instant it was set to plus the real time since, and
+        // the tape records that answer, faithfully: it IS what the code was told the time was.
+        $t = self::$pinnedNow === null ? new \DateTimeImmutable() : self::pinnedNow();
         self::emit(['k' => 'now', 'v' => Serial::isoOf($t)]);
         return $t;
+    }
+
+    /** The set clock's current reading: the instant plus the microseconds hrtime has counted since. */
+    private static function pinnedNow(): \DateTimeImmutable
+    {
+        $elapsedUs = (int) round((hrtime(true) / 1e3) - self::$pinnedAt);
+        return self::$pinnedNow->modify(sprintf('%+d microseconds', $elapsedUs));
+    }
+
+    /**
+     * Record with the clock SET to `$at` and running: every now() read inside `$fn` answers it
+     * plus the real time elapsed since the block began — in `$at`'s timezone, since PHP's one
+     * datetime type always carries one — and the tape records that answer as its ordinary
+     * `now` event, exactly as if the machine's clock had said so.
+     *
+     * Running, not stopped, because a stopped clock is a world no code was written for: two
+     * writes in one block would carry one timestamp, and an app whose revision stamp or "did
+     * this come after the ask" is wall time reads as broken when only the harness is. (Found
+     * the first time the pin froze: six writes, one revision, and RFC 9110's strong-validator
+     * law convicted the app for what the pin had done.)
+     *
+     * For the harness that drives a simulated week — ticks taking their moment as an argument
+     * — and then reads a board that asks the clock itself: without the pin the board is read
+     * on the machine's day, days after the week it is meant to show, and a model holding the
+     * board's statement to the simulated day convicts a disagreement the harness created. The
+     * pin is a recording affordance, not a tape feature: replay never consults it, and a tape
+     * recorded under it is indistinguishable from one recorded at that instant. Nested pins
+     * restore the outer one on exit, whether `$fn` returns or throws.
+     */
+    public static function clockAt(\DateTimeImmutable $at, callable $fn): mixed
+    {
+        $outer = [self::$pinnedNow, self::$pinnedAt];
+        self::$pinnedNow = $at;
+        self::$pinnedAt = hrtime(true) / 1e3;
+        try {
+            return $fn();
+        } finally {
+            [self::$pinnedNow, self::$pinnedAt] = $outer;
+        }
     }
 
     /**

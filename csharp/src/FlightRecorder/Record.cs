@@ -53,10 +53,18 @@ namespace FlightRecorder
         private static readonly AsyncLocal<Mode?> _mode = new AsyncLocal<Mode?>();
         private static readonly AsyncLocal<Feed?> _feed = new AsyncLocal<Feed?>();
         private static readonly AsyncLocal<CallBuffer?> _sems = new AsyncLocal<CallBuffer?>();
+        // The harness's clock pin (see ClockHandle.At): while set, a recorded Now()/UtcNow()
+        // answers this instant plus the monotonic time since PinnedAt, instead of the machine's.
+        // Recording only; replay serves the tape's `now`. AsyncLocal like the rest, so a pin set
+        // in one test cannot leak into a test the runner happens to be driving on another thread.
+        private static readonly AsyncLocal<DateTimeOffset?> _pinnedNow = new AsyncLocal<DateTimeOffset?>();
+        private static readonly AsyncLocal<double> _pinnedAt = new AsyncLocal<double>();
 
         public static Mode? Mode { get => _mode.Value; set => _mode.Value = value; }
         public static Feed? Feed { get => _feed.Value; set => _feed.Value = value; }
         public static CallBuffer? Sems { get => _sems.Value; set => _sems.Value = value; }
+        public static DateTimeOffset? PinnedNow { get => _pinnedNow.Value; set => _pinnedNow.Value = value; }
+        public static double PinnedAt { get => _pinnedAt.Value; set => _pinnedAt.Value = value; }
     }
 
     public static partial class Recorder

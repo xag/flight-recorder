@@ -109,8 +109,10 @@ class _Hook:
     # claims afresh and they are captured here, to be compared with the recorded ones.
     sems: Any = None    # a _SemCapture during replay, None otherwise
     # The harness's clock pin (see `clock_at`): while set, a recorded now() answers this
-    # instant instead of the machine's. Recording only; replay serves the tape's `now`.
+    # instant PLUS the real time elapsed since the pin was set - a clock set to an hour and
+    # left running, not a stopped one. Recording only; replay serves the tape's `now`.
     pinned_now: Optional[datetime] = None
+    pinned_at: float = 0.0   # time.monotonic() when the pin was set
 
 
 hook = _Hook()
@@ -326,7 +328,9 @@ class DatetimeShim(metaclass=_DatetimeShimMeta):
             ev = hook.feed.pop_expect("now")
             return datetime.fromisoformat(ev["v"])
         if hook.pinned_now is not None:
-            v = hook.pinned_now.astimezone(tz) if tz is not None else hook.pinned_now
+            from datetime import timedelta
+            v = hook.pinned_now + timedelta(seconds=time.monotonic() - hook.pinned_at)
+            v = v.astimezone(tz) if tz is not None else v
         else:
             v = datetime.now(tz)
         if hook.mode == "record":
@@ -336,9 +340,16 @@ class DatetimeShim(metaclass=_DatetimeShimMeta):
 
 @contextmanager
 def clock_at(instant: datetime):
-    """Record with the clock pinned at `instant`: every now() the boundary's clock modules
-    read inside the block answers it, and the tape records that answer as its `now` event -
-    faithfully, since that IS what the code was told the time was.
+    """Record with the clock SET to `instant` and running: every now() the boundary's clock
+    modules read inside the block answers the instant plus the real time elapsed since the
+    block began, and the tape records that answer as its `now` event - faithfully, since
+    that IS what the code was told the time was.
+
+    Running, not stopped, because a stopped clock is a world no code was written for: two
+    writes in one block would carry one timestamp, and an app whose revision stamp or
+    "did this come after the ask" is wall time reads as broken when only the harness is.
+    (Found the first time the pin froze: six writes, one revision, and RFC 9110's
+    strong-validator law convicted the app for what the pin had done.)
 
     For the harness that drives a simulated week - ticks taking their moment as an argument
     - and then reads a board that asks the clock itself: without the pin the board is read
@@ -350,12 +361,12 @@ def clock_at(instant: datetime):
     as-is and answers naive."""
     if not isinstance(instant, datetime):
         raise TypeError(f"clock_at pins a datetime, not {type(instant).__name__}")
-    outer = hook.pinned_now
-    hook.pinned_now = instant
+    outer = hook.pinned_now, hook.pinned_at
+    hook.pinned_now, hook.pinned_at = instant, time.monotonic()
     try:
         yield
     finally:
-        hook.pinned_now = outer
+        hook.pinned_now, hook.pinned_at = outer
 
 
 class RandomShim:

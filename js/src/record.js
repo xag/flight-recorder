@@ -45,7 +45,7 @@ const active = new AsyncLocalStorage();
  * In `record` they ask the world and write down the answer; in `replay` they answer from
  * the tape and never touch the world at all. The app cannot tell the difference.
  */
-export const hook = { mode: null, feed: null, sems: null };
+export const hook = { mode: null, feed: null, sems: null, pinnedNow: null, pinnedAt: 0 };
 
 /**
  * True while a wrapped effect is running the REAL client.
@@ -766,7 +766,10 @@ export function installClock() {
 
   const nowMs = () => {
     if (hook.mode === 'replay') return RealDate.parse(hook.feed.popExpect('now').v);
-    const ms = realNow();
+    // Under a pin (see `clockAt`) the clock answers the instant it was set to plus the real
+    // time since, and the tape records that answer, faithfully: it IS what the code was told
+    // the time was.
+    const ms = hook.pinnedNow === null ? realNow() : hook.pinnedNow + (pinClock() - hook.pinnedAt);
     emit({ k: 'now', v: new RealDate(ms).toISOString() });
     return ms;
   };
@@ -803,6 +806,45 @@ export function installClock() {
     emit({ k: 'perf', v });
     return v;
   });
+}
+
+/**
+ * Record with the clock SET to `date` and running: every `Date.now()` / `new Date()` the
+ * shimmed clock answers inside `fn` is the instant plus the real time elapsed since the
+ * block began, and the tape records that answer as its ordinary `now` event — exactly as if
+ * the machine's clock had said so.
+ *
+ * Running, not stopped, because a stopped clock is a world no code was written for: two
+ * writes in one block would carry one timestamp, and an app whose revision stamp or "did
+ * this come after the ask" is wall time reads as broken when only the harness is. (Found
+ * the first time the pin froze: six writes, one revision, and RFC 9110's strong-validator
+ * law convicted the app for what the pin had done.)
+ *
+ * For the harness that drives a simulated week — ticks taking their moment as an argument —
+ * and then reads a board that asks the clock itself: without the pin the board is read on
+ * the machine's day, days after the week it is meant to show, and a model holding the
+ * board's statement to the simulated day convicts a disagreement the harness created. The
+ * pin is a recording affordance, not a tape feature: replay never consults it, and a tape
+ * recorded under it is indistinguishable from one recorded at that instant. Nested pins
+ * restore the outer one on exit. `fn` may be sync or async; the result is awaited either
+ * way, so the pin outlives the whole of an async body and not just its first tick.
+ */
+// The monotonic clock the pin runs on, captured before installClock patches performance.now:
+// the pin must not read the shim it feeds, and under replay that shim answers from the tape.
+const pinClock = performance.now.bind(performance);
+
+export async function clockAt(date, fn) {
+  if (!(date instanceof RealDate) || Number.isNaN(date.getTime())) {
+    throw new TypeError(`clockAt pins a Date, not ${date === null ? 'null' : typeof date}`);
+  }
+  const outer = [hook.pinnedNow, hook.pinnedAt];
+  hook.pinnedNow = date.getTime();
+  hook.pinnedAt = pinClock();
+  try {
+    return await fn();
+  } finally {
+    [hook.pinnedNow, hook.pinnedAt] = outer;
+  }
 }
 
 // --- randomness ---------------------------------------------------------------------

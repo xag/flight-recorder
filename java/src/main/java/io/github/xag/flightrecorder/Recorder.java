@@ -8,8 +8,10 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.security.SecureRandom;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -75,6 +77,64 @@ public final class Recorder implements AutoCloseable {
     static final InheritableThreadLocal<Ambient> AMBIENT = new InheritableThreadLocal<>();
 
     static Ambient ambient() { return AMBIENT.get(); }
+
+    /**
+     * The harness's clock pin (see {@link #clockAt}): while set, a recorded {@link #now()} or
+     * {@link #nowOffset()} answers its instant plus the monotonic time since it was set, instead
+     * of the machine's clock. Recording only; replay serves the tape's {@code now}. Inheritable
+     * for the same reason the ambient is.
+     */
+    static final InheritableThreadLocal<Pin> PINNED_NOW = new InheritableThreadLocal<>();
+
+    /**
+     * Records with the clock SET to {@code instant} and running: every {@link #now()} and
+     * {@link #nowOffset()} read until the returned pin is closed answers the instant plus the
+     * real time elapsed since it was set — in the system zone, as the unpinned reads do — and
+     * the tape records that answer as its ordinary {@code now} event, faithfully, since that IS
+     * what the code was told the time was.
+     *
+     * <p>Running, not stopped, because a stopped clock is a world no code was written for: two
+     * writes in one block would carry one timestamp, and an app whose revision stamp or "did
+     * this come after the ask" is wall time reads as broken when only the harness is. (Found the
+     * first time the pin froze: six writes, one revision, and RFC 9110's strong-validator law
+     * convicted the app for what the pin had done.)
+     *
+     * <p>For the harness that drives a simulated week — ticks taking their moment as an argument —
+     * and then reads a board that asks the clock itself: without the pin the board is read on the
+     * machine's day, days after the week it is meant to show, and a model holding the board's
+     * statement to the simulated day convicts a disagreement the harness created. The pin is a
+     * recording affordance, not a tape feature: replay never consults it, and a tape recorded
+     * under it is indistinguishable from one recorded at that instant. Nested pins restore the
+     * outer one on close.
+     */
+    public static Pin clockAt(Instant instant) {
+        if (instant == null) throw new NullPointerException("clockAt pins an Instant, not null");
+        Pin pin = new Pin(instant, PINNED_NOW.get());
+        PINNED_NOW.set(pin);
+        return pin;
+    }
+
+    /** The set clock's current reading, or null when no pin is set. */
+    private static Instant pinnedNow() {
+        Pin pin = PINNED_NOW.get();
+        return pin == null ? null : pin.read();
+    }
+
+    /** A clock set to an instant and left running; closing it restores whatever pin — or none —
+     *  was set before it. */
+    public static final class Pin implements AutoCloseable {
+        private final Instant instant;
+        private final long setAtNanos = System.nanoTime();
+        private final Pin outer;
+        private boolean closed;
+        Pin(Instant instant, Pin outer) { this.instant = instant; this.outer = outer; }
+        Instant read() { return instant.plusNanos(System.nanoTime() - setAtNanos); }
+        @Override public void close() {
+            if (closed) return;
+            closed = true;
+            if (outer == null) PINNED_NOW.remove(); else PINNED_NOW.set(outer);
+        }
+    }
 
     /** Wraps a task so it carries the current recording/replay ambient onto whatever thread runs
      *  it. Without this, an executor thread has no ambient and its boundary reads go unrecorded. */
@@ -392,20 +452,20 @@ public final class Recorder implements AutoCloseable {
      */
     public static LocalDateTime now() {
         Ambient a = ambient();
-        if (a == null) return LocalDateTime.now();
-        if (a.feed != null) return a.feed.now();
-        LocalDateTime v = LocalDateTime.now();
-        a.call.emit(ev("now", "v", Serial.isoNaive(v)));
+        if (a != null && a.feed != null) return a.feed.now();
+        Instant pin = pinnedNow();
+        LocalDateTime v = pin == null ? LocalDateTime.now() : LocalDateTime.ofInstant(pin, ZoneId.systemDefault());
+        if (a != null) a.call.emit(ev("now", "v", Serial.isoNaive(v)));
         return v;
     }
 
     /** Records and returns the wall clock, timezone-aware. */
     public static OffsetDateTime nowOffset() {
         Ambient a = ambient();
-        if (a == null) return OffsetDateTime.now();
-        if (a.feed != null) return a.feed.nowOffset();
-        OffsetDateTime v = OffsetDateTime.now();
-        a.call.emit(ev("now", "v", Serial.iso(v)));
+        if (a != null && a.feed != null) return a.feed.nowOffset();
+        Instant pin = pinnedNow();
+        OffsetDateTime v = pin == null ? OffsetDateTime.now() : pin.atZone(ZoneId.systemDefault()).toOffsetDateTime();
+        if (a != null) a.call.emit(ev("now", "v", Serial.iso(v)));
         return v;
     }
 

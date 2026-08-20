@@ -20,7 +20,7 @@ namespace FlightRecorder
         public DateTime Now()
         {
             if (Recorder.Replaying) return ParseNow(Recorder.ReplayFeed!.PopExpect("now"));
-            var dt = DateTime.Now;
+            var dt = Pinned()?.LocalDateTime ?? DateTime.Now;
             Recorder.EmitClock(new Dictionary<string, object?> { ["k"] = "now", ["v"] = Serial.IsoNaive(dt) });
             return dt;
         }
@@ -29,7 +29,7 @@ namespace FlightRecorder
         public DateTime UtcNow()
         {
             if (Recorder.Replaying) return ParseNow(Recorder.ReplayFeed!.PopExpect("now"));
-            var dt = DateTime.UtcNow;
+            var dt = Pinned()?.UtcDateTime ?? DateTime.UtcNow;
             Recorder.EmitClock(new Dictionary<string, object?> { ["k"] = "now", ["v"] = Serial.IsoNaive(dt) });
             return dt;
         }
@@ -42,6 +42,55 @@ namespace FlightRecorder
             var v = Recorder.MonoMs;
             Recorder.EmitClock(new Dictionary<string, object?> { ["k"] = "perf", ["v"] = v });
             return v;
+        }
+
+        /// <summary>Record with the clock SET to <paramref name="instant"/> and running: every Now()
+        /// and UtcNow() read until the handle is disposed answers the instant plus the real time
+        /// elapsed since it was set — in the asked kind, local or UTC — and the tape records that
+        /// answer as its ordinary `now` event, faithfully, since that IS what the code was told the
+        /// time was.
+        ///
+        /// Running, not stopped, because a stopped clock is a world no code was written for: two
+        /// writes in one block would carry one timestamp, and an app whose revision stamp or "did
+        /// this come after the ask" is wall time reads as broken when only the harness is. (Found
+        /// the first time the pin froze: six writes, one revision, and RFC 9110's strong-validator
+        /// law convicted the app for what the pin had done.)
+        ///
+        /// For the harness that drives a simulated week — ticks taking their moment as an argument
+        /// — and then reads a board that asks the clock itself: without the pin the board is read
+        /// on the machine's day, days after the week it is meant to show, and a model holding the
+        /// board's statement to the simulated day convicts a disagreement the harness created. The
+        /// pin is a recording affordance, not a tape feature: replay never consults it, and a tape
+        /// recorded under it is indistinguishable from one recorded at that instant. Nested pins
+        /// restore the outer one on dispose.</summary>
+        public IDisposable At(DateTimeOffset instant)
+        {
+            var outer = (Hook.PinnedNow, Hook.PinnedAt);
+            Hook.PinnedNow = instant;
+            Hook.PinnedAt = Recorder.MonoMs;
+            return new Pin(outer);
+        }
+
+        /// <summary>The set clock's current reading, or null when no pin is set. It runs on the
+        /// recorder's Stopwatch, the same monotonic clock Mono() reads.</summary>
+        private static DateTimeOffset? Pinned()
+        {
+            var pin = Hook.PinnedNow;
+            if (pin == null) return null;
+            return pin.Value.AddMilliseconds(Recorder.MonoMs - Hook.PinnedAt);
+        }
+
+        private sealed class Pin : IDisposable
+        {
+            private readonly (DateTimeOffset?, double) _outer;
+            private bool _done;
+            public Pin((DateTimeOffset?, double) outer) { _outer = outer; }
+            public void Dispose()
+            {
+                if (_done) return;
+                _done = true;
+                (Hook.PinnedNow, Hook.PinnedAt) = _outer;
+            }
         }
 
         private static DateTime ParseNow(IDictionary<string, object?> ev)

@@ -61,10 +61,12 @@ def test_a_module_with_no_time_at_all_is_left_alone():
     assert not hasattr(module, "time")
 
 
-def test_a_pinned_clock_answers_the_pin_and_records_it_as_now():
-    """`clock_at` makes a recorded now() answer the pinned instant - in the asked timezone -
-    and the tape carries that answer as its `now` event, exactly as if the machine's clock
-    had said so. The pin is lifted on exit, nested or not."""
+def test_a_pinned_clock_answers_the_pin_running_and_records_it_as_now():
+    """`clock_at` makes a recorded now() answer the pinned instant plus the time since - in
+    the asked timezone - and the tape carries that answer as its `now` event, exactly as if
+    the machine's clock had said so. Running: two reads are two instants, in order, so an
+    app stamping its writes with the clock still stamps them apart. The pin is lifted on
+    exit, nested or not."""
     from datetime import timedelta, timezone
 
     from flight_recorder.record import DatetimeShim, _active, hook
@@ -75,11 +77,14 @@ def test_a_pinned_clock_answers_the_pin_and_records_it_as_now():
     token = _active.set(buf)
     try:
         with fr.clock_at(at):
-            assert DatetimeShim.now(timezone.utc) == at
+            first = DatetimeShim.now(timezone.utc)
+            assert timedelta(0) <= first - at < timedelta(seconds=5)
             assert DatetimeShim.now(timezone(timedelta(hours=2))).hour == 10
             with fr.clock_at(at + timedelta(days=1)):
                 assert DatetimeShim.now(timezone.utc).day == 17
-            assert DatetimeShim.now(timezone.utc) == at
+            later = DatetimeShim.now(timezone.utc)
+            assert later > first, "a set clock runs; it does not stop"
+            assert later - at < timedelta(seconds=5)
         assert hook.pinned_now is None
         assert abs((DatetimeShim.now(timezone.utc) - datetime.now(timezone.utc)).total_seconds()) < 5
     finally:
@@ -87,7 +92,8 @@ def test_a_pinned_clock_answers_the_pin_and_records_it_as_now():
         _active.reset(token)
     nows = [e for e in buf if e.get("k") == "now"]
     assert len(nows) == 5
-    assert nows[0]["v"] == at.isoformat()
+    assert nows[0]["v"] == first.isoformat()
+    assert nows[0]["v"].startswith("2026-08-16T08:00:0")
 
 
 def test_a_pin_is_a_datetime():

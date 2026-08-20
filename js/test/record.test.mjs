@@ -329,6 +329,53 @@ test('uninstall restores the clock and the RNG', async () => {
   assert.equal((await import('node:crypto')).default.randomBytes, before.bytes);
 });
 
+// --- the clock pin --------------------------------------------------------------------
+
+test('a set clock answers the instant, running, and records it as now', async () => {
+  // `clockAt` makes a recorded clock read answer the instant plus the time since, and the
+  // tape carries that answer as its `now` event, exactly as if the machine's clock had said
+  // so. Running: two reads are two instants, in order, so an app stamping its writes with
+  // the clock still stamps them apart. The pin is lifted on exit, nested or not.
+  setup();
+  const at = new Date('2026-08-16T08:00:00.000Z');
+  const day = 86_400_000;
+  const tick = fr.tool('tick', async () => new Date().toISOString());
+
+  const seen = [];
+  await fr.clockAt(at, async () => {
+    seen.push(await tick({}));
+    const first = Date.now();
+    assert.ok(first >= at.getTime() && first - at.getTime() < 5000);
+    await fr.clockAt(new Date(at.getTime() + day), async () => {
+      seen.push(await tick({}));
+      assert.ok(Date.now() - (at.getTime() + day) < 5000);
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    seen.push(await tick({}));
+    const later = Date.now();
+    assert.ok(later > first, 'a set clock runs; it does not stop');
+    assert.ok(later - at.getTime() < 5000);
+  });
+  assert.equal(seen.length, 3);
+  assert.match(seen[0], /^2026-08-16T08:00:0/);
+  assert.match(seen[1], /^2026-08-17T08:00:0/);
+  assert.match(seen[2], /^2026-08-16T08:00:0/);
+
+  // After the block the pin is gone and the clock is the machine's again. `Date` itself is
+  // shimmed here, so the unshimmed reference is the process's time origin, minutes old at
+  // most — against a pin sitting weeks away.
+  const real = (await import('node:perf_hooks')).performance.timeOrigin;
+  assert.ok(Math.abs(Date.now() - real) < 60 * 60 * 1000, 'the real clock, not the pin');
+
+  const nows = calls().map((c) => c.events.find((e) => e.k === 'now').v);
+  assert.deepEqual(nows, seen);
+});
+
+test('a pin is a Date', async () => {
+  setup();
+  await assert.rejects(() => fr.clockAt('2026-08-16', () => {}), TypeError);
+});
+
 // --- freeze the node fixture, for the PYTHON checker to validate -----------------------
 
 test('regenerate the node fixture (FR_REGEN_FIXTURES=1)', async (t) => {

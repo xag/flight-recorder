@@ -223,6 +223,20 @@ func (r *Recorder) scrubEvent(ev map[string]any) map[string]any {
 
 type ctxKey struct{}
 
+// pinKey carries the harness's clock pin (see WithClockAt). It rides the context like the
+// ambient does, so a pin is scoped by construction: the caller's context keeps the outer pin,
+// or none, and there is nothing to restore.
+type pinKey struct{}
+
+// clockPin is a clock set to an instant and left running: it answers instant plus the
+// monotonic time elapsed since it was set.
+type clockPin struct {
+	instant time.Time
+	setAt   time.Time
+}
+
+func (p clockPin) read() time.Time { return p.instant.Add(time.Since(p.setAt)) }
+
 // ambient is what a boundary primitive consults. Exactly one of its fields is set: call while
 // recording, replay while replaying.
 type ambient struct {
@@ -334,17 +348,52 @@ func round2(f float64) float64 { return math.Round(f*100) / 100 }
 
 // --- boundary primitives (record while recording, serve while replaying) --------------
 
-// Now records and returns the wall clock.
+// WithClockAt SETS the clock to instant, running, for everything that reads Now through the
+// returned context: every Now answers instant plus the real time elapsed since the context was
+// made, and while recording the tape carries that answer as its ordinary `now` event —
+// faithfully, since that IS what the code was told the time was.
+//
+// Running, not stopped, because a stopped clock is a world no code was written for: two writes
+// in one block would carry one timestamp, and an app whose revision stamp or "did this come
+// after the ask" is wall time reads as broken when only the harness is. (Found the first time
+// the pin froze: six writes, one revision, and RFC 9110's strong-validator law convicted the
+// app for what the pin had done.)
+//
+// For the harness that drives a simulated week — ticks taking their moment as an argument —
+// and then reads a board that asks the clock itself: without the pin the board is read on the
+// machine's day, days after the week it is meant to show, and a model holding the board's
+// statement to the simulated day convicts a disagreement the harness created. The pin is a
+// recording affordance, not a tape feature: replay never consults it, and a tape recorded
+// under it is indistinguishable from one recorded at that instant. A pin set on a derived
+// context shadows the outer one and the outer context keeps its own, which is the Go shape of
+// "nested pins restore the outer one on exit".
+func WithClockAt(ctx context.Context, instant time.Time) context.Context {
+	// time.Now carries a monotonic reading, which is what time.Since subtracts on: the pin runs
+	// on the monotonic clock even though it is stored as a wall time.
+	return context.WithValue(ctx, pinKey{}, clockPin{instant: instant, setAt: time.Now()})
+}
+
+func pinnedNow(ctx context.Context) (time.Time, bool) {
+	p, ok := ctx.Value(pinKey{}).(clockPin)
+	if !ok {
+		return time.Time{}, false
+	}
+	return p.read(), true
+}
+
+// Now records and returns the wall clock — or the clock WithClockAt set running on ctx.
 func Now(ctx context.Context) time.Time {
 	a := ambientFrom(ctx)
-	if a == nil {
-		return time.Now()
-	}
-	if a.replay != nil {
+	if a != nil && a.replay != nil {
 		return a.replay.now()
 	}
-	v := time.Now()
-	a.call.emit(map[string]any{"k": "now", "v": v.Format(time.RFC3339Nano)})
+	v, pinned := pinnedNow(ctx)
+	if !pinned {
+		v = time.Now()
+	}
+	if a != nil {
+		a.call.emit(map[string]any{"k": "now", "v": v.Format(time.RFC3339Nano)})
+	}
 	return v
 }
 

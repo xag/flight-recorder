@@ -416,6 +416,16 @@ $store = Recorder::wrapAs('kv', $storageClient, 'read', 'write');</code></pre>
 <p>The clock and the RNG hold nothing to wrap in any runtime — Python and Node shim the globals,
 .NET, Go, Java and PHP read them through recorder handles.</p>
 
+<p>Every runtime also lets a harness <em>set</em> the clock while recording — set and running, not
+frozen: inside the block the shimmed clock answers the instant plus the real time elapsed since,
+and the tape records that answer as its ordinary <code>now</code> event, exactly as if the machine
+had said so — for the harness that drives a simulated week and then reads a board that asks the
+clock itself. Running, because a stopped clock is a world no code was written for: six writes in
+one block would share one timestamp, and an app whose revision stamp is wall time reads as broken
+when only the harness is. Replay never consults the pin, nested pins restore the outer one on
+exit, and the tape format is untouched. In Python it is <code>with fr.clock_at(instant):</code>,
+taking an aware <code>datetime</code>.</p>
+
 <div class="note" data-lang="js">
   <p>Node shims <code>Date.now</code>, <code>new Date()</code>, <code>performance.now</code>,
   <code>Math.random</code>, <code>crypto.randomBytes</code> (sync <em>and</em> callback),
@@ -423,6 +433,8 @@ $store = Recorder::wrapAs('kv', $storageClient, 'read', 'write');</code></pre>
   <code>getRandomValues</code>. All of them, not the convenient ones: <strong>a half-shimmed door is
   worse than an open one, because it looks shut</strong> — code reaching for the form you skipped
   re-rolls on replay, silently.</p>
+  <p>The pin is <code>await fr.clockAt(date, fn)</code>: a <code>Date</code> and a sync or async
+  callback, the outer pin restored when it settles.</p>
 </div>
 
 <div class="note" data-lang="cs">
@@ -431,6 +443,9 @@ $store = Recorder::wrapAs('kv', $storageClient, 'read', 'write');</code></pre>
   and <code>Recorder.Random.NextDouble()</code> / <code>.Bytes(n)</code> / <code>.NextInt(a, b)</code>
   / <code>.Sample(pop, k)</code>. Under record they ask the world and write it down; under replay they
   answer from the tape.</p>
+  <p>The pin is <code>using (Recorder.Clock.At(instant))</code>, taking a <code>DateTimeOffset</code>:
+  <code>Now()</code> answers it, running, as local time and <code>UtcNow()</code> as UTC, and disposing restores
+  the outer pin.</p>
 </div>
 
 <div class="note" data-lang="go">
@@ -439,6 +454,9 @@ $store = Recorder::wrapAs('kv', $storageClient, 'read', 'write');</code></pre>
   <code>fr.SampleIndices</code> (the positions drawn) / <code>fr.RandBytes</code> /
   <code>fr.RandFloat</code> / <code>fr.RandIntn</code> for randomness. Under record they draw for
   real and write it down; under replay they answer from the tape.</p>
+  <p>The pin rides the context, as everything in Go does: <code>fr.Now(fr.WithClockAt(ctx, t))</code>
+  answers <code>t</code> plus the time since, and the caller's own <code>ctx</code> keeps its outer pin, or none, so
+  there is nothing to restore.</p>
 </div>
 
 <div class="note" data-lang="java">
@@ -448,6 +466,9 @@ $store = Recorder::wrapAs('kv', $storageClient, 'read', 'write');</code></pre>
   drawn) / <code>Recorder.randBytes</code> / <code>Recorder.randFloat</code> /
   <code>Recorder.randInt</code> for randomness. Under record they draw for real and write it down;
   under replay they answer from the tape.</p>
+  <p>The pin is <code>try (Recorder.Pin p = Recorder.clockAt(instant))</code>, taking an
+  <code>Instant</code>: both <code>now()</code> and <code>nowOffset()</code> answer it, running, in the system
+  zone, and closing restores the outer pin.</p>
   <p><strong>One thing to know:</strong> the active call rides on a <code>ThreadLocal</code>, which
   does not follow work handed to an executor. If a recorded call fans out, wrap the task with
   <code>Recorder.propagate(...)</code> — otherwise the boundary reads on that thread go unrecorded,
@@ -465,6 +486,9 @@ $store = Recorder::wrapAs('kv', $storageClient, 'read', 'write');</code></pre>
   revives in the default timezone. The ambient call is a static, which is exactly right for a
   share-nothing request model: nothing can inherit it and nothing can lose it, so the executor
   caveat that Java carries has no analogue here.</p>
+  <p>The pin is <code>Recorder::clockAt($at, $fn)</code>, taking a <code>DateTimeImmutable</code> that
+  <code>now()</code> answers, running, in that timezone; the outer pin is restored in
+  <code>finally</code>.</p>
 </div>
 
 <h2 id="record">Record</h2>
