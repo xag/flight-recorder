@@ -1066,7 +1066,11 @@ _SET_CLOCK_DECISION = Node(
         "consequence":
             "All six recorders carry it with the same test (answers the instant running, "
             "nested answers its own, outer restored, lifted after, recorded as now.v). The "
-            "tape format is unchanged; replay takes its branch before the pin is read.",
+            "tape format is unchanged; replay takes its branch before the pin is read. "
+            "And it answers WHOLE milliseconds in JS (0.11.1): the second real app stored "
+            "Date.now() as text and read back a fraction no clock ever produces, so the "
+            "effect law convicted the app for the pin's arithmetic - a set clock may not "
+            "hand the code a value the real one cannot (2026-08-21).",
     },
     children=[
         Node(id="alt-freeze-the-clock", kind="alternative",

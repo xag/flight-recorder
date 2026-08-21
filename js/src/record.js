@@ -769,7 +769,13 @@ export function installClock() {
     // Under a pin (see `clockAt`) the clock answers the instant it was set to plus the real
     // time since, and the tape records that answer, faithfully: it IS what the code was told
     // the time was.
-    const ms = hook.pinnedNow === null ? realNow() : hook.pinnedNow + (pinClock() - hook.pinnedAt);
+    // Whole milliseconds under a pin too: Date.now() never answers a fraction, and a pin that
+    // did handed the code a value no clock ever produces - a store that keeps a timestamp as
+    // text then read it back as "1777885200033.9033" where production reads a number, and the
+    // effect law convicted the app for the harness's arithmetic.
+    const ms = hook.pinnedNow === null
+      ? realNow()
+      : Math.floor(hook.pinnedNow + (pinClock() - hook.pinnedAt));
     emit({ k: 'now', v: new RealDate(ms).toISOString() });
     return ms;
   };

@@ -355,6 +355,9 @@ test('a set clock answers the instant, running, and records it as now', async ()
     const later = Date.now();
     assert.ok(later > first, 'a set clock runs; it does not stop');
     assert.ok(later - at.getTime() < 5000);
+    // Whole milliseconds, as Date.now() answers: a fraction is a value no clock ever produces,
+    // and an app that stores the number as text reads it back changed.
+    assert.ok(Number.isInteger(first) && Number.isInteger(later), 'a pinned clock answers integers');
   });
   assert.equal(seen.length, 3);
   assert.match(seen[0], /^2026-08-16T08:00:0/);

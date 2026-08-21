@@ -1,6 +1,6 @@
 {
   "name": "@xag/flight-recorder",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Record an app's tool calls at their nondeterminism boundary; replay them deterministically against the real code. Tape format v1, shared with the Python implementation.",
   "type": "module",
   "license": "Apache-2.0",
