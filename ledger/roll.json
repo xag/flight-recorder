@@ -2,7 +2,7 @@
   {
     "path": "a-harness-sets-the-clock-and-it-runs",
     "kind": "decision",
-    "digest": "4c558680837d"
+    "digest": "f6b17b724100"
   },
   {
     "path": "a-harness-sets-the-clock-and-it-runs/alt-fake-outside-the-recorder",

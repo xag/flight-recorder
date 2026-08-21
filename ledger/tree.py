@@ -1072,6 +1072,8 @@ _SET_CLOCK_DECISION = Node(
             "effect law convicted the app for the pin's arithmetic - a set clock may not "
             "hand the code a value the real one cannot (2026-08-21).",
     },
+    meta={"amended": "f6b17b724100 the consequence gains the whole-millisecond sentence "
+                     "(js 0.11.1); the claim - a set clock, running - is kept"},
     children=[
         Node(id="alt-freeze-the-clock", kind="alternative",
              name="A stopped clock: every now() in the block answers exactly the instant",
