@@ -112,7 +112,7 @@ class _Hook:
     # instant PLUS the real time elapsed since the pin was set - a clock set to an hour and
     # left running, not a stopped one. Recording only; replay serves the tape's `now`.
     pinned_now: Optional[datetime] = None
-    pinned_at: float = 0.0   # time.monotonic() when the pin was set
+    pinned_at: float = 0.0   # time.perf_counter() when the pin was set
 
 
 hook = _Hook()
@@ -329,7 +329,10 @@ class DatetimeShim(metaclass=_DatetimeShimMeta):
             return datetime.fromisoformat(ev["v"])
         if hook.pinned_now is not None:
             from datetime import timedelta
-            v = hook.pinned_now + timedelta(seconds=time.monotonic() - hook.pinned_at)
+            # perf_counter, not monotonic: on Windows under 3.11/3.12 monotonic() is
+            # GetTickCount64 and stands still for ~15 ms, so two reads inside a pin answered
+            # one instant - the stopped clock the pin exists not to be (CI, 2026-08-21).
+            v = hook.pinned_now + timedelta(seconds=time.perf_counter() - hook.pinned_at)
             v = v.astimezone(tz) if tz is not None else v
         else:
             v = datetime.now(tz)
@@ -362,7 +365,7 @@ def clock_at(instant: datetime):
     if not isinstance(instant, datetime):
         raise TypeError(f"clock_at pins a datetime, not {type(instant).__name__}")
     outer = hook.pinned_now, hook.pinned_at
-    hook.pinned_now, hook.pinned_at = instant, time.monotonic()
+    hook.pinned_now, hook.pinned_at = instant, time.perf_counter()
     try:
         yield
     finally:
