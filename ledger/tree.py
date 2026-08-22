@@ -80,7 +80,7 @@ def build() -> Quern:
                            _TESTIMONY_DECISION, _DECLARED_DECISION, _SET_CLOCK_DECISION,
                            _MINING_DECISION,
                            _SUCCESSORS_DECISION, _READER_HYPOTHESIS,
-                           _TARGET_SIZE_DEBT]
+                           _TARGET_SIZE_DEBT, _REPARSE_DEBT]
     return quern
 
 
@@ -1231,6 +1231,48 @@ _TARGET_SIZE_DEBT = Node(
                      "with enough clear space around it passes), re-run the design "
                      "invariants over a real app's render tape, and ground "
                      "false_positives with the before/after count.",
+             }),
+    ],
+)
+
+
+_REPARSE_DEBT = Node(
+    id="a-tape-is-parsed-once-per-call-replayed",
+    kind="debt",
+    name="`replay_call` and `check_invariants` take a path and an index, and each one loads "
+         "the whole session again — so replaying a tape end to end parses it once per call, "
+         "and the cost is quadratic in the thing suites do most",
+    params={
+        "parses_per_pass": Quantity(
+            value=315, unit="parse", provenance="verified", grounded=True,
+            source="measured 2026-08-22 on a consumer's pinned set: 11 tapes, 315 calls, "
+                   "1.5 MB. Walking every call of every tape parses 315 times where 11 would "
+                   "do. Holding load_session behind a cache keyed on (path, mtime_ns, size) "
+                   "and re-running the same walk: 82.7s -> 44.7s, 38.0s saved on ONE of the "
+                   "two families that walk a tape this way"),
+    },
+    payload={
+        "note":
+            "The signature is the cause and it is a good signature: `replay_call(path, i)` is "
+            "addressable, restartable and holds no state between calls, which is exactly what "
+            "a test wants when it replays one call and reports on it. Nothing about it is "
+            "wrong per call; it is only wrong per PASS, and a pass is what every consumer's "
+            "suite does. The fix must therefore not move the cost into the caller's hands - a "
+            "second entry point taking a preloaded session would make every existing caller "
+            "slow by default and fast only if it knew to be. A cache inside load_session, "
+            "keyed on the file's identity rather than its name, is invisible: same call, same "
+            "answer, no API to learn, and a tape rewritten between calls is re-read because "
+            "its mtime and size moved.",
+    },
+    children=[
+        Node(id="memoize-the-session-load", kind="discharge",
+             payload={
+                 "condition":
+                     "load_session answers from a cache keyed on (path, st_mtime_ns, st_size), "
+                     "with a test that a tape rewritten under the same name is re-read and "
+                     "not served stale — the one failure the cache can introduce, and the one "
+                     "that would be silent. Then re-measure the walk above and ground the "
+                     "saving on both families rather than one.",
              }),
     ],
 )

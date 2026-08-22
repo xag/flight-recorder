@@ -15,6 +15,16 @@
     "digest": "18d12e015d4f"
   },
   {
+    "path": "a-tape-is-parsed-once-per-call-replayed",
+    "kind": "debt",
+    "digest": "8f81d33f48b8"
+  },
+  {
+    "path": "a-tape-is-parsed-once-per-call-replayed/memoize-the-session-load",
+    "kind": "discharge",
+    "digest": "9fbe5c071800"
+  },
+  {
     "path": "all-runtimes-record-the-same-kinds",
     "kind": "gate",
     "digest": "9662d0b7ef89"
