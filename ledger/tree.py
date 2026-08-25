@@ -1240,17 +1240,22 @@ _REPARSE_DEBT = Node(
     id="a-tape-is-parsed-once-per-call-replayed",
     kind="debt",
     links={"blocked_by": ["epure:no-kind-records-an-adjudication"]},
-    name="`replay_call` and `check_invariants` take a path and an index, and each one loads "
-         "the whole session again — so replaying a tape end to end parses it once per call, "
-         "and the cost is quadratic in the thing suites do most",
+    name="DISCHARGED 2026-08-25 - load_session answers from a cache keyed on the file's "
+         "identity; a rewrite under the same name is re-read (tested), and the mutation "
+         "path loads fresh because its edits must never be served to a clean replay",
     params={
         "parses_per_pass": Quantity(
-            value=315, unit="parse", provenance="verified", grounded=True,
-            source="measured 2026-08-22 on a consumer's pinned set: 11 tapes, 315 calls, "
-                   "1.5 MB. Walking every call of every tape parses 315 times where 11 would "
-                   "do. Holding load_session behind a cache keyed on (path, mtime_ns, size) "
-                   "and re-running the same walk: 82.7s -> 44.7s, 38.0s saved on ONE of the "
-                   "two families that walk a tape this way"),
+            value=11, unit="parse", provenance="verified", grounded=True,
+            source="re-measured 2026-08-25 on the same consumer corpus (11 tapes, 315 "
+                   "calls, 1.5 MB): a pass now parses 11 times where it parsed 315, and "
+                   "the parse pass reads 0.57s uncached against 0.044s cached on this "
+                   "machine. The 2026-08-22 walk-level figure (82.7s -> 44.7s on one "
+                   "family) is kept as recorded and was not reproduced - the full walk "
+                   "needs the consumer's adapter; what is structural is that BOTH "
+                   "families now enter through the one memoized function. The cache's "
+                   "first suite run caught the mutation machinery editing a shared "
+                   "parse in place - the silent corruption the discharge condition "
+                   "warned about, closed by a fresh, uncached load on that path"),
     },
     payload={
         "note":

@@ -428,7 +428,29 @@ def _apply_constants(header: dict) -> None:
         _patch(module, attr, from_jsonable(value))
 
 
-def load_session(path: Path) -> tuple[dict, list]:
+# One parse per tape identity, not per call. replay_call(path, i) is addressable and
+# stateless per call - the right signature for a test - and quadratic per PASS, which
+# is what every consumer's suite does: 315 parses where 11 would do, 38 seconds on one
+# family (the ledger's a-tape-is-parsed-once-per-call-replayed, with the measurement).
+# The cache is keyed on the file's IDENTITY (resolved path, mtime_ns, size), never its
+# name alone, so a tape rewritten between calls is re-read - the one failure a cache
+# here can introduce, and the one that would be silent. Callers share the loaded
+# objects and treat them as read-only - EXCEPT the mutation machinery, whose entire
+# point is editing a loaded call in place (a CallHandle assigns into the events); it
+# passes fresh=True and gets a private, uncached parse, so a probe's edits can never
+# be served to the replay of the unmutated tape. The suite caught exactly that
+# corruption on this cache's first run; the fresh path is the fix, not a convenience.
+_SESSIONS: dict[tuple, tuple[dict, list]] = {}
+
+
+def load_session(path: Path, *, fresh: bool = False) -> tuple[dict, list]:
+    resolved = Path(path).resolve()
+    st = resolved.stat()
+    key = (str(resolved), st.st_mtime_ns, st.st_size)
+    if not fresh:
+        hit = _SESSIONS.get(key)
+        if hit is not None:
+            return hit
     header: dict = {}
     calls: list = []
     with path.open(encoding="utf-8") as f:
@@ -443,6 +465,12 @@ def load_session(path: Path) -> tuple[dict, list]:
                 calls.append(obj)
     if not header:
         raise ValueError(f"{path} has no session header — not a flight recording?")
+    if not fresh:
+        # one entry per tape identity; a rewritten tape gets a new key and the old
+        # entry for that path is dropped rather than left to accumulate
+        for stale in [k for k in _SESSIONS if k[0] == str(resolved)]:
+            _SESSIONS.pop(stale, None)
+        _SESSIONS[key] = (header, calls)
     return header, calls
 
 

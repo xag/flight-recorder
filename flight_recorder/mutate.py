@@ -343,7 +343,10 @@ class Recording:
 
     @classmethod
     def load(cls, path: Path, boundary: Optional[Boundary] = None) -> "Recording":
-        header, calls = load_session(Path(path))
+        # fresh, on purpose: a Recording exists to be EDITED (a CallHandle assigns
+        # into the events), and a shared cached parse would leak those edits into
+        # every later replay of the unmutated tape - silently, as green results
+        header, calls = load_session(Path(path), fresh=True)
         return cls(header, calls, boundary)
 
     def call(self, index: int) -> CallHandle:
