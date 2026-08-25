@@ -1239,6 +1239,7 @@ _TARGET_SIZE_DEBT = Node(
 _REPARSE_DEBT = Node(
     id="a-tape-is-parsed-once-per-call-replayed",
     kind="debt",
+    links={"blocked_by": ["epure:no-kind-records-an-adjudication"]},
     name="`replay_call` and `check_invariants` take a path and an index, and each one loads "
          "the whole session again — so replaying a tape end to end parses it once per call, "
          "and the cost is quadratic in the thing suites do most",
