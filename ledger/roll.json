@@ -17,7 +17,7 @@
   {
     "path": "a-tape-is-parsed-once-per-call-replayed",
     "kind": "debt",
-    "digest": "8f81d33f48b8"
+    "digest": "f1fdb5ef30eb"
   },
   {
     "path": "a-tape-is-parsed-once-per-call-replayed/memoize-the-session-load",
@@ -95,6 +95,16 @@
     "digest": "770156b67377"
   },
   {
+    "path": "forbid-is-not-rechecked-here",
+    "kind": "decision",
+    "digest": "d2120b586037"
+  },
+  {
+    "path": "forbid-is-not-rechecked-here/alt-defense-in-depth",
+    "kind": "alternative",
+    "digest": "6a21af814fe1"
+  },
+  {
     "path": "install-claims-match-registries",
     "kind": "gate",
     "digest": "16639c151e87"
@@ -140,6 +150,16 @@
     "digest": "d0968f26dca5"
   },
   {
+    "path": "nobody-reads-the-counters",
+    "kind": "debt",
+    "digest": "ca450f51bb79"
+  },
+  {
+    "path": "nobody-reads-the-counters/surface-the-count-somewhere-someone-looks",
+    "kind": "discharge",
+    "digest": "a06c5427df2a"
+  },
+  {
     "path": "one-canonical-fixture-scenario",
     "kind": "decision",
     "digest": "f7370dd8072d"
@@ -183,6 +203,21 @@
     "path": "php-port-mechanisms/alt-php-xdebug-tracing",
     "kind": "alternative",
     "digest": "22e85c14c3de"
+  },
+  {
+    "path": "publish-never-blocks",
+    "kind": "decision",
+    "digest": "30741d2da2ab"
+  },
+  {
+    "path": "publish-never-blocks/alt-queue-every-version",
+    "kind": "alternative",
+    "digest": "5c550ec5eefd"
+  },
+  {
+    "path": "publish-never-blocks/alt-synchronous-upload",
+    "kind": "alternative",
+    "digest": "98916d01e0c4"
   },
   {
     "path": "pypi-distribution-name",
@@ -270,6 +305,21 @@
     "digest": "2b005c8774b9"
   },
   {
+    "path": "the-reader-is-required",
+    "kind": "decision",
+    "digest": "700e849704ab"
+  },
+  {
+    "path": "the-reader-is-required/alt-default-the-reader",
+    "kind": "alternative",
+    "digest": "36582550895c"
+  },
+  {
+    "path": "the-reader-is-required/alt-raise-on-unreachable",
+    "kind": "alternative",
+    "digest": "9536cc6a226a"
+  },
+  {
     "path": "the-recorders-next-value-is-reading",
     "kind": "hypothesis",
     "digest": "043378708270"
@@ -280,6 +330,21 @@
     "digest": "cb65e327d529"
   },
   {
+    "path": "the-sink-ships-from-this-repo",
+    "kind": "decision",
+    "digest": "02c8106b9fce"
+  },
+  {
+    "path": "the-sink-ships-from-this-repo/alt-absorb-as-submodule",
+    "kind": "alternative",
+    "digest": "7ea8e3fc7edf"
+  },
+  {
+    "path": "the-sink-ships-from-this-repo/alt-keep-the-satellite-repo",
+    "kind": "alternative",
+    "digest": "866f510cc330"
+  },
+  {
     "path": "the-target-size-check-cries-wolf",
     "kind": "debt",
     "digest": "5d5a85e4483f"
@@ -288,5 +353,15 @@
     "path": "the-target-size-check-cries-wolf/implement-the-spacing-exception",
     "kind": "discharge",
     "digest": "11405b232159"
+  },
+  {
+    "path": "the-transport-is-one-method",
+    "kind": "decision",
+    "digest": "bec46e5a9bf8"
+  },
+  {
+    "path": "the-transport-is-one-method/alt-client-library-dependency",
+    "kind": "alternative",
+    "digest": "17f8b194f4f5"
   }
 ]

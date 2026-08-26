@@ -10,6 +10,14 @@ license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = []
 
+# flight_sink ships from this repo since the 2026-08-26 merge (it was xag/flight-sink,
+# frozen at b92912b): the off-box destinations for tapes, still a separate import package
+# that never imports flight_recorder — the SessionSink protocol is structural, and the
+# recorder stays free of cloud dependencies. `[gcs]` is what buys the cloud client, so no
+# observed app pays for a destination it never configured.
+[project.optional-dependencies]
+gcs = ["google-cloud-storage>=2.14"]
+
 # The design checker: claims over a render tape. `flight-design tape.jsonl --tokens tokens.json`.
 # It reads a tape, so it needs no browser and no dependencies — only the CAPTURE needs a browser.
 [project.scripts]
@@ -49,7 +57,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["flight_recorder"]
+packages = ["flight_recorder", "flight_sink"]
 
 # The sdist ships the Python distribution, not the repo. The other five runtimes (csharp, go,
 # java, js, php) live in the tree beside this one, and their build outputs — 157 files, 2.6MB of
@@ -58,6 +66,7 @@ packages = ["flight_recorder"]
 [tool.hatch.build.targets.sdist]
 only-include = [
     "flight_recorder",
+    "flight_sink",
     "spec",
     "tests",
     "conftest.py",

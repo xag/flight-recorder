@@ -80,7 +80,10 @@ def build() -> Quern:
                            _TESTIMONY_DECISION, _DECLARED_DECISION, _SET_CLOCK_DECISION,
                            _MINING_DECISION,
                            _SUCCESSORS_DECISION, _READER_HYPOTHESIS,
-                           _TARGET_SIZE_DEBT, _REPARSE_DEBT]
+                           _TARGET_SIZE_DEBT, _REPARSE_DEBT,
+                           _SINK_MERGE_DECISION, _SINK_NEVER_BLOCKS,
+                           _SINK_NO_FORBID_HERE, _SINK_ONE_METHOD,
+                           _SINK_READER_REQUIRED, _SINK_COUNTERS_DEBT]
     return quern
 
 
@@ -1240,6 +1243,10 @@ _REPARSE_DEBT = Node(
     id="a-tape-is-parsed-once-per-call-replayed",
     kind="debt",
     links={"blocked_by": ["epure:no-kind-records-an-adjudication"]},
+    meta={"amended": "f1fdb5ef30eb the discharge of 2026-08-25 (f649447, b20f9cd) "
+                     "rewrote the name to DISCHARGED and re-grounded parses_per_pass, "
+                     "and the roll was not rewritten in those commits; acknowledged "
+                     "here, one commit late"},
     name="DISCHARGED 2026-08-25 - load_session answers from a cache keyed on the file's "
          "identity; a rewrite under the same name is re-read (tested), and the mutation "
          "path loads fresh because its edits must never be served to a clean replay",
@@ -1279,6 +1286,235 @@ _REPARSE_DEBT = Node(
                      "not served stale — the one failure the cache can introduce, and the one "
                      "that would be silent. Then re-measure the walk above and ground the "
                      "saving on both families rather than one.",
+             }),
+    ],
+)
+
+
+# --- the sink ---------------------------------------------------------------------------
+# Ported from xag/flight-sink's ledger on 2026-08-26, when the package moved into this
+# repo (the merge decision below). The entries are the sink's own, unchanged; their
+# pre-merge history is in the frozen repo at b92912b.
+
+_SINK_MERGE_DECISION = Node(
+    id="the-sink-ships-from-this-repo",
+    kind="decision",
+    name="flight_sink ships from this repo as a second import package: same wheel, "
+         "still no import of flight_recorder, and [gcs] still the only way to buy "
+         "the cloud client",
+    payload={
+        "rationale":
+            "Decided by the owner on 2026-08-26 against the estate's measured "
+            "fragmentation: seventeen quality-cluster repos, ten independent locks "
+            "with ledger@ split across two versions, and a 979-line satellite repo "
+            "whose whole subject is this recorder's SessionSink protocol, paying its "
+            "own env, lock and CI for an isolation the package boundary already "
+            "provides. What the separation actually protected is kept: flight_sink "
+            "never imports flight_recorder (the protocol is structural), the "
+            "recorder's dependencies stay empty, and the cloud client remains an "
+            "extra only its users pay for. xag/flight-sink is frozen at b92912b; "
+            "its six consumers pin that rev and break on nothing.",
+        "consequence":
+            "One repo, one lock, one test run for recorder and sink. Consumers "
+            "repoint to xag-flight-recorder[gcs] opportunistically; until then the "
+            "frozen rev serves them unchanged.",
+    },
+    children=[
+        Node(id="alt-keep-the-satellite-repo", kind="alternative",
+             name="Keep flight-sink as its own repo",
+             payload={"why":
+                      "The isolation argument was the import boundary, and that "
+                      "boundary is the package, not the repo. What the repo added "
+                      "was a second env, a second lock that had already drifted "
+                      "behind this one's, and a second CI - cost without a "
+                      "protected subject."}),
+        Node(id="alt-absorb-as-submodule", kind="alternative",
+             name="Absorb as flight_recorder.sink instead of a second top-level package",
+             payload={"why":
+                      "Renames the import for six rev-pinned consumers and puts the "
+                      "sink inside the package it must never import, trading a real "
+                      "structural statement for tidier-looking nesting."}),
+    ],
+)
+
+
+_SINK_NEVER_BLOCKS = Node(
+    id="publish-never-blocks",
+    kind="decision",
+    name="publish() does no I/O: it is called on the hot path holding the recorder's "
+         "write lock, so the bytes go to a worker, queued versions coalesce, and "
+         "transport failures are swallowed and counted",
+    links={"rests_on": ["the-sink-ships-from-this-repo"]},
+    payload={
+        "rationale":
+            "In an async server the recorder's write lock is held on the event-loop "
+            "thread, so a publish that blocks on network I/O stalls every concurrent "
+            "request, not just the recorded one. The contract that makes the worker "
+            "safe is the deposit's own shape: each call carries the whole tape so far "
+            "under a stable name - cumulative and idempotent - so when several "
+            "versions of one tape are queued, only the newest is worth uploading and "
+            "dropping the rest is not data loss. And the recorder ignores publish "
+            "exceptions by contract (a recorder must not break the app it observes), "
+            "so sinks swallow their own transport failures and count them rather than "
+            "letting one bad upload become the app's problem.",
+        "consequence":
+            "Draining happens at atexit; a deposit that never lands costs nothing as "
+            "long as a later one does. The counters this creates are themselves a "
+            "carried risk - see the debt below.",
+    },
+    children=[
+        Node(id="alt-synchronous-upload", kind="alternative",
+             name="Upload in publish() and let the caller wait",
+             payload={"why":
+                      "Turns every recorded request into a network-bound request, on "
+                      "the lock every other request needs. The observed app would be "
+                      "paying latency for its own observability - the inversion this "
+                      "package exists to refuse."}),
+        Node(id="alt-queue-every-version", kind="alternative",
+             name="Keep every queued version of a tape instead of coalescing",
+             payload={"why":
+                      "Deposits are cumulative overwrites, so every superseded version "
+                      "is already contained in the newest one; uploading them all buys "
+                      "bandwidth costs and store churn for bytes the store would "
+                      "immediately overwrite."}),
+    ],
+)
+
+
+_SINK_NO_FORBID_HERE = Node(
+    id="forbid-is-not-rechecked-here",
+    kind="decision",
+    name="The sink does not re-run the forbidden-value check: the recorder guards every "
+         "line before the bytes exist, and re-checking the same bytes in the same "
+         "process adds no information",
+    links={"rests_on": ["the-sink-ships-from-this-repo"]},
+    payload={
+        "rationale":
+            "The recorder's guard runs inside _write, ahead of the sink's mirror, so a "
+            "forbidden value cannot reach a sink in-process. Re-running the same "
+            "patterns over the same bytes would be duplication wearing the costume of "
+            "defense in depth: same process, same patterns, same blind spots. The "
+            "check that IS worth having belongs at the door of a store receiving tapes "
+            "from recorders it does not control - a different trust boundary, and "
+            "tape-store's ledger now carries it as the-door-rechecks-no-forbid.",
+        "consequence":
+            "The sink stays byte-moving and digest-stamping. If this package ever "
+            "grows a path where bytes can originate outside a recorder's guard, this "
+            "decision is the one to revisit first.",
+    },
+    children=[
+        Node(id="alt-defense-in-depth", kind="alternative",
+             name="Re-check anyway, on the theory that two checks beat one",
+             payload={"why":
+                      "Two runs of the same patterns in the same process catch exactly "
+                      "what one run catches; the second buys hot-path work and a false "
+                      "sense of an independent control. Real depth is the check at the "
+                      "OTHER trust boundary, which this package cannot provide."}),
+    ],
+)
+
+
+_SINK_ONE_METHOD = Node(
+    id="the-transport-is-one-method",
+    kind="decision",
+    name="A transport is put(name, data, sha256) and nothing else; the local sink works "
+         "with zero dependencies and the cloud client is an extra only its users pay for",
+    links={"rests_on": ["the-sink-ships-from-this-repo"]},
+    payload={
+        "rationale":
+            "The package rides inside apps that never asked to observe anything - its "
+            "footprint is part of the recorder's promise to cost nothing. So "
+            "dependencies are empty on purpose: LocalSink is the reference "
+            "implementation and must work with nothing installed, HTTP deposits use "
+            "urllib from the standard library, and the GCS client is imported inside "
+            "its transport so `[gcs]` is what buys the cloud dependency and no one "
+            "else pays for it.",
+        "consequence":
+            "A new destination is one class with one method. The seam is small enough "
+            "that a test transport is a lambda.",
+    },
+    children=[
+        Node(id="alt-client-library-dependency", kind="alternative",
+             name="Depend on requests/google-cloud-storage outright for cleaner code",
+             payload={"why":
+                      "Every observed app would install a cloud SDK it may never use, "
+                      "to support a destination it may never configure. The observed "
+                      "app's dependency list is not this package's to spend."}),
+    ],
+)
+
+
+_SINK_READER_REQUIRED = Node(
+    id="the-reader-is-required",
+    kind="decision",
+    name="traces.fetch takes its reader as a required argument: flight_sink never "
+         "imports flight_recorder even from inside this repo, and an unreachable store "
+         "returns empty, never raises",
+    links={"rests_on": ["the-transport-is-one-method"]},
+    payload={
+        "rationale":
+            "What trace lines MEAN is not this package's business - the caller passes "
+            "a reader, because defaulting one would mean importing flight_recorder "
+            "in flight_sink, and the sink would then carry the very dependency whose "
+            "absence is its footprint promise; sharing a repo changes nothing about "
+            "that boundary. The same posture governs failure: a miner is a "
+            "diagnostic, so an unreachable or unconfigured store returns empty rather "
+            "than taking down the surface that called it. And a caller fetching "
+            "inside a recorded execution must declare it at the boundary - the store "
+            "moves with every deposit, so undeclared, every tape that ever touched it "
+            "diverges on replay.",
+        "consequence":
+            "The read path stays as thin as the write path, and the one sharp edge "
+            "(declare at the boundary) is documented where the function lives.",
+    },
+    children=[
+        Node(id="alt-default-the-reader", kind="alternative",
+             name="Import flight_recorder and default the reader for ergonomics",
+             payload={"why":
+                      "One convenience import and the zero-dependency claim is gone "
+                      "for every consumer, to save the one consumer who mines a line "
+                      "of code they were going to write anyway."}),
+        Node(id="alt-raise-on-unreachable", kind="alternative",
+             name="Raise when the store is down so callers notice",
+             payload={"why":
+                      "The caller is a live surface and the store is a diagnostic. A "
+                      "spec sheet that 500s because the tape store scaled to zero has "
+                      "the dependency direction backwards."}),
+    ],
+)
+
+
+_SINK_COUNTERS_DEBT = Node(
+    id="nobody-reads-the-counters",
+    kind="debt",
+    name="Transport failures are swallowed and counted, and nothing reads the count: a "
+         "sink that stops delivering is invisible until someone misses the tapes",
+    links={"rests_on": ["publish-never-blocks"]},
+    params={
+        "surfaced_counters": Quantity(
+            value=0, unit="surface", provenance="asserted", grounded=False,
+            source="stats['dropped'] and the error counts exist in-process and are "
+                   "exposed nowhere - no depositing app logs them on a schedule, no "
+                   "store alerts on deposit gaps. The chores incident ('0 live traces' "
+                   "discovered from the consuming end after two days) is this exact "
+                   "shape one layer up"),
+    },
+    payload={
+        "note":
+            "Swallow-and-count is the right contract for the hot path, and counting "
+            "into a void is its known cost. Carried openly rather than solved with a "
+            "reflexive alert nobody designed: where the signal should surface (the "
+            "app's logs, the store's gap detection, a fleet dashboard) is a real "
+            "decision about who acts on it.",
+    },
+    children=[
+        Node(id="surface-the-count-somewhere-someone-looks", kind="discharge",
+             payload={
+                 "condition":
+                     "Pick the surface that has an owner - a periodic stats line in "
+                     "the depositing app's logs, or deposit-gap detection at the "
+                     "store - implement it for at least one production depositor, and "
+                     "ground surfaced_counters with the count of depositors covered.",
              }),
     ],
 )
