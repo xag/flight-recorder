@@ -37,7 +37,7 @@
   {
     "path": "distribution-parity-is-checked-offline",
     "kind": "decision",
-    "digest": "3c43c18b7b5a"
+    "digest": "5c9f6e836a5c"
   },
   {
     "path": "distribution-parity-is-checked-offline/alt-dist-drop-unshipped-runtimes",
@@ -67,7 +67,7 @@
   {
     "path": "docs-single-source",
     "kind": "decision",
-    "digest": "370d8bfe5536"
+    "digest": "d1dd3c022bfa"
   },
   {
     "path": "docs-single-source/alt-per-language-readmes",
@@ -92,7 +92,7 @@
   {
     "path": "feature-parity/alt-lead-and-ports",
     "kind": "alternative",
-    "digest": "770156b67377"
+    "digest": "adb879d93d68"
   },
   {
     "path": "forbid-is-not-rechecked-here",
@@ -257,7 +257,7 @@
   {
     "path": "testimony-is-not-evidence",
     "kind": "decision",
-    "digest": "ead55f9e60f8"
+    "digest": "088ad1a0a9e1"
   },
   {
     "path": "testimony-is-not-evidence/alt-parent-pointers",

@@ -92,6 +92,7 @@ def build() -> Quern:
 _DECISION = Node(
     id="docs-single-source",
     kind="decision",
+    meta={"amended": "d1dd3c022bfa wording only: aphorism replaced with a plain statement, claim unchanged"},
     name="Documentation has one home per job: the guide (docs/index.html) is the single "
          "cross-language walkthrough, the root README is a neutral landing that links to it, and "
          "each package registry page is a link stub",
@@ -107,9 +108,10 @@ _DECISION = Node(
             "stub with the link. The two rules below are not prose here: they are gates a scan can "
             "fail.",
         "consequence":
-            "Adding a runtime is an edit to one file (the guide) plus one table row. Package READMEs "
-            "carry no walkthrough to drift. The cost is that a registry visitor who never clicks "
-            "through sees only a pointer — accepted: a captive shopfront earns a link, not a copy.",
+            "Adding a runtime is an edit to one file (the guide) plus one table row. Package "
+            "READMEs carry no walkthrough to drift. The cost is that a registry visitor who "
+            "never clicks through sees only a pointer — accepted, because a registry page is a "
+            "pointer to the guide rather than a second copy of it."
     },
     children=[
         Node(id="alt-per-language-readmes", kind="alternative",
@@ -243,12 +245,13 @@ _PARITY_DECISION = Node(
     },
     children=[
         Node(id="alt-lead-and-ports", kind="alternative",
+        meta={"amended": "adb879d93d68 wording only: aphorism replaced with a plain statement, claim unchanged"},
              name="A lead runtime (Python) with the others as ports that catch up over time",
              payload={"why":
                       "Where the project started, and exactly the drift this forbids: the guide "
                       "fills with per-language badges and 'not yet' notes, and the shared-tape "
-                      "promise decays to 'portable, except for whatever your runtime has not caught "
-                      "up on'. A gap with no deadline is a gap forever."}),
+                      "promise decays to 'portable, except for whatever your runtime has not "
+                      "caught up on'. A gap with no deadline is never closed."}),
         Node(id="alt-document-gaps-honestly", kind="alternative",
              name="Allow gaps, but document them honestly, per language",
              payload={"why":
@@ -633,22 +636,23 @@ def _install_claims_match_reality() -> Node:
 _DISTRIBUTION_DECISION = Node(
     id="distribution-parity-is-checked-offline",
     kind="decision",
+    meta={"amended": "5c9f6e836a5c wording only: aphorism replaced with a plain statement, claim unchanged"},
     name="Distribution parity is a gate over a hand-audited manifest checked against the guide's "
          "own install block, not a live query against six package registries",
     payload={
         "rationale":
             "Feature parity had a gate; distribution parity had nothing, and the gap was not "
             "theoretical: the guide advertised installs for .NET, Java and PHP that no registry "
-            "would honour, and the .NET one resolved to a placeholder rather than failing. So the "
-            "claim needs teeth. But the obvious implementation - ask NuGet, Maven Central, "
-            "Packagist, npm, PyPI and the Go proxy on every run - would make ledger.check require "
-            "the network, fail on a plane, and go red on someone else's outage; a rule that cries "
-            "wolf is one people learn to skip, and this ledger's whole premise is that a red gate "
-            "means something. The manifest splits the difference: a human audits the registries, "
-            "records what they saw, and the gate enforces the thing that actually drifted - the "
-            "DOC disagreeing with what was shipped. The audit is the expensive part and it is "
-            "rare (it changes when you publish); the disagreement is the frequent part and it is "
-            "now mechanical.",
+            "would honour, and the .NET one resolved to a placeholder rather than failing. So "
+            "the claim needed a check. But the obvious implementation - ask NuGet, Maven "
+            "Central, Packagist, npm, PyPI and the Go proxy on every run - would make "
+            "ledger.check require the network, fail on a plane, and go red on someone else's "
+            "outage; a rule that cries wolf is one people learn to skip, and this ledger's "
+            "whole premise is that a red gate means something. The manifest splits the "
+            "difference: a human audits the registries, records what they saw, and the gate "
+            "enforces the thing that actually drifted - the DOC disagreeing with what was "
+            "shipped. The audit is the expensive part and it is rare (it changes when you "
+            "publish); the disagreement is the frequent part and it is now mechanical.",
         "consequence":
             "The gate is only as honest as its last audit: a stale manifest claiming something is "
             "published keeps the guide's install line unmarked and the check green. That is a "
@@ -959,26 +963,26 @@ _SLIDES_DECISION = Node(
 _TESTIMONY_DECISION = Node(
     id="testimony-is-not-evidence",
     kind="decision",
+    meta={"amended": "088ad1a0a9e1 wording only: aphorism replaced with a plain statement, claim unchanged"},
     name="A sem event is the app's own claim and the recorder judges it never: boundary "
          "events are evidence, spans are testimony, and both go on one tape in order so a "
          "reader can hold them against each other",
     payload={
         "rationale":
-            "Every other event kind records what the world answered; a sem event records "
-            "what the app SAID it was doing, in its own free-text vocabulary, in-stream "
-            "beside the raw events it encloses. The recorder writes both down and judges "
-            "neither — whether a claim is licensed by the evidence beneath it is a "
-            "reader's question, and it has teeth only because both are on the same tape in "
-            "order. Order IS the meaning: enclosure derives from sequence, spans are "
-            "well-nested and call-scoped, and a recorder that cannot guarantee nesting "
-            "must not emit sem at all. Replay never feeds a sem event back; changed "
-            "testimony is its own divergence signal, distinct from boundary divergence "
-            "and from an invariant violation.",
+            "Every other event kind records what the world answered; a sem event records what "
+            "the app SAID it was doing, in its own free-text vocabulary, in-stream beside the "
+            "raw events it encloses. The recorder writes both down and judges neither — whether "
+            "a claim is licensed by the evidence beneath it is a reader's question, and it is "
+            "answerable only because both are on the same tape in order. Order IS the meaning: "
+            "enclosure derives from sequence, spans are well-nested and call-scoped, and a "
+            "recorder that cannot guarantee nesting must not emit sem at all. Replay never "
+            "feeds a sem event back; changed testimony is its own divergence signal, distinct "
+            "from boundary divergence and from an invariant violation.",
         "consequence":
-            "The spec's frozen sem section is the hook the estate's verification story "
-            "hangs on: epure's licensing and totality checks, and the tape store's "
-            "alphabet-bound traces, both consume exactly this shape. The recorder stays "
-            "the sensory system; judgment lives upstream.",
+            "The spec's frozen sem section is the hook the estate's verification story hangs "
+            "on: epure's licensing and totality checks, and the tape store's alphabet-bound "
+            "traces, both consume exactly this shape. The recorder only records; judgment "
+            "happens upstream.",
     },
     children=[
         Node(id="alt-parent-pointers", kind="alternative",
