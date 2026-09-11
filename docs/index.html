@@ -231,6 +231,7 @@
     <li><a href="#sem">Semantic spans</a></li>
     <li><a href="#differ">Language differences</a></li>
     <li><a href="#tape">The tape</a></li>
+    <li><a href="#read">Read tapes over MCP</a></li>
     <li><a href="#limits">Limits</a></li>
     <li><a href="#lineage">Lineage</a></li>
   </ul>
@@ -1374,6 +1375,28 @@ tape has forked, which is the one failure the arrangement exists to prevent.</p>
 
 <p class="muted"><code>events</code> order is load-bearing: replay pops them in sequence, and a
 different question at position <em>n</em> is precisely where behaviour changed.</p>
+
+<h2 id="read">Read tapes over MCP</h2>
+
+<p>A tape is data, so reading one needs no runtime of its own. <code>flight-serve</code> is an MCP
+server over a directory of tapes: point any MCP client at it and a model can open the tapes your
+app recorded, in whichever of the six languages it was written. It is read-only and never leaves
+the directory it was given.</p>
+
+<pre><code>pip install "xag-flight-recorder[serve]"
+flight-serve flight/          # the directory install() writes to; stdio by default</code></pre>
+
+<p>In a client's MCP configuration:</p>
+
+<pre><code>{"mcpServers": {"tapes": {"command": "flight-serve", "args": ["/path/to/flight"]}}}</code></pre>
+
+<p>Three tools, by depth: <code>list_tapes</code> (newest first, with the runtime that recorded each
+and any calls left unfinished by a crash), <code>read_tape</code> (one line per call; with
+<code>call=N</code>, every event of that call with payloads clipped) and <code>read_tape_value</code>
+(one payload, whole). Answers are sized for a conversation: the whole tape is read by the server
+and never returned whole, and every cap says what it left out. A <code>Dockerfile</code> at the
+repository root runs the same server with the tapes on a mounted volume at
+<code>/data/flight</code>.</p>
 
 <h2 id="limits">What it can and cannot see</h2>
 

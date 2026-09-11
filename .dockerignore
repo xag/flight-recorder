@@ -1,0 +1,10 @@
+**/__pycache__
+**/node_modules
+.git
+.venv
+dist
+csharp
+go
+java
+js
+php

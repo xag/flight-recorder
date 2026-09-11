@@ -3,7 +3,7 @@
 # The bare name is not available — PyPI collapses hyphens, colliding with `flightrecorder` (2014,
 # paragliding GPS loggers). The import name stays `flight_recorder` on every runtime.
 name = "xag-flight-recorder"
-version = "0.9.0"
+version = "0.10.0"
 description = "Record tool calls at an app's nondeterminism boundary; replay them deterministically with every internal variable observable"
 readme = "README.md"
 license = "Apache-2.0"
@@ -17,11 +17,18 @@ dependencies = []
 # observed app pays for a destination it never configured.
 [project.optional-dependencies]
 gcs = ["google-cloud-storage>=2.14"]
+# The tape reader as an MCP server (`flight-serve DIR`). The SDK is the server's dependency, not
+# the library's: an app that records never imports it. Capped below 2 because mcp 2.0.0 drops
+# `mcp.server.fastmcp`; floored at 1.10 for structured tool output.
+serve = ["mcp>=1.10,<2"]
 
 # The design checker: claims over a render tape. `flight-design tape.jsonl --tokens tokens.json`.
 # It reads a tape, so it needs no browser and no dependencies — only the CAPTURE needs a browser.
 [project.scripts]
 flight-design = "flight_recorder.design:run_cli"
+# `flight-serve DIR`: list_tapes / read_tape / read_tape_value over a directory of tapes, over
+# stdio by default. Needs the [serve] extra; without it the command says so and exits.
+flight-serve = "flight_recorder.serve:main"
 
 # Loaded by pytest when installed; inert unless `flight_recordings` is set (see
 # flight_recorder/pytest_plugin.py). pytest is never imported at library import time.
@@ -31,6 +38,7 @@ flight_recorder = "flight_recorder.pytest_plugin"
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
+    "mcp>=1.10,<2",
 ]
 
 # The ledger is NOT a dependency group, and cannot be one. quern depends on this package at

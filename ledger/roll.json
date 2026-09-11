@@ -180,6 +180,21 @@
     "digest": "aa44961e675d"
   },
   {
+    "path": "one-tape-server-not-six",
+    "kind": "decision",
+    "digest": "da9916e4bb65"
+  },
+  {
+    "path": "one-tape-server-not-six/alt-leave-the-reader-in-its-hosting-app",
+    "kind": "alternative",
+    "digest": "e22f8b377921"
+  },
+  {
+    "path": "one-tape-server-not-six/alt-port-the-server-to-every-runtime",
+    "kind": "alternative",
+    "digest": "e346e8625fc4"
+  },
+  {
     "path": "php-port-mechanisms",
     "kind": "decision",
     "digest": "c8854134b1d2"

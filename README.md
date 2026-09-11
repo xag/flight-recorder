@@ -22,6 +22,10 @@ Three shaping rules, each a bug before it was a rule. Consecutive repeats **coll
 
 `merge(scripted, live)` keeps rehearsal and performance apart. Recordings driven by an authored scenario mine correctly and are not fake, but their counts mean something else — and a reader who cannot tell them apart reads a script's repetitions as usage.
 
+## Read tapes from an MCP client
+
+`flight-serve DIR` is an MCP server over a directory of tapes: `list_tapes`, `read_tape` and `read_tape_value`, read-only, sized so a model can open a tape without the tape filling its context. It reads a tape from any of the six runtimes, because reading needs none of them. Install it with the `serve` extra of the Python package; [the guide](https://xag.github.io/flight-recorder/#read) has the client configuration, and the `Dockerfile` at the root runs it with the tapes on a volume.
+
 ## The tape is a standard
 
 The recording format is a frozen, documented wire contract: [`spec/tape-v1.md`](spec/tape-v1.md). **Implementations are welcome** — only *record* and *replay* must be native to a runtime; everything that *analyzes* a tape works on any tape. Conformance is not the prose: it is [`spec/fixtures/`](spec/fixtures/) plus the checker in [`spec/validate.py`](spec/validate.py) (mirrored in JS, .NET, Go, Java, and PHP). Every implementation must validate every fixture, and every fixture must have been produced by an implementation. This repo ships six implementations — Python, Node, .NET, Go, Java, and PHP — reading and writing the same tapes.

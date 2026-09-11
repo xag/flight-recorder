@@ -83,7 +83,8 @@ def build() -> Quern:
                            _TARGET_SIZE_DEBT, _REPARSE_DEBT,
                            _SINK_MERGE_DECISION, _SINK_NEVER_BLOCKS,
                            _SINK_NO_FORBID_HERE, _SINK_ONE_METHOD,
-                           _SINK_READER_REQUIRED, _SINK_COUNTERS_DEBT]
+                           _SINK_READER_REQUIRED, _SINK_COUNTERS_DEBT,
+                           _SERVE_DECISION]
     return quern
 
 
@@ -1520,5 +1521,51 @@ _SINK_COUNTERS_DEBT = Node(
                      "store - implement it for at least one production depositor, and "
                      "ground surfaced_counters with the count of depositors covered.",
              }),
+    ],
+)
+
+
+# --- reading over MCP ---------------------------------------------------------------------
+
+_SERVE_DECISION = Node(
+    id="one-tape-server-not-six",
+    kind="decision",
+    name="The MCP tape reader (flight-serve) is one Python program that reads tapes from every "
+         "runtime, not a feature ported to all six: feature parity binds what an app calls, "
+         "and nobody's app calls this",
+    links={"rests_on": ["feature-parity"]},
+    payload={
+        "rationale":
+            "feature-parity exists so that a user who picks a runtime does not get less "
+            "library. That is about code an app links in: record, replay, invariants, spans. "
+            "flight-serve is not linked in. An MCP client starts it as a separate process "
+            "and talks to it over stdio, so the app's language never reaches it, and the "
+            "tape spec is frozen, so one reader reads every runtime's tapes. The test suite "
+            "reads the canonical fixtures from all six runtimes to hold that. A Go user runs "
+            "the same server from pip or from the Dockerfile and gets exactly what a Python "
+            "user gets. The README already says it: only record and replay must be native "
+            "to a runtime; what analyzes a tape works on any tape.",
+        "consequence":
+            "The guide documents the server once, runtime-neutral like 'The tape' section, "
+            "with no badge. mcp is an extra ([serve]), so the library's dependency list "
+            "stays empty. The views (flight_recorder.views) are stdlib-only and take bytes, "
+            "so a server that reads tapes from somewhere other than a directory can reuse "
+            "them instead of copying them.",
+    },
+    children=[
+        Node(id="alt-port-the-server-to-every-runtime", kind="alternative",
+             name="Port the server to all six runtimes, like every other feature",
+             payload={"why":
+                      "Six programs with the same three tools and the same output, which "
+                      "would all have to be kept identical, and no user who gains anything "
+                      "from choosing between them: the MCP client does not care what "
+                      "language the server is written in."}),
+        Node(id="alt-leave-the-reader-in-its-hosting-app", kind="alternative",
+             name="Leave the tape-reading tools inside the hosted server that first had them",
+             payload={"why":
+                      "There they read one private tape store with one owner's token. "
+                      "Nobody else could read their own tapes from an MCP client, and a "
+                      "server that needs a hosted store and a credential cannot be started "
+                      "by a registry to check that it works."}),
     ],
 )
