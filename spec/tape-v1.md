@@ -61,6 +61,7 @@ answers the world gave it, so the answers plus the inputs reconstitute the run.
 | `error` | string \| null | the error's rendering if the call raised, else `null`. |
 | `ts` | string | ISO-8601, timezone-aware. |
 | `ms` | number | wall-clock duration, 2 decimal places. |
+| `constants` | object, optional | `"module.NAME" → value`, the boundary's constants as they were when THIS call ran, present only when they differ from the header's. A reader serves a call its own constants over the header's. |
 | `probe` | bool | *optional.* Present and true when the tape was mutated (see `mutate`). |
 
 `events` order is load-bearing. Replay pops the events in sequence and asserts the code

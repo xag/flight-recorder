@@ -577,6 +577,7 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
         if getattr(target.holder, target.attr, None) is not None:
             _patch(target.holder, target.attr, PlaybackChain(feed, target))
     _apply_constants(header)
+    _apply_constants(rec)      # a call recorded under constants of its own is served them
     for module, attr, value in adapter.header_patches(header):
         _patch(module, attr, value)
     hook.mode, hook.feed, hook.sems = "replay", feed, sems

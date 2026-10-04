@@ -701,12 +701,18 @@ class Recorder:
         self._bytes = bytearray()  # mirror of the file, kept only to feed a sink
         self._seq = 0
         self._inflight = 0
+        # The constants are read when the session opens and again at every call: a constant
+        # a test or an operator sets after the recorder armed is on the call that ran under
+        # it, and replay serves that call its own value (korean-gpt-coach, 2026-10-04: a test
+        # lowering a deck cap after building its service recorded the header's cap and
+        # diverged on replay).
+        self._constants = list(boundary.constants)
+        self._header_constants = self._read_constants()
         header = {
             "ev": "session", "version": FORMAT_VERSION,
             "started": datetime.now().astimezone().isoformat(),
             "python": sys.version.split()[0],
-            "constants": {f"{m.__name__}.{n}": to_jsonable(getattr(m, n))
-                          for m, n in boundary.constants},
+            "constants": self._header_constants,
         }
         for key, get in boundary.header_extras.items():
             header[key] = get()
@@ -750,17 +756,26 @@ class Recorder:
              "started": datetime.now().astimezone().isoformat()},
             self._forbid)
 
+    def _read_constants(self) -> dict:
+        return {f"{m.__name__}.{n}": to_jsonable(getattr(m, n)) for m, n in self._constants}
+
     def write_call(self, fn: str, kwargs: dict, events: list, result: Any,
                    error: Optional[str], ms: float) -> None:
         self._seq += 1
-        self._write({
+        record = {
             "ev": "call", "seq": self._seq, "fn": fn,
             "kwargs": redact_jsonable(to_jsonable(kwargs), self._redact, self._scrub),
             "events": events,
             "result": redact_jsonable(to_jsonable(result), self._redact, self._scrub),
             "error": error,
             "ts": datetime.now().astimezone().isoformat(), "ms": round(ms, 2),
-        })
+        }
+        # Only a call whose constants differ from the header's carries them: the header
+        # answers for every other call, and the tape stays as it was.
+        now = self._read_constants()
+        if now != self._header_constants:
+            record["constants"] = now
+        self._write(record)
 
 
 # --- tool wrapping / install ------------------------------------------------------------

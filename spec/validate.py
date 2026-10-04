@@ -309,6 +309,11 @@ def validate_line(obj: Any, i: int, out: list, *, first: bool) -> None:
             _check_value(obj["kwargs"], f"line {i}.kwargs", out)
         if "result" in obj:
             _check_value(obj["result"], f"line {i}.result", out)
+        if "constants" in obj:
+            if not isinstance(obj["constants"], dict):
+                out.append(f"line {i}: call.constants must be an object")
+            else:
+                _check_value(obj["constants"], f"line {i}.constants", out)
         if "error" not in obj:
             out.append(f"line {i}: call must carry 'error' (null when it did not raise)")
         elif obj["error"] is not None and not isinstance(obj["error"], str):

@@ -56,6 +56,14 @@ def greet(email: str, count: int = 2) -> str:
     return f"{email} at {datetime.now().isoformat()}: " + ", ".join(names)
 
 
+CAP = 5   # a constant the boundary declares: read at the session's start and at every call
+
+
+def capped(email: str) -> dict:
+    """A tool whose answer depends on a module constant a test may move between calls."""
+    return {"email": email, "cap": CAP}
+
+
 def outer(email: str) -> str:
     """A tool that calls another tool: the recorder must treat the pair as one call."""
     return greet(email, count=1)

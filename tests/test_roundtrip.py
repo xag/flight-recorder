@@ -17,6 +17,7 @@ def make_boundary() -> fr.Boundary:
         chains=[fr.ChainTarget(toy_tools, "DB")],
         clock_modules=[toy_tools],
         random_modules=[toy_tools],
+        constants=[(toy_tools, "CAP")],
         error_revivers={"ToyError": lambda args: toy_effects.ToyError(*args)},
     )
 
@@ -106,3 +107,23 @@ def test_install_disabled_is_noop(tmp_path):
     fr.install(make_boundary(), toy_tools, directory=str(tmp_path), enabled=False)
     assert toy_tools.greet is orig
     assert fr.session_path() is None
+
+
+def test_a_constant_moved_after_the_recorder_armed_is_served_to_the_call_that_ran_under_it(recorded, monkeypatch):
+    """The header snapshots the constants when the session opens; a call that ran under
+    another value carries its own, and replay serves each call its value - the first call's
+    from the header, the second's from the call."""
+    toy_tools.capped("t@example.com")
+    monkeypatch.setattr(toy_tools, "CAP", 2)
+    out = toy_tools.capped("t@example.com")
+    assert out["cap"] == 2
+    session = fr.session_path()
+    fr.uninstall()
+    monkeypatch.setattr(toy_tools, "CAP", 5)
+    header, calls = fr.load_session(session)
+    assert header["constants"] == {"tests.toy_tools.CAP": 5}
+    assert "constants" not in calls[0] and calls[1]["constants"] == {"tests.toy_tools.CAP": 2}
+    for i in (0, 1):
+        report = fr.replay_call(session, i, ToyAdapter())
+        assert report.ok, (i, report.divergence, report.result_diff)
+    assert toy_tools.CAP == 5
