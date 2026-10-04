@@ -48,7 +48,7 @@ from flight_recorder.session import (
     no_wasted_repeats, session_invariant,
 )
 from flight_recorder.serial import (
-    REDACTED, Truncated, TruncatedText, forbidden_hit, from_jsonable, from_trace_jsonable,
+    REDACTED, TracedObject, Truncated, TruncatedMap, TruncatedText, forbidden_hit, from_jsonable, from_trace_jsonable,
     redact_jsonable, snapshot_jsonable, to_jsonable, trace_jsonable,
 )
 
@@ -69,7 +69,7 @@ __all__ = [
     "Finding", "Session", "SessionInvariant", "SessionVerdict", "Step", "check_sessions",
     "format_session_verdict", "load_sessions", "no_retry_after_failure", "no_tool_bounce",
     "no_wasted_repeats", "session_invariant",
-    "REDACTED", "Truncated", "TruncatedText", "forbidden_hit", "from_jsonable",
+    "REDACTED", "TracedObject", "Truncated", "TruncatedMap", "TruncatedText", "forbidden_hit", "from_jsonable",
     "from_trace_jsonable", "redact_jsonable", "snapshot_jsonable", "to_jsonable",
     "trace_jsonable",
 ]

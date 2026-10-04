@@ -99,6 +99,21 @@ def test_long_sequences_are_truncated_but_still_know_their_length():
     assert list.__len__(revived) == 100    # only a prefix is actually carried
 
 
+def test_long_mappings_are_truncated_but_still_know_their_size():
+    """A rank map of thousands of words is a local of most lines of a call; encoded whole
+    on each, a trace of one call cost thirty seconds (korean-gpt-coach, 2026-10-04)."""
+    from flight_recorder.serial import TRACE_MAX_ITEMS, TruncatedMap, from_trace_jsonable, trace_jsonable
+    big = {f"w{k}": k for k in range(TRACE_MAX_ITEMS + 50)}
+    enc = trace_jsonable(big)
+    assert set(enc) == {"__map__"} and len(enc["__map__"]["head"]) == TRACE_MAX_ITEMS
+    back = from_trace_jsonable(enc)
+    assert isinstance(back, TruncatedMap) and len(back) == TRACE_MAX_ITEMS + 50
+    assert back["w0"] == 0 and f"w{TRACE_MAX_ITEMS}" not in back
+    small = {f"w{k}": k for k in range(TRACE_MAX_ITEMS)}
+    assert from_trace_jsonable(trace_jsonable(small)) == small
+
+
+
 def test_a_user_dict_shaped_like_a_marker_revives_as_itself():
     """{'__seq__': True} in user code must not be mistaken for the tracer's own marker."""
     for tricky in ({"__seq__": True}, {"__opaque__": "note"},
@@ -120,7 +135,7 @@ def test_a_hostile_object_degrades_to_opaque_instead_of_raising():
             raise RuntimeError("not initialized")
 
     encoded = fr.trace_jsonable(Evil())
-    assert "Evil" in encoded["__opaque__"]
+    assert "Evil" in json.dumps(encoded)
 
     class EvilDict(dict):
         def items(self):
@@ -332,3 +347,69 @@ def test_calls_and_returns_are_queryable(record, tmp_path):
     assert entry and entry[0].args["level"] == 2
     assert t.returns("study_status")[0].value["corpus"] == 3
     assert t.raised() == []
+
+
+def test_a_large_object_is_traced_by_its_size_not_its_repr():
+    """Its repr would be built whole before truncation, on every line that holds it."""
+    from flight_recorder.serial import TRACE_MAX_ITEMS, trace_jsonable
+
+    class Matrix:
+        __slots__ = ("rows",)   # no attribute dict to trace: the size is all there is
+
+        def __init__(self, n):
+            self.rows = list(range(n))
+
+        def __len__(self):
+            return len(self.rows)
+
+        def __repr__(self):
+            raise AssertionError("the repr of a large object must not be built for a trace")
+
+    assert trace_jsonable(Matrix(TRACE_MAX_ITEMS + 1)) == {"__opaque__": f"<Matrix len={TRACE_MAX_ITEMS + 1}>"}
+
+    class Small:
+        def __repr__(self):
+            return "Small(1)"
+
+    assert trace_jsonable(Small()) == {"__opaque__": "Small(1)"}
+
+
+def test_an_object_is_traced_as_its_attributes_capped_and_cycle_safe():
+    from dataclasses import dataclass, field
+    from flight_recorder.serial import TRACE_MAX_ITEMS, TracedObject, from_trace_jsonable, trace_jsonable
+
+    @dataclass
+    class Learner:
+        capacity: float
+        rows: list = field(default_factory=list)
+        back: object = None
+
+        def __repr__(self):
+            raise AssertionError("an object's repr is never built for a trace")
+
+    l = Learner(2.5, list(range(TRACE_MAX_ITEMS + 1)))
+    l.back = l
+    enc = trace_jsonable(l)
+    assert enc["__obj__"]["type"] == "Learner" and enc["__obj__"]["attrs"]["capacity"] == 2.5
+    assert enc["__obj__"]["attrs"]["rows"]["__seq__"]["len"] == TRACE_MAX_ITEMS + 1
+    assert enc["__obj__"]["attrs"]["back"] == {"__opaque__": "<Learner (cycle)>"}
+    back = from_trace_jsonable(enc)
+    assert isinstance(back, TracedObject) and back.trace_type == "Learner" and back.capacity == 2.5
+
+
+def test_a_fanned_out_object_graph_stays_within_the_trace_budget():
+    """Ten attributes of ten attributes, sixteen deep, is a trace that never ends."""
+    import time
+    from flight_recorder.serial import TRACE_MAX_NODES, trace_jsonable
+
+    class Node:
+        def __init__(self, depth):
+            if depth:
+                for k in range(10):
+                    setattr(self, f"a{k}", Node(depth - 1))
+
+    t = time.perf_counter()
+    enc = trace_jsonable(Node(6))
+    assert time.perf_counter() - t < 2.0
+    assert "beyond the trace budget" in json.dumps(enc)
+    assert json.dumps(enc).count('"__obj__"') <= TRACE_MAX_NODES

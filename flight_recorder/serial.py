@@ -16,7 +16,9 @@ anything long is cut to a prefix that still knows its true length.
 from __future__ import annotations
 
 import json
+import itertools
 import re
+import types
 from datetime import date, datetime
 from typing import Any, Optional
 
@@ -214,6 +216,31 @@ class Truncated(list):
         return f"<{self.total} items, first {list.__len__(self)} traced: {list.__repr__(self)}>"
 
 
+class TruncatedMap(dict):
+    """A traced mapping cut to its first TRACE_MAX_ITEMS entries. `len()` is the TRUE size;
+    the entries present are the head, so `len(ranks) > 0` is trustworthy while a key past
+    the head is not there to be read."""
+
+    def __init__(self, head: dict, total: int):
+        super().__init__(head)
+        self.total = total
+
+    def __len__(self) -> int:
+        return self.total
+
+    def __repr__(self) -> str:
+        return f"<{self.total} entries, first {dict.__len__(self)} traced: {dict.__repr__(self)}>"
+
+
+class TracedObject(types.SimpleNamespace):
+    """A traced object revived as its attributes: `learner.capacity` reads as it did in the
+    code. `trace_type` is the class it was."""
+
+    def __init__(self, trace_type: str, attrs: dict):
+        super().__init__(**attrs)
+        self.trace_type = trace_type
+
+
 class TruncatedText(str):
     """A traced string cut to a prefix. `len()` is the TRUE length; the value is the head."""
 
@@ -231,7 +258,7 @@ _ADDR = re.compile(r" at 0x[0-9A-Fa-f]+")
 # Every single-key marker the trace encoding uses. A user dict that happens to have exactly
 # this shape must be escaped on encode, or revival would mistake it for a marker.
 _MARKERS = frozenset({"__dt__", "__date__", "__undef__", "__opaque__", "__snap__", "__seq__",
-                      "__str__", "__esc__"})
+                      "__map__", "__obj__", "__str__", "__esc__"})
 
 
 def _opaque(v: Any) -> dict:
@@ -250,6 +277,10 @@ def _snapshottable(v: Any) -> bool:
         return False
 
 
+TRACE_MAX_NODES = 2000   # values one traced local may encode to, over every level
+_BUDGET = [0]            # nodes left for the value being encoded; reset at depth 0
+
+
 def trace_jsonable(v: Any, depth: int = 0) -> Any:
     """Encode one traced internal value. Unlike to_jsonable this unwraps document snapshots
     and caps long values, because it runs on every local of every executed line.
@@ -257,6 +288,8 @@ def trace_jsonable(v: Any, depth: int = 0) -> Any:
     It must NEVER raise: it is called from inside a sys.settrace callback, and an exception
     there is injected into the frame being traced — corrupting the very replay the trace is
     meant to observe. Anything hostile degrades to an opaque marker instead."""
+    if depth == 0:
+        _BUDGET[0] = TRACE_MAX_NODES
     try:
         return _trace_encode(v, depth)
     except Exception:
@@ -266,6 +299,13 @@ def trace_jsonable(v: Any, depth: int = 0) -> Any:
 def _trace_encode(v: Any, depth: int) -> Any:
     if depth > _MAX_DEPTH:
         return _opaque(v)
+    # A value is a tree of attributes, entries and items, and each level is capped - but a
+    # hundred of a hundred of a hundred is a million, and an object graph fans out faster
+    # than a cycle guard can see. One budget over the whole value bounds the cost of a
+    # local on an executed line to a constant, whatever it holds.
+    _BUDGET[0] -= 1
+    if _BUDGET[0] < 0:
+        return {"__opaque__": f"<{type(v).__name__} (beyond the trace budget)>"}
     if v is None or isinstance(v, (int, float, bool)):
         return v
     if isinstance(v, str):
@@ -286,7 +326,14 @@ def _trace_encode(v: Any, depth: int) -> Any:
             # a user dict shaped exactly like a marker: escape it so it revives as itself
             k = next(iter(v))
             return {"__esc__": {str(k): trace_jsonable(v[k], depth + 1)}}
-        return {str(k): trace_jsonable(x, depth + 1) for k, x in v.items()}
+        if len(v) <= TRACE_MAX_ITEMS:
+            return {str(k): trace_jsonable(x, depth + 1) for k, x in v.items()}
+        # A mapping is cut like a sequence: the tracer encodes every local of every executed
+        # line, and a rank map of thousands of words encoded whole on each line made a trace
+        # of one call cost thirty seconds.
+        head = {str(k): trace_jsonable(x, depth + 1)
+                for k, x in itertools.islice(v.items(), TRACE_MAX_ITEMS)}
+        return {"__map__": {"len": len(v), "head": head}}
     if isinstance(v, (list, tuple, set, frozenset)):
         if isinstance(v, (set, frozenset)):
             # hash order varies per process (PYTHONHASHSEED); a trace must not
@@ -300,6 +347,54 @@ def _trace_encode(v: Any, depth: int) -> Any:
             return [trace_jsonable(x, depth + 1) for x in items]
         head = [trace_jsonable(x, depth + 1) for x in items[:TRACE_MAX_ITEMS]]
         return {"__seq__": {"len": len(items), "head": head}}
+    if callable(v) or isinstance(v, type):
+        return _opaque(v)
+    return _trace_object(v, depth) or _trace_opaque(v)
+
+
+_ENCODING: set = set()   # ids of the objects whose attributes are being encoded, a cycle guard
+
+
+def _trace_object(v: Any, depth: int) -> Optional[dict]:
+    """An object with attributes is traced as its attributes, each encoded and capped like a
+    local, never as its repr: a dataclass holding a 48,000-row matrix has a repr that costs
+    ten milliseconds to build, paid on every executed line of every frame that holds it,
+    and an invariant can read `learner.capacity` out of attributes where a repr gave it a
+    string. None when the value has no attribute dict, or is already being encoded above."""
+    attrs = getattr(v, "__dict__", None)
+    if not isinstance(attrs, dict):
+        return None
+    if id(v) in _ENCODING:
+        return {"__opaque__": f"<{type(v).__name__} (cycle)>"}
+    _ENCODING.add(id(v))
+    try:
+        body = {str(k): trace_jsonable(x, depth + 1)
+                for k, x in itertools.islice(attrs.items(), TRACE_MAX_ITEMS)
+                if not str(k).startswith("_")}
+    finally:
+        _ENCODING.discard(id(v))
+    if not body:
+        return None   # nothing public to show: its repr says what it is
+    return {"__obj__": {"type": type(v).__name__, "attrs": body}}
+
+
+def _trace_opaque(v: Any) -> dict:
+    """An untraceable value in a trace: its class and its size, never a repr built over its
+    whole contents. `safe_repr` truncates a repr after building it, and the repr of an
+    object holding a 48,000-row matrix is tens of milliseconds, paid on every executed line
+    of every frame that holds one: a trace of one call cost eight seconds that way. An
+    array is named by its shape and dtype, a sized object past TRACE_MAX_ITEMS by its
+    length; anything smaller keeps its repr, address scrubbed."""
+    shape = getattr(v, "shape", None)
+    dtype = getattr(v, "dtype", None)
+    if shape is not None and dtype is not None:
+        return {"__opaque__": f"<{type(v).__name__} shape={tuple(shape)} dtype={dtype}>"}
+    try:
+        n = len(v)
+    except Exception:
+        n = None
+    if n is not None and n > TRACE_MAX_ITEMS:
+        return {"__opaque__": f"<{type(v).__name__} len={n}>"}
     return _opaque(v)
 
 
@@ -318,6 +413,12 @@ def from_trace_jsonable(v: Any) -> Any:
             if "__seq__" in v:
                 spec = v["__seq__"]
                 return Truncated([from_trace_jsonable(x) for x in spec["head"]], spec["len"])
+            if "__obj__" in v:
+                spec = v["__obj__"]
+                return TracedObject(spec["type"], {k: from_trace_jsonable(x) for k, x in spec["attrs"].items()})
+            if "__map__" in v:
+                spec = v["__map__"]
+                return TruncatedMap({k: from_trace_jsonable(x) for k, x in spec["head"].items()}, spec["len"])
             if "__str__" in v:
                 spec = v["__str__"]
                 return TruncatedText(spec["head"], spec["len"])

@@ -350,6 +350,11 @@ class Tracer:
         fname = frame.f_code.co_filename
         if not fname.startswith(self.root) or os.path.basename(fname) in self.skip_files:
             return None
+        if frame.f_code.co_name == "<genexpr>":
+            # A generator expression is a frame per item: a call, a line and a return for
+            # each of 48,000 rows is a trace of the comprehension, not of the state the
+            # enclosing line changes - which the enclosing frame's own 'L' event records.
+            return None
         snap = self._locals(frame)
         self._write({"e": "C", "fn": frame.f_code.co_qualname,
                      "at": self._where(frame), "args": snap})

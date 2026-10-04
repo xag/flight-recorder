@@ -292,7 +292,7 @@ log is not how anyone should discover a credential was about to be written down.
 ## Reserved
 
 `ev: "inflight"` (the crash-capture sidecar) and the trace encoding (`__snap__`, `__seq__`,
-`__str__`, `__esc__`) are **reserved in v1** and out of scope for a recorder. A tape reader
+`__map__`, `__obj__`, `__str__`, `__esc__`) are **reserved in v1** and out of scope for a recorder. A tape reader
 MUST tolerate them. The trace markers belong to variable-level tracing, which Node does not
 have — but they are reserved here so that an implementation adding it cannot choose a
 conflicting encoding.
