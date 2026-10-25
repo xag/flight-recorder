@@ -973,9 +973,14 @@ def _arm(directory: str, boundary: Boundary, enabled: Gate,
 
 def install(boundary: Boundary, tools_module: Any, directory: str = "flight",
             enabled: Gate = True, tool_skip_params: tuple = ("svc",),
-            sink: Optional[SessionSink] = None) -> None:
+            sink: Optional[SessionSink] = None, defined_in: tuple = ()) -> None:
     """Turn recording on for this process: wrap the boundary, wrap every public function
     defined in `tools_module`, open a session file.
+
+    `defined_in` names more modules whose functions count as tools when `tools_module`
+    holds them: a module that gathers the tools of several (`from app.billing import
+    subscribe`) records each under the name it holds it by, and is patched where its callers
+    look it up. A function imported from anywhere else is a helper, never a tool.
 
     `enabled` is the gate. A bool decides once, for the whole process — falsy is a complete
     no-op, nothing is patched. A callable `(tool_name, kwargs) -> bool` is instead consulted
@@ -987,9 +992,10 @@ def install(boundary: Boundary, tools_module: Any, directory: str = "flight",
     """
     if not _arm(directory, boundary, enabled, sink):
         return
-    for name, fn in vars(tools_module).items():
+    homes = {tools_module.__name__, *(m if isinstance(m, str) else m.__name__ for m in defined_in)}
+    for name, fn in list(vars(tools_module).items()):
         if (callable(fn) and not name.startswith("_")
-                and getattr(fn, "__module__", "") == tools_module.__name__
+                and getattr(fn, "__module__", "") in homes
                 and not inspect.isclass(fn)):
             _patch(tools_module, name, _wrap_tool(fn, tool_skip_params))
     hook.mode = "record"
