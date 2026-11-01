@@ -241,6 +241,17 @@ public final class Serial {
      * yields a generic map; the tape keeps the surface, not the type.
      */
     private static Object encodeObject(Object v, int depth) {
+        return encodeObject(v, depth, Serial::encode);
+    }
+
+    /** How the object walk encodes what a getter or a field returns: with the tape's codec, or
+     *  with the trace's, which carries its depth and its node budget through the walk. */
+    interface Child {
+        Object encode(Object value, int depth);
+    }
+
+    /** {@link #encodeObject(Object, int)} with the children encoded by {@code child}. */
+    static Object encodeObject(Object v, int depth, Child child) {
         Class<?> cls = v.getClass();
         Map<String, Object> out = new LinkedHashMap<>();
         try {
@@ -248,7 +259,7 @@ public final class Serial {
                 for (RecordComponent rc : cls.getRecordComponents()) {
                     Method m = rc.getAccessor();
                     m.setAccessible(true);
-                    out.put(rc.getName(), encode(m.invoke(v), depth + 1));
+                    out.put(rc.getName(), child.encode(m.invoke(v), depth + 1));
                 }
                 return out;
             }
@@ -263,11 +274,11 @@ public final class Serial {
                         && (m.getReturnType() == boolean.class || m.getReturnType() == Boolean.class)) {
                     prop = name.substring(2);
                 } else continue;
-                out.put(camel(prop), encode(m.invoke(v), depth + 1));
+                out.put(camel(prop), child.encode(m.invoke(v), depth + 1));
             }
             for (Field f : cls.getFields()) {
                 if (Modifier.isStatic(f.getModifiers())) continue;
-                out.putIfAbsent(camel(f.getName()), encode(f.get(v), depth + 1));
+                out.putIfAbsent(camel(f.getName()), child.encode(f.get(v), depth + 1));
             }
         } catch (Throwable t) {
             // A getter that throws is the app's business, not the recorder's. Degrade.

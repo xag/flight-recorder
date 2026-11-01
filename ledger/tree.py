@@ -85,7 +85,7 @@ def build() -> Quern:
                            _SINK_NO_FORBID_HERE, _SINK_ONE_METHOD,
                            _SINK_READER_REQUIRED, _SINK_COUNTERS_DEBT,
                            _SERVE_DECISION, _TRACE_MASKED_LIKE_TAPE,
-                           _STOCK_CREDENTIAL_SCRUB]
+                           _STOCK_CREDENTIAL_SCRUB, _TRACED_VALUE_IS_BOUNDED]
     return quern
 
 
@@ -1690,5 +1690,54 @@ _STOCK_CREDENTIAL_SCRUB = Node(
              payload={"why":
                       "feature-parity: a helper an app calls is a feature, and a runtime "
                       "without it gives its users less library."}),
+    ],
+)
+
+
+_TRACED_VALUE_IS_BOUNDED = Node(
+    id="a-traced-value-costs-a-constant",
+    kind="decision",
+    name="In every runtime, encoding one traced value costs at most a fixed budget of nodes "
+         "(2000, over every level, reset per value), sequences and maps are cut to their first "
+         "100 items with their true length kept, cycles are named, and the encoder never runs "
+         "code that can block or wait: an unfinished task or future is written as its name and "
+         "state, never forced",
+    links={"rests_on": ["feature-parity", "what-masks-a-tape-masks-a-trace"]},
+    payload={
+        "rationale":
+            "The tracer encodes every local of every executed line, so the cost of one value is "
+            "paid thousands of times per call. Python learnt it first (7bc26d1): a rank map of "
+            "thousands of words encoded whole on every line made one trace cost thirty seconds. "
+            "A depth cap does not bound it, because an object graph fans out: a hundred of a "
+            "hundred of a hundred is a million at depth three. The ports had depth caps only. "
+            "On 2026-11-01 a Java Thread took 2 s and 55 KB per encode, and a .NET local holding "
+            "a Task<T> was read through .Result, which blocks the traced code until the task "
+            "ends: a tracer that changes when the observed code runs is no longer observing it.",
+        "consequence":
+            "A runtime's trace encoder takes one budget per top-level value and carries it, and "
+            "the depth, through any hand-off to another codec (Java's TraceValue to Serial). "
+            "Past the budget a value is a marker naming its type. Truncation keeps the true "
+            "length, so `len(x) > 0` stays assertable. An awaitable is named with its status; "
+            "its result is not traced, as Python does not trace an awaitable's result.",
+    },
+    children=[
+        Node(id="alt-depth-cap-only", kind="alternative",
+             name="Keep the depth cap as the only bound",
+             payload={"why":
+                      "It bounds how deep, not how wide. The cost that made traces unusable "
+                      "came from width: maps of thousands of entries and objects with many "
+                      "fields, each re-encoded on every executed line."}),
+        Node(id="alt-repr-past-a-size", kind="alternative",
+             name="Fall back to the value's string rendering when it is large",
+             payload={"why":
+                      "A rendering is built over the whole value before it can be cut, so it "
+                      "costs what the walk costs, and it is a string an invariant cannot do "
+                      "arithmetic on (trace v2's reason for recording data)."}),
+        Node(id="alt-read-completed-results", kind="alternative",
+             name="Trace a task's result when it has already completed",
+             payload={"why":
+                      "Whether it has completed is a race with the traced code, so two replays "
+                      "of one execution would write different traces; and Python, the "
+                      "reference, does not trace an awaitable's result."}),
     ],
 )

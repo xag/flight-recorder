@@ -25,6 +25,26 @@
     "digest": "9fbe5c071800"
   },
   {
+    "path": "a-traced-value-costs-a-constant",
+    "kind": "decision",
+    "digest": "eb7cce542db8"
+  },
+  {
+    "path": "a-traced-value-costs-a-constant/alt-depth-cap-only",
+    "kind": "alternative",
+    "digest": "551e3f1d6bcf"
+  },
+  {
+    "path": "a-traced-value-costs-a-constant/alt-read-completed-results",
+    "kind": "alternative",
+    "digest": "6bcb98193dee"
+  },
+  {
+    "path": "a-traced-value-costs-a-constant/alt-repr-past-a-size",
+    "kind": "alternative",
+    "digest": "9cdcdcc098ca"
+  },
+  {
     "path": "all-runtimes-record-the-same-kinds",
     "kind": "gate",
     "digest": "9662d0b7ef89"
