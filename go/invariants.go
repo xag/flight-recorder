@@ -61,9 +61,9 @@ func (r InvariantReport) OK() bool {
 }
 
 // CheckInvariants replays call `index` of the tape at `path` and checks every invariant against
-// the resulting trajectory.
-func CheckInvariants(path string, index int, resolve Resolver, invariants []Invariant) (*InvariantReport, error) {
-	rep, err := Replay(path, index, resolve)
+// the resulting trajectory. boundary, optional, is the one the tape was recorded with (see Replay).
+func CheckInvariants(path string, index int, resolve Resolver, invariants []Invariant, boundary ...Boundary) (*InvariantReport, error) {
+	rep, err := Replay(path, index, resolve, boundary...)
 	if err != nil {
 		return nil, err
 	}
@@ -72,8 +72,8 @@ func CheckInvariants(path string, index int, resolve Resolver, invariants []Inva
 
 // CheckInvariantsCall checks invariants against a replay of a (possibly mutated) call view — the
 // mutation + invariant flow: empty a result, mark it a probe, and assert the code still holds.
-func CheckInvariantsCall(cv *CallView, resolve Resolver, probe bool, invariants []Invariant) (*InvariantReport, error) {
-	rep, err := ReplayCall(cv, resolve, probe)
+func CheckInvariantsCall(cv *CallView, resolve Resolver, probe bool, invariants []Invariant, boundary ...Boundary) (*InvariantReport, error) {
+	rep, err := ReplayCall(cv, resolve, probe, boundary...)
 	if err != nil {
 		return nil, err
 	}

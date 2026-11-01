@@ -168,7 +168,15 @@ func (f *feed) popExpect(kind, sig, op, fn string) map[string]any {
 type replayState struct {
 	feed *feed
 	sems []SemPair
+	// The boundary's masking, applied to what the replayed code produces before it is compared
+	// with the tape, as the recording applied it before writing. Empty: nothing is masked.
+	redact serial.Rules
+	scrub  serial.Scrub
 }
+
+// mask is the recorder's masking, applied to the replayed side: a value that came off the tape is
+// already a mask and passes through unchanged, which is why Redact and Scrub must be idempotent.
+func (rs *replayState) mask(v any) any { return serial.Redact(v, rs.redact, rs.scrub) }
 
 func (rs *replayState) now() time.Time {
 	ev := rs.feed.popExpect("now", "", "", "")
@@ -232,7 +240,10 @@ func (rs *replayState) query(op, sig string) []Snapshot {
 	return out
 }
 
-func (rs *replayState) execCompare(op, sig string, argsJsonable []any) {
+func (rs *replayState) execCompare(op, sig string, raw []any) {
+	// Masked like the recording was, so a masked write still compares, and so the writes handed
+	// to invariants never carry a value the tape was not allowed to hold.
+	argsJsonable := rs.mask(raw)
 	// Every write the replayed code performs is captured for invariants ("never writes when the
 	// corpus is empty"); writes are compared, never executed.
 	rs.feed.writes = append(rs.feed.writes, map[string]any{"op": op, "sig": sig, "args": argsJsonable})
@@ -265,10 +276,11 @@ func replayEffect[T any](rs *replayState, name string, args []any) (T, error) {
 	ev := rs.feed.popExpect("fx", "", "", name)
 	// Probe replay never compares args: a mutated upstream answer legitimately changes every
 	// downstream question. The effect name and event order still gate.
-	if !rs.feed.probe && !jsonEqual(ev["args"], jsonableSlice(args)) {
+	asked := rs.mask(jsonableSlice(args)) // masked like the recording was
+	if !rs.feed.probe && !jsonEqual(ev["args"], asked) {
 		panic(&replayDivergence{fmt.Sprintf(
 			"effect %s called with different arguments than recorded:\n  recorded: %s\n  replayed: %s",
-			name, jsonString(ev["args"]), jsonString(jsonableSlice(args)))})
+			name, jsonString(ev["args"]), jsonString(asked))})
 	}
 	if errObj, ok := ev["err"].(map[string]any); ok {
 		return zero, &ReplayedEffectError{Type: str(errObj["type"]), Repr: str(errObj["repr"])}
@@ -328,7 +340,12 @@ type Resolver func(fn string, kwargs map[string]any) (func(context.Context) (any
 // Replay re-executes call `index` of the session at `path` against the code `resolve` returns,
 // feeding the recorded answers back, and returns the verdict. A call the mutation API marked a
 // probe replays in probe mode by itself.
-func Replay(path string, index int, resolve Resolver) (*ReplayReport, error) {
+//
+// boundary, optional, is the Boundary the tape was recorded with. Its Redact and Scrub mask the
+// replayed side (an effect's args, a write's args, the result) before it is compared with the
+// tape, as the recording masked the recorded side; without it a masked recording diverges on its
+// own replay. Left out, nothing is masked, as before.
+func Replay(path string, index int, resolve Resolver, boundary ...Boundary) (*ReplayReport, error) {
 	_, calls, err := loadSession(path)
 	if err != nil {
 		return nil, err
@@ -337,23 +354,26 @@ func Replay(path string, index int, resolve Resolver) (*ReplayReport, error) {
 		return nil, fmt.Errorf("call %d out of range: %d call(s) in the session", index, len(calls))
 	}
 	rec := calls[index]
-	return replayRecordedCall(rec, resolve, rec["probe"] == true)
+	return replayRecordedCall(rec, resolve, rec["probe"] == true, boundary)
 }
 
 // ReplayCall replays an in-memory call view (from a loaded, possibly mutated Recording). probe —
 // or a call marked a probe via MarkProbe — matches boundary questions by shape and does not gate
 // on result/error; the verdict then belongs to invariants.
-func ReplayCall(cv *CallView, resolve Resolver, probe bool) (*ReplayReport, error) {
+func ReplayCall(cv *CallView, resolve Resolver, probe bool, boundary ...Boundary) (*ReplayReport, error) {
 	if cv == nil {
 		return nil, fmt.Errorf("no such call")
 	}
-	return replayRecordedCall(cv.raw, resolve, probe || cv.raw["probe"] == true)
+	return replayRecordedCall(cv.raw, resolve, probe || cv.raw["probe"] == true, boundary)
 }
 
-func replayRecordedCall(rec map[string]any, resolve Resolver, probe bool) (*ReplayReport, error) {
+func replayRecordedCall(rec map[string]any, resolve Resolver, probe bool, boundary []Boundary) (*ReplayReport, error) {
 	events := toMapSlice(rec["events"])
 	f := &feed{events: events, probe: probe}
 	rs := &replayState{feed: f}
+	for _, b := range boundary {
+		rs.redact, rs.scrub = b.Redact, b.Scrub
+	}
 
 	report := &ReplayReport{
 		Fn:           str(rec["fn"]),
@@ -410,7 +430,9 @@ func replayRecordedCall(rec map[string]any, resolve Resolver, probe bool) (*Repl
 	report.ErrorMatch = report.ReplayedError == recordedError(rec["error"])
 
 	if report.Divergence == "" && report.Unanswerable == "" {
-		rj := serial.ToJsonable(result)
+		// Masked like the recorded result was. Invariants therefore judge the masked result, the
+		// only one the tape holds.
+		rj := rs.mask(serial.ToJsonable(result))
 		report.ReplayedResult = rj
 		report.ResultMatch = jsonEqual(rj, rec["result"])
 	}
