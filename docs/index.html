@@ -899,7 +899,7 @@ report.Divergence   // …or the exact point where behaviour changed</code></pre
 <pre data-lang="go"><code>report, _ := fr.Replay(".flight/flight-….jsonl", 0,
 	func(fn string, kwargs map[string]any) (func(context.Context) (any, error), error) {
 		return studyStatus, nil   // the same function; its effects come off the tape, not the network
-	})
+	}, boundary)                  // masks the replayed side as the tape was masked
 
 report.OK()          // result and error both reproduce the recording
 report.Divergence    // …or the exact point where behaviour changed</code></pre>
