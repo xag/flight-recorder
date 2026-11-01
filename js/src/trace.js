@@ -12,6 +12,9 @@ import { Worker } from 'node:worker_threads';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { redactJsonable } from './serial.js';
+import { compileForbid, guard } from './record.js';
+
 const WORKER = new URL('./trace.worker.js', import.meta.url);
 
 /**
@@ -80,10 +83,16 @@ const short = (url) => {
  * @param {object} o
  * @param {(string|RegExp)[]} o.include which files to trace — a path fragment or a regex.
  *   Trace what you are investigating, not the world: every traced line costs a pause.
+ * @param {object} [o.redact] the boundary's field rules, applied to the locals by name
+ * @param {Function|null} [o.scrub] the boundary's value sweep, applied to every string local
+ * @param {Array<string|RegExp>} [o.forbid] the boundary's tripwire, read on each masked observation
  * @returns {Promise<{result: unknown, error: Error|null, trace: Trace}>}
+ * @throws {ForbiddenValue} when a forbidden pattern survives the masks; no trace is returned
  */
-export async function traced(fn, { include }) {
+export async function traced(fn, { include, redact = {}, scrub = null, forbid = [] }) {
   const patterns = include.map((p) => (p instanceof RegExp ? p.source : escapeRegex(String(p))));
+  // Compiled before anything runs, so a bad pattern fails here and not after the traced run.
+  const tripwire = compileForbid(forbid);
 
   const worker = new Worker(WORKER, { workerData: { include: patterns } });
   worker.unref();
@@ -114,7 +123,28 @@ export async function traced(fn, { include }) {
     await worker.terminate();
   }
 
+  observations = mask(observations, { redact, scrub, tripwire });
   return { result, error, trace: new Trace(observations) };
+}
+
+/**
+ * The boundary's masks, applied to a trace as they are applied to a tape.
+ *
+ * A trace holds every local of every traced line, so it holds values before they reach any
+ * masking: the raw string on its way into the header an effect will send. `redact` and `scrub`
+ * rewrite the payload (`vars`, keyed by local name as a tape's kwargs are keyed by parameter
+ * name, so a field rule reaches a local of that name) and never the envelope (`file`, `line`,
+ * `fn`). Then `forbid` reads each masked observation as serialized, and one hit refuses the
+ * whole trace: what would be left is an account that stops mid-execution with nothing saying why.
+ * The message names the pattern, never the match.
+ */
+function mask(observations, { redact, scrub, tripwire }) {
+  const masking = (redact && Object.keys(redact).length > 0) || Boolean(scrub);
+  return observations.map((o) => {
+    const out = masking ? { ...o, vars: redactJsonable(o.vars, redact, scrub) } : o;
+    guard(JSON.stringify(out), tripwire, `the traced observation of ${out.fn} at ${short(out.file)}:${out.line}`);
+    return out;
+  });
 }
 
 const once = (worker) =>

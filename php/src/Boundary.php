@@ -157,15 +157,22 @@ final class Boundary
      *
      * The pattern is compiled immediately, purely to validate it: a tripwire that turns out to
      * be malformed at the moment it should have fired is not a tripwire.
+     *
+     * Takes several at once, so a stock list declares in one line:
+     * `->forbidden(...Scrubs::CREDENTIAL_SHAPES)`.
      */
-    public function forbidden(string $pattern): self
+    public function forbidden(string ...$patterns): self
     {
-        if (@preg_match($pattern, '') === false) {
-            throw new \InvalidArgumentException(
-                "forbidden() was given a pattern PCRE cannot compile: $pattern"
-            );
+        foreach ($patterns as $pattern) {
+            if (@preg_match($pattern, '') === false) {
+                throw new \InvalidArgumentException(
+                    "forbidden() was given a pattern PCRE cannot compile: $pattern"
+                );
+            }
         }
-        $this->forbid[] = $pattern;
+        foreach ($patterns as $pattern) {
+            $this->forbid[] = $pattern;
+        }
         return $this;
     }
 

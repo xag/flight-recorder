@@ -789,6 +789,67 @@ the leak it was there to prevent.</p>
   app is already in the state you swore it would never be in. Failing the call is the quiet option.</p>
 </div>
 
+<h3>A stock credential scrub, if you want one</h3>
+
+<p>Every runtime ships one declaration you may hand your boundary: <code>credentials</code> masks, in any
+string, every credential shape (an <code>sk-</code> key, a GitHub or GitLab token, an AWS access key id, a
+Slack token, a JWT, a Bearer or Basic credential, a password in a URL, a secret in a query string) and,
+in JSON, YAML or TOML text, the value of every field whose name says it holds one. A masked value is
+<code>&lt;secret:1a2b3c4d&gt;</code>, the first 8 hex of its sha256, so a replay re-derives the same mask
+and two different keys stay two different masks. Its shapes are offered as <code>forbid</code> patterns
+too. Nothing applies it unless you declare it, and all six runtimes mask the same text to the same
+bytes.</p>
+
+<pre data-lang="py"><code>from flight_recorder import scrubs
+
+BOUNDARY = fr.Boundary(
+    effects=[...],
+    scrub=scrubs.credentials,              # mask every credential, wherever it sits
+    forbid=scrubs.CREDENTIAL_SHAPES,       # and refuse a line where one survived
+)
+# fields of your own named like credentials that hold none:
+scrub=lambda s: scrubs.credentials(s, exempt={"key", "token_env"})</code></pre>
+
+<pre data-lang="js"><code>fr.boundaryOf({
+  scrub: fr.scrubs.credentials,            // mask every credential, wherever it sits
+  forbid: fr.scrubs.CREDENTIAL_SHAPES,     // and refuse a line where one survived
+});
+// fields of your own named like credentials that hold none:
+scrub: (s) =&gt; fr.scrubs.credentials(s, ['key', 'token_env'])</code></pre>
+
+<pre data-lang="cs"><code>var boundary = new Boundary()
+    .Scrubbing(Scrubs.Credentials)          // mask every credential, wherever it sits
+    .Forbidden(Scrubs.CredentialShapes);    // and refuse a line where one survived
+// fields of your own named like credentials that hold none:
+boundary.Scrubbing(s =&gt; Scrubs.Credentials(s, "key", "token_env"));</code></pre>
+
+<pre data-lang="go"><code>import "github.com/xag/flight-recorder/go/scrubs"
+
+boundary := fr.Boundary{
+	Scrub:  scrubs.Credentials,        // mask every credential, wherever it sits
+	Forbid: scrubs.CredentialShapes,   // and refuse a line where one survived
+}
+// fields of your own named like credentials that hold none:
+boundary.Scrub = scrubs.CredentialsExcept("key", "token_env")</code></pre>
+
+<pre data-lang="java"><code>Boundary boundary = new Boundary()
+    .scrubbingWith(Scrubs::credentials)          // mask every credential, wherever it sits
+    .forbidden(Scrubs.CREDENTIAL_SHAPES);        // and refuse a line where one survived
+// fields of your own named like credentials that hold none:
+.scrubbingWith(s -&gt; Scrubs.credentials(s, Set.of("key", "token_env")))</code></pre>
+
+<pre data-lang="php"><code>$boundary = (new Boundary())
+    -&gt;scrubbingWith(Scrubs::credentials(...))     // mask every credential, wherever it sits
+    -&gt;forbidden(...Scrubs::CREDENTIAL_SHAPES);    // and refuse a line where one survived
+// fields of your own named like credentials that hold none:
+-&gt;scrubbingWith(fn (string $s): string =&gt; Scrubs::credentials($s, ['key', 'token_env']))</code></pre>
+
+<p><strong>The trace is masked by the same declarations.</strong> A replay trace holds every local of
+every executed line, so it sees values before anything masks them. <code>redact</code> and
+<code>scrub</code> rewrite each trace line's payload exactly as they rewrite a tape event's, a field
+rule reaching a local of that name, and <code>forbid</code> then reads the masked line. A local that
+holds a module, a class, a function or a process handle is written as its name and never opened.</p>
+
 <div class="note">
   <p><strong>What cannot be masked.</strong> Redacting an <em>input</em> poisons everything derived
   from it: mask an identifier and the recording holds a key built from the raw value while replay,

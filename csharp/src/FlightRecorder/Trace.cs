@@ -266,15 +266,29 @@ namespace FlightRecorder
         // clean; without this the trace was neither.
         private readonly IReadOnlyList<Regex> _forbid;
 
+        // The same boundary's masks, read at each write as the tape's writer reads them. Without
+        // them the tripwire could only refuse a trace line, and a boundary that masked a credential
+        // on the tape with Scrub found it raw in the trace beside it.
+        private readonly Boundary? _boundary;
+
+        /// <summary>The parts of a trace event that are payload, and so are masked: a call's
+        /// <c>args</c>, a line's delta <c>d</c>, a return's or a raise's <c>v</c>. Never the
+        /// envelope (<c>e</c>, <c>fn</c>, <c>at</c>), exactly as on the tape. A trace's payload is
+        /// keyed by local name as a tape's kwargs are keyed by parameter name, so a
+        /// <see cref="Boundary.Redact"/> rule reaches a local of that name.</summary>
+        private static readonly string[] PayloadKeys = { "args", "d", "v" };
+
         private static readonly Regex[] NoPatterns = new Regex[0];
 
-        /// <param name="boundary">Whose <see cref="Boundary.Forbid"/> patterns this trace must
-        /// pass. Defaults to the boundary recording declared, so a trace taken during a recorded
+        /// <param name="boundary">Whose <see cref="Boundary.Redact"/> rules and
+        /// <see cref="Boundary.Scrub"/> mask this trace's payloads, and whose
+        /// <see cref="Boundary.Forbid"/> patterns the masked lines must then pass. Defaults to the boundary recording declared, so a trace taken during a recorded
         /// run inherits the tripwire without every call site having to remember to pass it.</param>
         public TraceSink(string? path = null, Boundary? boundary = null)
         {
             Path = path;
-            _forbid = (boundary ?? Recorder.CurrentBoundary)?.Forbid ?? (IReadOnlyList<Regex>)NoPatterns;
+            _boundary = boundary ?? Recorder.CurrentBoundary;
+            _forbid = _boundary?.Forbid ?? (IReadOnlyList<Regex>)NoPatterns;
             if (path != null)
             {
                 var header = new Dictionary<string, object?>
@@ -404,6 +418,18 @@ namespace FlightRecorder
             catch { return "<unrenderable>"; }
         }
 
+        /// <summary>Apply the boundary's redaction rules and scrub to the payload of one event, in
+        /// place, before it reaches the buffer, the file or the tripwire. RedactJsonable never
+        /// throws: a rule or scrub that does degrades to the mask.</summary>
+        private void Mask(Dictionary<string, object?> ev)
+        {
+            var b = _boundary;
+            if (b == null || (b.Redact.Count == 0 && b.Scrub == null)) return;
+            foreach (var key in PayloadKeys)
+                if (ev.TryGetValue(key, out var payload))
+                    ev[key] = Serial.RedactJsonable(payload, b.RedactRules, b.Scrub);
+        }
+
         private static string Safe(Exception e)
         {
             try { return $"{e.Message}"; }
@@ -412,6 +438,7 @@ namespace FlightRecorder
 
         private void WriteRaw(Dictionary<string, object?> ev)
         {
+            Mask(ev);
             string? line = null;
             if (_forbid.Count > 0)
             {

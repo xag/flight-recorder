@@ -170,8 +170,63 @@ public final class Serial {
         if (v instanceof Enum<?> e) return e.name();
         if (v instanceof java.util.UUID u) return u.toString();
 
+        String ref = reference(v);
+        if (ref != null) return marker("__opaque__", ref);
+
         return encodeObject(v, depth);
     }
+
+    /**
+     * The runtime's own machinery, written as its name and never walked: a class, a reflected
+     * member, a type, an annotation, a class loader, a module, a package, a thread, the process.
+     *
+     * <p>Such a value is code and process state, not a value the execution computed, and its
+     * getters reach the whole runtime: a {@code Class} leads to every method, field, constructor,
+     * parameter and annotated type of every class its signatures mention — about 75,000 distinct
+     * objects, re-encoded on every line of a traced frame that holds one, which hung the frame —
+     * and on the way it calls {@code getProtectionDomain().getCodeSource().getLocation()
+     * .getContent()}, I/O the program never asked for. Python's tracer met the same thing as a
+     * module, whose attributes reached {@code os.environ}.
+     *
+     * <p>The name only, never the {@code toString()}: a {@code ProcessHandle.Info} renders the
+     * command line, which may carry a {@code -D} credential, and a process id differs per run.
+     * Null when the value is ordinary data.
+     */
+    static String reference(Object v) {
+        try {
+            if (v instanceof Class<?> c) return "<class " + c.getName() + ">";
+            if (v instanceof java.lang.reflect.Member m) {
+                String kind = m instanceof java.lang.reflect.Method ? "method"
+                        : m instanceof java.lang.reflect.Field ? "field"
+                        : m instanceof java.lang.reflect.Constructor<?> ? "constructor" : "member";
+                return "<" + kind + " " + m.getDeclaringClass().getName() + "." + m.getName() + ">";
+            }
+            if (v instanceof java.lang.reflect.Parameter p) return "<parameter " + p.getName() + ">";
+            if (v instanceof java.lang.reflect.RecordComponent rc) return "<component " + rc.getName() + ">";
+            if (v instanceof java.lang.reflect.AnnotatedType at) return "<type " + at.getType().getTypeName() + ">";
+            if (v instanceof java.lang.reflect.Type t) return "<type " + t.getTypeName() + ">";
+            if (v instanceof java.lang.reflect.AccessibleObject) return "<reflection>";
+            if (v instanceof java.lang.annotation.Annotation a) return "<annotation " + a.annotationType().getName() + ">";
+            if (v instanceof ClassLoader cl) return "<classloader " + nameOr(cl.getName()) + ">";
+            if (v instanceof Module mod) return "<module " + nameOr(mod.getName()) + ">";
+            if (v instanceof ModuleLayer) return "<module layer>";
+            if (v instanceof Package pkg) return "<package " + pkg.getName() + ">";
+            if (v instanceof Thread th) return "<thread " + th.getName() + ">";
+            if (v instanceof ThreadGroup tg) return "<thread group " + tg.getName() + ">";
+            if (v instanceof Runtime) return "<runtime>";
+            if (v instanceof ProcessHandle.Info) return "<process info>";
+            if (v instanceof ProcessHandle) return "<process>";
+            if (v instanceof Process) return "<process>";
+            if (v instanceof ProcessBuilder) return "<process builder>";
+            if (v instanceof java.security.ProtectionDomain) return "<protection domain>";
+            if (v instanceof java.security.CodeSource) return "<code source>";
+        } catch (Throwable t) {
+            return "<" + v.getClass().getSimpleName() + ">";
+        }
+        return null;
+    }
+
+    private static String nameOr(String name) { return name == null ? "?" : name; }
 
     /**
      * Records an object's public data surface — the thing an app reads and writes at a boundary.

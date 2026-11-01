@@ -84,7 +84,8 @@ def build() -> Quern:
                            _SINK_MERGE_DECISION, _SINK_NEVER_BLOCKS,
                            _SINK_NO_FORBID_HERE, _SINK_ONE_METHOD,
                            _SINK_READER_REQUIRED, _SINK_COUNTERS_DEBT,
-                           _SERVE_DECISION]
+                           _SERVE_DECISION, _TRACE_MASKED_LIKE_TAPE,
+                           _STOCK_CREDENTIAL_SCRUB]
     return quern
 
 
@@ -1567,5 +1568,117 @@ _SERVE_DECISION = Node(
                       "Nobody else could read their own tapes from an MCP client, and a "
                       "server that needs a hosted store and a credential cannot be started "
                       "by a registry to check that it works."}),
+    ],
+)
+
+
+_TRACE_MASKED_LIKE_TAPE = Node(
+    id="what-masks-a-tape-masks-a-trace",
+    kind="decision",
+    name="A trace is masked by the boundary's own declarations, applied as they are on the tape: "
+         "redact and scrub over each trace event's payload (args, d, v), never its envelope, and "
+         "forbid over the masked line. A traced value that is not data (a module, a class, a "
+         "function, a type, a process or thread handle) is written as its name and never walked",
+    links={"rests_on": ["feature-parity"]},
+    payload={
+        "rationale":
+            "A trace holds every local of every executed line, so it sees a credential before "
+            "anything masks it. Until 2026-11-01 only forbid ran on traces, in every runtime that "
+            "had it: an app that masked a key on its tape with scrub found the key raw in the "
+            "trace beside it, and the only protection was a refusal of the whole trace. And the "
+            "Python encoder walked a module as an object, so a frame holding `os` wrote "
+            "`os.sys.modules['nt'].environ`, the whole environment: 312 copies of a broker's API "
+            "key in one harness-hub trace, and the same values in a korean-gpt-coach test trace. "
+            "No declaration could have masked those, because nothing had handed the trace the "
+            "environment; the encoder fetched it. The other runtimes had their own versions of "
+            "the walk: .NET reached ProcessStartInfo.EnvironmentVariables (saved only by an "
+            "accidental exception on a sibling property) and never finished on a Type or a "
+            "lambda; Java never finished on a Class and did file I/O through "
+            "getProtectionDomain().getCodeSource(). Go, JS and PHP could not reach the "
+            "environment unless the app put it in a value.",
+        "consequence":
+            "Every trace writer, in every runtime, takes the boundary's redact, scrub and forbid "
+            "and applies them in that order to the payload keys before a line exists in memory "
+            "or on disk. A trace path added later that writes lines without them reopens this. "
+            "An encoder that walks objects names the process's own machinery instead of opening "
+            "it; what an app copies into a value of its own (`env = dict(os.environ)`) is data, "
+            "and masking it is the declarations' job. Go runs its trace in a child process, so "
+            "the child arms the masks itself and a trace whose declared masks were never armed is "
+            "refused.",
+    },
+    children=[
+        Node(id="alt-forbid-only-on-traces", kind="alternative",
+             name="Keep forbid as the trace's only guard: refuse a trace that carries a "
+                  "credential, mask nothing",
+             payload={"why":
+                      "The state before. A refusal is right when nobody declared how to mask, "
+                      "but an app that declared a scrub has said how: refusing its trace for a "
+                      "value its scrub masks on the tape takes the trace away from the app "
+                      "that did everything asked of it, and without forbid the value was "
+                      "simply written."}),
+        Node(id="alt-trace-specific-masks", kind="alternative",
+             name="Give the trace its own mask declaration, separate from the tape's",
+             payload={"why":
+                      "Two declarations for one secret drift apart, and the one nobody "
+                      "remembered is the one that leaks. The boundary already says what is "
+                      "secret; the trace is one more place that statement must hold."}),
+        Node(id="alt-limit-the-trace-root", kind="alternative",
+             name="Leave the encoder as it was and narrow trace_root to the app's own package",
+             payload={"why":
+                      "harness-hub's workaround. It keeps the import machinery's frames out, "
+                      "but any app frame that imports inside a function holds a module too, "
+                      "and the encoder would still walk it into the environment."}),
+    ],
+)
+
+
+_STOCK_CREDENTIAL_SCRUB = Node(
+    id="the-credential-scrub-is-an-opt-in-declaration",
+    kind="decision",
+    name="A stock credential scrub ships in every runtime as a declaration the app chooses to "
+         "hand its Boundary (`scrubs.credentials` as scrub, `CREDENTIAL_SHAPES` as forbid, "
+         "exemptions as a parameter); the recorder never applies it on its own, and its output "
+         "is byte-identical across runtimes, checked against spec/fixtures/credentials.json",
+    links={"rests_on": ["feature-parity", "what-masks-a-tape-masks-a-trace"]},
+    payload={
+        "rationale":
+            "The cardinal rule is that the recorder knows nothing about what any value means, "
+            "and it holds: no recording consults this unless the app declares it, exactly like "
+            "the token shapes the guide already offered as forbid examples. What changed is "
+            "that every app recording a configuration, an environment or a transcript meets "
+            "the same credentials. harness-hub wrote this sweep by hand (masks.py, with a proof "
+            "over a declared domain); craft-laws had none and put a broker's key on three "
+            "tapes. Shipping it once, with the proof, is cheaper than the next app writing it "
+            "worse. Exemptions are a parameter because the fields an app names like credentials "
+            "and that hold none are that app's business, and a library that listed them would "
+            "know its consumers.",
+        "consequence":
+            "The patterns are ASCII in every runtime (Python compiles them with re.ASCII; the "
+            "others spell word, space and boundary as ASCII classes, and Go emulates the "
+            "lookarounds RE2 lacks), so the same text masks to the same bytes everywhere. Text "
+            "and parsed data agree over the declared domain in tests/test_scrubs.py; the vectors "
+            "file is the Python implementation's output over that domain, and a change to a "
+            "pattern regenerates it and must turn all six suites green again. A credential "
+            "written inside the value of another field in text can mask differently in the text "
+            "than in its parse; that is outside the domain.",
+    },
+    children=[
+        Node(id="alt-each-app-writes-its-own", kind="alternative",
+             name="Leave credential masking to each app, as it was",
+             payload={"why":
+                      "It was: one app wrote it with a proof, the next did not write it and "
+                      "leaked. The recorder is the one dependency every recording app already "
+                      "has."}),
+        Node(id="alt-on-by-default", kind="alternative",
+             name="Apply the credential scrub to every recording unless an app turns it off",
+             payload={"why":
+                      "It would make the recorder decide what a value means, against the "
+                      "cardinal rule, and change every existing app's tapes on upgrade: a "
+                      "recording made before would no longer compare with its replay."}),
+        Node(id="alt-python-only-helper", kind="alternative",
+             name="Ship the helper in Python, where the two apps that needed it are",
+             payload={"why":
+                      "feature-parity: a helper an app calls is a feature, and a runtime "
+                      "without it gives its users less library."}),
     ],
 )

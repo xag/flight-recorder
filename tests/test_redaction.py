@@ -480,6 +480,93 @@ def test_a_clean_trace_survives_a_declared_tripwire(tmp_path):
     nothing_on_disk_carries(tmp_path, KEY)
 
 
+# --- the trace is masked like the tape: redact and scrub, not only forbid ---------------------
+#
+# Until 0.11.1 the trace sidecar ran the tripwire and nothing else. A boundary that declared
+# `scrub` to mask a credential got a clean tape and a trace with the credential in it, raw, in
+# every delta of the frame that held it.
+
+
+def test_the_scrub_masks_the_trace_as_it_masks_the_tape(tmp_path):
+    session = derive_key_session(tmp_path)
+    trace = tmp_path / "trace.jsonl"
+    mask_key = lambda s: s.replace(KEY, "[KEY]")
+    report = fr.replay_call(session, 0, ToyAdapter(set(), scrub=mask_key), trace)
+    assert report.ok, (report.divergence, report.result_diff)
+    text = trace.read_text(encoding="utf-8")
+    assert "[KEY]" in text
+    nothing_on_disk_carries(tmp_path, KEY)
+
+
+def test_a_redacted_field_name_masks_the_local_of_that_name(tmp_path):
+    # A trace's payload is keyed by local name as a tape's kwargs are keyed by parameter name,
+    # so a field rule reaches a local exactly as it reaches an argument.
+    session = derive_key_session(tmp_path)
+    trace = tmp_path / "trace.jsonl"
+    report = fr.replay_call(session, 0, ToyAdapter({"secret"}), trace)
+    assert report.ok, (report.divergence, report.result_diff)
+    deltas = [json.loads(l).get("d", {}) for l in trace.read_text(encoding="utf-8").splitlines()]
+    assert {"secret": fr.REDACTED} in [{"secret": d["secret"]} for d in deltas if "secret" in d]
+    nothing_on_disk_carries(tmp_path, KEY)
+
+
+def test_the_trace_envelope_is_not_redacted(tmp_path):
+    # As on the tape, rules rewrite payloads only: a rule named like an envelope key cannot
+    # take the structure of the trace apart.
+    session = derive_key_session(tmp_path)
+    trace = tmp_path / "trace.jsonl"
+    report = fr.replay_call(session, 0, ToyAdapter({"e", "fn", "at"}), trace)
+    assert report.ok
+    events = [json.loads(l) for l in trace.read_text(encoding="utf-8").splitlines()]
+    assert {e["e"] for e in events} >= {"H", "C", "L", "R"}
+    assert all(e["fn"] == "derive_key" for e in events[1:])
+
+
+# --- a module in a frame is a reference, never its attributes ---------------------------------
+#
+# Observed 2026-11-01: a traced local holding a module was written as the module's attributes,
+# and `os.sys.modules["nt"].environ` is the whole environment. One trace held 312 copies of a
+# broker's API key; nothing had been declared that could have masked it, because nobody had
+# handed the trace the environment — the encoder went and fetched it.
+
+ENV_SENTINEL = "fr-env-sentinel-7c1e9a"
+
+
+def test_a_module_is_traced_as_its_name(monkeypatch):
+    import os
+    import types
+    monkeypatch.setenv("FR_TRACE_SENTINEL", ENV_SENTINEL)
+    encoded = fr.trace_jsonable(os)
+    assert ENV_SENTINEL not in json.dumps(encoded)
+    assert encoded == {"__opaque__": "<module 'os'>"}
+    holder = types.SimpleNamespace(platform=os, n=1)
+    assert ENV_SENTINEL not in json.dumps(fr.trace_jsonable(holder))
+    assert ENV_SENTINEL not in json.dumps(fr.trace_jsonable({"mods": [os]}))
+
+
+def test_what_is_not_data_is_never_walked(monkeypatch):
+    # A function, a class and a frame name what they are; none of them is opened.
+    import sys
+    monkeypatch.setenv("FR_TRACE_SENTINEL", ENV_SENTINEL)
+
+    def f():
+        import os
+        return os
+
+    for value in (f, fr.Boundary, sys._getframe(), sys.modules):
+        assert ENV_SENTINEL not in json.dumps(fr.trace_jsonable(value)), value
+
+
+def test_a_traced_frame_holding_os_writes_no_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("FR_TRACE_SENTINEL", ENV_SENTINEL)
+    session = record(tmp_path, set(), lambda: asyncio.run(toy_tools.holds_a_module("t@x.com")))
+    trace = tmp_path / "trace.jsonl"
+    report = fr.replay_call(session, 0, ToyAdapter(set()), trace)
+    assert report.ok, (report.divergence, report.result_diff)
+    assert '"os": {"__opaque__": "<module \'os\'>"}' in trace.read_text(encoding="utf-8")
+    nothing_on_disk_carries(tmp_path, ENV_SENTINEL)
+
+
 # --- forbid on the save path: mutation edits recorded values, so the check must run again ---
 
 

@@ -27,6 +27,9 @@ export { loadTape, pickCall, replayCall } from './replay.js';
 export { invariant, checkInvariants, formatReport, Trajectory } from './invariants.js';
 export { traced, Trace } from './trace.js';
 export { ReplayDivergence, ProbeUnanswerable, ForbiddenValue } from './errors.js';
+// Stock credential declarations for a boundary: `scrub: scrubs.credentials`,
+// `forbid: scrubs.CREDENTIAL_SHAPES`. Also its own entry point (`@xag/flight-recorder/scrubs`).
+export * as scrubs from './scrubs.js';
 // The render boundary. Also its own entry point (`@xag/flight-recorder/render`); it imports no
 // browser automation library, so nothing that installs this package pays for one.
 export { captureLayout, renderCall, RenderTape } from './render.js';

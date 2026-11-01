@@ -33,6 +33,25 @@ public class TracedToy {
         return pct;
     }
 
+    /** A frame holding a credential in its locals, so the trace can be checked to carry the
+     *  boundary's masks rather than the key. */
+    public static int holdsASecret(String key) {
+        String header = "Bearer " + key;
+        String secret = key;
+        int n = header.length() + secret.length();
+        return n;
+    }
+
+    /** A frame holding the runtime's own machinery — a class, a thread, a class loader — which
+     *  is code and process state, not a value the execution computed. */
+    public static int holdsMachinery() {
+        Class<?> type = String.class;
+        Thread worker = Thread.currentThread();
+        ClassLoader loader = ClassLoader.getSystemClassLoader();
+        int n = type.getName().length() + (worker == null ? 0 : 1) + (loader == null ? 0 : 1);
+        return n;
+    }
+
     /** A function that throws, so the trace can be checked to carry the state up to the throw. */
     public static int divide(int a, int b) {
         int scaled = a * 10;

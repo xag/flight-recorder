@@ -219,8 +219,14 @@ public final class TraceHook {
      */
     public static final class Sink {
 
+        /** The keys of a trace event that carry the app's values. The rest ({@code e}, {@code fn},
+         *  {@code at}, {@code type}) is the envelope, and no rule may rewrite it. */
+        static final List<String> PAYLOAD_KEYS = List.of("args", "d", "v");
+
         private final List<Map<String, Object>> events = new ArrayList<>();
         private final List<Pattern> forbid = new ArrayList<>();
+        private final Map<String, java.util.function.Function<Object, Object>> redact = new LinkedHashMap<>();
+        private final java.util.function.UnaryOperator<String> scrub;
         private final Path path;
         private Writer out;
         private String refused;
@@ -229,7 +235,11 @@ public final class TraceHook {
 
         public Sink(String path, Boundary boundary) {
             this.path = path == null ? null : Paths.get(path);
-            if (boundary != null) for (String p : boundary.forbid) forbid.add(Pattern.compile(p));
+            if (boundary != null) {
+                for (String p : boundary.forbid) forbid.add(Pattern.compile(p));
+                redact.putAll(boundary.redact);
+            }
+            this.scrub = boundary == null ? null : boundary.scrub;
             if (this.path != null) {
                 try {
                     if (this.path.getParent() != null) Files.createDirectories(this.path.getParent());
@@ -260,9 +270,10 @@ public final class TraceHook {
          * not private — "in memory" is a statement about latency, not about confinement.
          *
          * <p>The trace is the <em>worst</em> artifact to leave unguarded, not the least: it records
-         * every local on every executed line — values <b>before</b> they reach any redaction — and
-         * tracing is exactly what you switch on when debugging the request that went wrong, which
-         * is the one carrying the real credential.
+         * every local on every executed line, including the ones that hold a credential the code
+         * read and never passed across the boundary, and tracing is exactly what you switch on when
+         * debugging the request that went wrong, which is the one carrying the real credential.
+         * The line it reads has already been through {@link #mask}.
          */
         private String vet(String line) {
             for (Pattern p : forbid) {
@@ -271,8 +282,27 @@ public final class TraceHook {
             return null;
         }
 
+        /**
+         * The boundary's two redaction layers, applied to the payload of an event exactly as the
+         * tape applies them to a call's values: a local is keyed by its name as an argument is, so
+         * a field rule reaches a local of that name, and the scrub sweeps every string. The
+         * envelope is left alone, so no rule can take the trace's structure apart.
+         *
+         * <p>This runs before the tripwire, so the forbid reads what would be written: a scrub and
+         * a forbid declared on the same shape pass a trace the scrub cleaned, and refuse one where
+         * the scrub missed. {@link Serial#redact} never throws: a rule or scrub that does degrades
+         * to the mask.
+         */
+        private void mask(Map<String, Object> ev) {
+            if (redact.isEmpty() && scrub == null) return;
+            for (String k : PAYLOAD_KEYS) {
+                if (ev.containsKey(k)) ev.put(k, Serial.redact(ev.get(k), redact, scrub));
+            }
+        }
+
         void emit(Map<String, Object> ev) {
             if (refused != null) return; // tracing is disabled permanently after a hit
+            mask(ev);
             String line;
             try {
                 line = Json.write(ev);

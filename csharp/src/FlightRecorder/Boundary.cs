@@ -73,6 +73,28 @@ namespace FlightRecorder
             return this;
         }
 
+        /// <summary>Add several forbid patterns, each as <see cref="Forbidden(string)"/> does — the
+        /// shape of <see cref="Scrubs.CredentialShapes"/>, the tripwire behind
+        /// <see cref="Scrubs.Credentials(string)"/>.</summary>
+        public Boundary Forbidden(IEnumerable<string> patterns)
+        {
+            if (patterns == null) throw new ArgumentNullException(nameof(patterns));
+            foreach (var p in patterns) Forbidden(p);
+            return this;
+        }
+
+        /// <summary>Add a value-level mask (see <see cref="Scrub"/>), applied after any declared
+        /// before it — so <c>.Scrubbing(Scrubs.Credentials).Scrubbing("acct-[0-9]+")</c> runs both.
+        /// It must be deterministic and idempotent, as <see cref="Scrub"/> says; unlike the pattern
+        /// form, nothing here can check that for you.</summary>
+        public Boundary Scrubbing(ScrubTransform scrub)
+        {
+            if (scrub == null) throw new ArgumentNullException(nameof(scrub));
+            var prior = Scrub;
+            Scrub = prior == null ? scrub : s => scrub(prior(s));
+            return this;
+        }
+
         /// <summary>Mask every occurrence of a pattern in every recorded string — sugar for the
         /// common shape of <see cref="Scrub"/>, and the shape that is idempotent for free, since
         /// <paramref name="mask"/> is checked not to match <paramref name="pattern"/>: rescrubbing a

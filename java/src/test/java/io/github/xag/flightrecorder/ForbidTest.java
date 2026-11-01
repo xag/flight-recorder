@@ -105,8 +105,9 @@ class ForbidTest {
     @Test
     void theTraceIsGuardedToo() {
         // The trace is the WORST artifact to leave unguarded, not the least: it records every local
-        // on every executed line — values BEFORE they reach any redaction — and tracing is exactly
-        // what you switch on when debugging the request that went wrong.
+        // on every executed line, including credentials the code read and never passed across the
+        // boundary, and tracing is exactly what you switch on when debugging the request that went
+        // wrong.
         Boundary b = new Boundary().forbidden(PATTERN);
         TraceHook.Sink sink = new TraceHook.Sink(null, b);
         TraceHook.Sink prior = TraceHook.sink();

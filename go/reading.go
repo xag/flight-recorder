@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/xag/flight-recorder/go/serial"
 )
 
 // Recording is a loaded tape: its header and its calls.
@@ -50,6 +52,10 @@ func (r *Recording) Forbid(patterns ...string) error {
 // forbiddenHit reports the first pattern matching line, or "". Free for a recording that armed
 // nothing, which is every recording that existed before Forbid did.
 func (r *Recording) forbiddenHit(line []byte) string {
+	if len(r.forbid) == 0 {
+		return ""
+	}
+	line = serial.ForbidView(line)
 	for _, re := range r.forbid {
 		if re.Match(line) {
 			return re.String()

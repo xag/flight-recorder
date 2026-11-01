@@ -8,16 +8,25 @@ namespace Xag\FlightRecorder;
  * Where traced events go, and the tripwire that guards them.
  *
  * The trace is the **worst** artifact to leave unguarded, not the least: it records every local
- * on every executed line — values *before* they reach any redaction — and tracing is exactly
+ * on every executed line — values *before* the code under trace masked any of them — and tracing is exactly
  * what you switch on when debugging the request that went wrong, which is the one carrying the
  * real credential.
  *
  * So `vet()` runs before the in-memory buffer, not merely before the file. An invariant reads
  * these events while the run is still going, and a pathless sink is not private: "in memory" is
  * a statement about latency, not about confinement.
+ *
+ * The boundary's two masking layers run first, as they do on the tape: its field rules and its
+ * value scrub rewrite each event's payload (`args` of a call, `d` of a line, `v` of a return or
+ * a raise), never its envelope (`e`, `fn`, `at`, `type`), and the tripwire then reads the masked
+ * line. A trace's payload is keyed by local name as a tape's kwargs are keyed by parameter name,
+ * so a rule reaches a local exactly as it reaches an argument.
  */
 final class TraceSink
 {
+    /** The keys of a trace event that hold traced values; the rest is the envelope. */
+    public const PAYLOAD_KEYS = ['args', 'd', 'v'];
+
     /** @var list<array<string, mixed>> */
     private array $events = [];
 
@@ -26,11 +35,19 @@ final class TraceSink
     /** @var list<string> */
     private array $forbid;
 
+    /** @var array<string, (callable(mixed): mixed)|null> */
+    private array $redact;
+
+    /** @var (callable(string): string)|null */
+    private $scrub;
+
     public function __construct(
         private readonly ?string $path = null,
         ?Boundary $boundary = null,
     ) {
         $this->forbid = $boundary?->forbid ?? [];
+        $this->redact = $boundary?->redact ?? [];
+        $this->scrub = $boundary?->scrub;
         if ($this->path !== null) {
             file_put_contents(
                 $this->path,
@@ -61,6 +78,14 @@ final class TraceSink
     {
         if ($this->refused !== null) {
             return; // tracing stays off after a hit
+        }
+        if ($this->redact !== [] || $this->scrub !== null) {
+            foreach (self::PAYLOAD_KEYS as $key) {
+                if (array_key_exists($key, $ev)) {
+                    // Never throws: a rule or scrub that does degrades to REDACTED.
+                    $ev[$key] = Serial::redactJsonable($ev[$key], $this->redact, $this->scrub);
+                }
+            }
         }
         try {
             $line = Json::encode($ev);

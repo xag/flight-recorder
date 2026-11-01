@@ -226,6 +226,19 @@ async def derive_key(email: str) -> dict:
     return {"email": email, "fingerprint": fingerprint, "v": probe["v"]}
 
 
+async def holds_a_module(email: str) -> dict:
+    """A frame holding a module, the way any function that imports inside its body does.
+
+    `os` is a local here, and through `os.sys.modules` it reaches every loaded module and the
+    environment each platform module keeps — `nt.environ` / `posix.environ`. Python's import
+    machinery holds `os` in its frames too, so a trace rooted wide enough meets this on its
+    own."""
+    import os
+    sep = os.sep
+    probe = await fx.fetch_remote(email)
+    return {"email": email, "sep": sep, "v": probe["v"]}
+
+
 async def remote_sum(email: str, a: str, b: str) -> dict:
     x = await fx.fetch_remote(a)
     y = await fx.fetch_remote(b)

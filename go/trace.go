@@ -40,6 +40,7 @@ package flightrecorder
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -336,3 +337,21 @@ func renderBag(v any) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// MaskTrace arms the boundary's Redact and Scrub on this process's trace, so they mask every traced
+// payload (a call's arguments, a line's changed locals, a return's value) as they mask a tape event,
+// and Forbid then reads the masked line. Rules match by local name: a trace's payload is keyed by
+// local name as a tape's kwargs are keyed by parameter name. The envelope (e, fn, at) is never
+// rewritten.
+//
+// Call it in the TRACED process (the child RunTraced starts), before the traced code runs: in
+// TestMain, or at the top of the test the child runs. A func cannot cross into that process, so
+// RunTraced cannot carry the masking there itself; when its TraceSpec declares Redact or Scrub,
+// a child that traces a payload without having armed them refuses its trace, and RunTraced
+// returns ErrTraceUnmasked. Outside a traced process it does nothing observable.
+func MaskTrace(b Boundary) { tracehook.Mask(b.Redact, b.Scrub) }
+
+// ErrTraceUnmasked is returned by RunTraced when the TraceSpec declared Redact or Scrub and the
+// traced process traced a value without having armed them (see MaskTrace). Nothing was written.
+var ErrTraceUnmasked = errors.New("the traced process never armed the boundary's masking — " +
+	"call MaskTrace(boundary) there before the traced code runs; the trace was refused")

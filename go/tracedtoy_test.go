@@ -76,3 +76,13 @@ func toyStudyResolver(fn string, kwargs map[string]any) (func(context.Context) (
 		return studyStatus(ctx, email, level)
 	}, nil
 }
+
+// toySecrets is the fixture for masking the trace: a credential in a local named like a redact
+// rule (`secret`), and another one inside prose (`note`) that only a scrub can reach. The prose is
+// also returned, so the return event carries it too.
+func toySecrets() string {
+	secret := "hunter2-local"
+	note := "the key is AKIAABCDEFGHIJKLMNOP, keep it"
+	_ = len(secret)
+	return note
+}

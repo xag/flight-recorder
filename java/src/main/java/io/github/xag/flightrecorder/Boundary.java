@@ -142,6 +142,13 @@ public final class Boundary {
         return this;
     }
 
+    /** {@link #forbidden(String)} for each pattern, in order — for a stock list such as
+     *  {@link Scrubs#CREDENTIAL_SHAPES}. */
+    public Boundary forbidden(java.util.Collection<String> patterns) {
+        for (String p : patterns) forbidden(p);
+        return this;
+    }
+
     /**
      * The per-call gate. Null records every call. Consulted with the tool name and its kwargs, so
      * one running server can record a single user's request and leave the rest untouched. A gate

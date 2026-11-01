@@ -162,6 +162,10 @@ func (r *Recorder) Close() error {
 }
 
 func (r *Recorder) forbiddenHit(line []byte) string {
+	if len(r.forbid) == 0 {
+		return ""
+	}
+	line = serial.ForbidView(line)
 	for _, re := range r.forbid {
 		if re.Match(line) {
 			return re.String()

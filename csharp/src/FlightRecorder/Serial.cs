@@ -363,6 +363,9 @@ namespace FlightRecorder
                     };
             }
 
+            var reference = ProcessReference(v);
+            if (reference != null) return reference;
+
             var t = v.GetType();
             if (IsIntegral(t)) return Convert.ToInt64(v, CultureInfo.InvariantCulture);
             if (t == typeof(double) || t == typeof(float) || t == typeof(decimal))
@@ -405,6 +408,62 @@ namespace FlightRecorder
             }
 
             return TracePocoOrOpaque(v, depth);
+        }
+
+        /// <summary>A handle on the process or on code, in a traced frame, written as its name.
+        ///
+        /// The trace walks an object through its public properties, and these objects are not
+        /// values the execution computed. A <see cref="System.Diagnostics.ProcessStartInfo"/> fills
+        /// its <c>EnvironmentVariables</c> from the whole environment the first time the property
+        /// is read, so walking one would fetch every credential the process holds, which nobody
+        /// handed the trace. A <see cref="Type"/>, an <see cref="System.Reflection.Assembly"/>, a
+        /// <see cref="System.Reflection.MemberInfo"/> or a delegate opens onto the reflection graph,
+        /// whose walk does not finish: a frame holding <c>typeof(string)</c> or a lambda stopped the
+        /// traced run. The name only, never a location: an assembly's path names someone's disk.
+        /// Null when the value is not one of these.</summary>
+        private static Dictionary<string, object?>? ProcessReference(object v)
+        {
+            string? name;
+            switch (v)
+            {
+                case Type type:
+                    name = $"<type '{Named(() => type.FullName ?? type.Name)}'>";
+                    break;
+                case System.Reflection.MemberInfo member:
+                    name = $"<{Named(() => member.MemberType.ToString().ToLowerInvariant())} '"
+                        + $"{Named(() => (member.DeclaringType?.FullName ?? "?") + "." + member.Name)}'>";
+                    break;
+                case Delegate del:
+                    name = $"<delegate '{Named(() => (del.Method.DeclaringType?.FullName ?? "?") + "." + del.Method.Name)}'>";
+                    break;
+                case System.Reflection.Assembly assembly:
+                    name = $"<assembly '{Named(() => assembly.GetName().Name ?? "?")}'>";
+                    break;
+                case System.Reflection.Module module:
+                    name = $"<module '{Named(() => module.ScopeName)}'>";
+                    break;
+                case AppDomain _:
+                    name = "<AppDomain>";
+                    break;
+                case System.Diagnostics.Process _:
+                    name = "<Process>";
+                    break;
+                case System.Diagnostics.ProcessStartInfo _:
+                    name = "<ProcessStartInfo>";
+                    break;
+                case System.Threading.Thread _:
+                    name = "<Thread>";
+                    break;
+                default:
+                    return null;
+            }
+            return new Dictionary<string, object?> { ["__opaque__"] = name };
+        }
+
+        private static string Named(Func<string> read)
+        {
+            try { return read(); }
+            catch { return "?"; }
         }
 
         private static object? TracePocoOrOpaque(object v, int depth)

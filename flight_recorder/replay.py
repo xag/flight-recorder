@@ -266,15 +266,27 @@ class Tracer:
     effect will send. The tape beside it is redacted, swept and asserted clean by `forbid`;
     for as long as this file was written unguarded, the tape's promise ended at the tape. So
     the boundary's tripwire reads every line here too, and the same rule holds: the message
-    names the pattern, never the match."""
+    names the pattern, never the match.
+
+    The tripwire alone only refuses. The boundary's `redact` and `scrub` mask a trace line as
+    they mask a tape event, and on the same part of it: the payload (`args`, `d`, `v`), never
+    the envelope. A trace's payload is keyed by local name as a tape's kwargs are keyed by
+    parameter name, so a field rule reaches a local of that name. Until 0.11.1 only `forbid`
+    ran here, and a boundary that masked a credential on the tape with `scrub` found it raw in
+    the trace beside it."""
+
+    _PAYLOAD_KEYS = ("args", "d", "v")
 
     def __init__(self, out_path: Path, root: str, skip_files: Optional[set] = None,
-                 skip_locals: tuple = ("self", "svc"), forbid: Optional[list] = None):
+                 skip_locals: tuple = ("self", "svc"), forbid: Optional[list] = None,
+                 redact: Optional[dict] = None, scrub: Any = None):
         self.path = out_path
         self.root = root
         self.skip_files = skip_files or set()
         self.skip_locals = skip_locals
         self._forbid = forbid or []
+        self._redact = redact or {}
+        self._scrub = scrub
         # Held rather than raised: see _abort. None means this trace is clean so far.
         self.violation: Optional[ForbiddenValue] = None
         self._prev: dict[int, dict] = {}
@@ -325,6 +337,11 @@ class Tracer:
     def _write(self, obj: dict) -> None:
         if self._f is None:
             return
+        if self._redact or self._scrub is not None:
+            # redact_jsonable never raises: a rule or scrub that does degrades to the mask.
+            for key in self._PAYLOAD_KEYS:
+                if key in obj:
+                    obj[key] = redact_jsonable(obj[key], self._redact, self._scrub)
         line = json.dumps(obj, ensure_ascii=False, default=repr)
         try:
             _guard(line, self._forbid,
@@ -595,7 +612,9 @@ def replay_call(path: Path, index: int, adapter: ReplayAdapter,
         kwargs = from_jsonable(rec["kwargs"])
         report.call_kwargs = kwargs
         tracer = Tracer(trace_path, adapter.trace_root, set(adapter.skip_files),
-                        forbid=adapter.boundary.forbid_patterns()) \
+                        forbid=adapter.boundary.forbid_patterns(),
+                        redact=adapter.boundary.redact_rules(),
+                        scrub=adapter.boundary.scrub) \
             if trace_path else None
     except BaseException:
         hook.mode, hook.feed, hook.sems = "off", None, None

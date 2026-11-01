@@ -72,6 +72,25 @@ const RefusalSuffix = ".forbidden"
 // RefusalPath is where a refusal for the trace at path would be reported.
 func RefusalPath(tracePath string) string { return tracePath + RefusalSuffix }
 
+// EnvMask carries, from the parent, the fact that its Boundary masks: a JSON object
+// {"redact": [rule names], "scrub": bool}. The rules and the scrub themselves are funcs, and a func
+// does not cross a process boundary, so the child arms them itself with Mask. What crosses is the
+// declaration, and with it the child can tell a trace it was told to mask from one it may write
+// raw: a payload traced while the declared masking is not armed refuses the whole trace.
+const EnvMask = "FLIGHT_RECORDER_TRACE_MASK"
+
+// UnmaskedSuffix names the file the tracer leaves when it refuses a trace whose declared masking
+// was never armed. It holds what was missing, never a value.
+const UnmaskedSuffix = ".unmasked"
+
+// UnmaskedPath is where an unarmed-masking refusal for the trace at path would be reported.
+func UnmaskedPath(tracePath string) string { return tracePath + UnmaskedSuffix }
+
+// payloadKeys are the parts of an event that hold traced values. The rest (e, fn, at, type) is
+// the envelope, which no rule rewrites: a rule named like an envelope key must not take the
+// structure of the trace apart.
+var payloadKeys = []string{"args", "d", "v"}
+
 var (
 	mu       sync.Mutex
 	out      *os.File
@@ -82,7 +101,49 @@ var (
 	forbid   []*regexp.Regexp
 	refused  string
 	failShut bool
+
+	maskRules serial.Rules
+	maskScrub serial.Scrub
+	maskArmed bool
+	declared  *maskDecl
 )
+
+type maskDecl struct {
+	Redact []string `json:"redact"`
+	Scrub  bool     `json:"scrub"`
+}
+
+// Mask arms the boundary's redaction for this process's trace: rules by local name (a payload is
+// keyed by local name as a tape's kwargs are keyed by parameter name) and scrub by value, applied
+// to every payload before the tripwire reads the line and before the in-memory tape holds it.
+// Call it before the traced code runs; flightrecorder.MaskTrace is the usual way.
+func Mask(rules serial.Rules, scrub serial.Scrub) {
+	mu.Lock()
+	defer mu.Unlock()
+	maskRules, maskScrub, maskArmed = rules, scrub, true
+}
+
+// unarmed names what the parent declared and this process has not armed, or "" when nothing is
+// missing. Caller holds mu.
+func unarmed() string {
+	if declared == nil {
+		return ""
+	}
+	var missing []string
+	if declared.Scrub && (!maskArmed || maskScrub == nil) {
+		missing = append(missing, "the scrub")
+	}
+	for _, name := range declared.Redact {
+		if _, ok := maskRules[name]; !ok || !maskArmed {
+			missing = append(missing, fmt.Sprintf("the redact rule %q", name))
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("the boundary declares %v but the traced process never armed it — call "+
+		"flightrecorder.MaskTrace(boundary) in the traced process before the traced code runs", missing)
+}
 
 func start() {
 	started = true
@@ -90,11 +151,11 @@ func start() {
 	if path == "" {
 		return
 	}
-	if !loadForbid() {
+	if !loadForbid() || !loadMask() {
 		// Fail SHUT. The patterns were compiled once already, in the parent, so arriving here
 		// unreadable means the channel is broken — and the one thing worse than no trace is a trace
 		// written with the tripwire silently disarmed.
-		fmt.Fprintf(os.Stderr, "flight-recorder: %s is unreadable — tracing is off\n", EnvForbid)
+		fmt.Fprintf(os.Stderr, "flight-recorder: %s or %s is unreadable — tracing is off\n", EnvForbid, EnvMask)
 		return
 	}
 	f, err := os.Create(path)
@@ -127,6 +188,20 @@ func loadForbid() bool {
 	return true
 }
 
+// loadMask reads the parent's declaration that its boundary masks. Caller holds mu.
+func loadMask() bool {
+	raw := os.Getenv(EnvMask)
+	if raw == "" {
+		return true
+	}
+	var d maskDecl
+	if err := json.Unmarshal([]byte(raw), &d); err != nil {
+		return false
+	}
+	declared = &d
+	return true
+}
+
 // vet is the tripwire, run on the encoded event BEFORE it reaches the in-memory tape or the file.
 // It reports whether the event may be recorded. Caller holds mu.
 //
@@ -138,6 +213,7 @@ func vet(ev map[string]any) bool {
 		refuse("<an event that could not be encoded for inspection>")
 		return false
 	}
+	b = serial.ForbidView(b)
 	for _, re := range forbid {
 		if re.Match(b) {
 			refuse(re.String())
@@ -162,14 +238,9 @@ func refuse(pattern string) {
 	if refused != "" {
 		return
 	}
-	refused, live = pattern, false
-	events = nil
-	if out != nil {
-		out.Close()
-		out = nil
-	}
+	shut()
+	refused = pattern
 	if path != "" {
-		os.Remove(path)
 		os.WriteFile(RefusalPath(path), []byte(pattern), 0o644)
 	}
 	fmt.Fprintf(os.Stderr,
@@ -177,7 +248,37 @@ func refuse(pattern string) {
 			"and nothing was written\n", pattern)
 }
 
-// Refused is the pattern that shut this process's tracer down, or "" if none did.
+// refuseUnmasked is refuse for a payload traced while the declared masking was not armed: the
+// value may be exactly what the masking exists to hide, so it goes nowhere, and neither does the
+// rest of the trace. Caller holds mu.
+func refuseUnmasked(why string) {
+	if refused != "" {
+		return
+	}
+	shut()
+	refused = why
+	if path != "" {
+		os.WriteFile(UnmaskedPath(path), []byte(why), 0o644)
+	}
+	fmt.Fprintf(os.Stderr, "flight-recorder: %s; the trace was refused and nothing was written\n", why)
+}
+
+// shut turns the tracer off for good and destroys the trace, file and in-memory tape. Caller
+// holds mu.
+func shut() {
+	live = false
+	events = nil
+	if out != nil {
+		out.Close()
+		out = nil
+	}
+	if path != "" {
+		os.Remove(path)
+	}
+}
+
+// Refused is the pattern that shut this process's tracer down (or, for a trace whose declared
+// masking was never armed, what was missing), or "" if nothing did.
 func Refused() string {
 	mu.Lock()
 	defer mu.Unlock()
@@ -199,7 +300,13 @@ func Live() bool {
 // The tripwire runs FIRST — before the in-memory tape, not merely before the file. An invariant
 // running inside this process reads Events() while the run is still going, so the buffer is an
 // artifact like any other and a value refused to the disk must not be handed to it either.
+//
+// Masking runs before the tripwire, as on a tape: the boundary's Redact and Scrub rewrite the
+// payload, and Forbid then reads the line that would actually be written.
 func emit(ev map[string]any) {
+	if !mask(ev) {
+		return
+	}
 	if len(forbid) > 0 && !vet(ev) {
 		return
 	}
@@ -212,6 +319,36 @@ func emit(ev map[string]any) {
 		return
 	}
 	out.Write(append(b, '\n'))
+}
+
+// mask applies the armed Redact and Scrub to the event's payload, in place, and reports whether the
+// event may go on. An event with no payload (the header) needs no masking; one with a payload,
+// traced while the parent's declared masking is unarmed, refuses the trace. serial.Redact never
+// panics: a rule or a scrub that does degrades to the mask. Caller holds mu.
+func mask(ev map[string]any) bool {
+	has := false
+	for _, k := range payloadKeys {
+		if _, ok := ev[k]; ok {
+			has = true
+			break
+		}
+	}
+	if !has {
+		return true
+	}
+	if why := unarmed(); why != "" {
+		refuseUnmasked(why)
+		return false
+	}
+	if !maskArmed || (len(maskRules) == 0 && maskScrub == nil) {
+		return true
+	}
+	for _, k := range payloadKeys {
+		if v, ok := ev[k]; ok {
+			ev[k] = serial.Redact(v, maskRules, maskScrub)
+		}
+	}
+	return true
 }
 
 // Events copies every event recorded so far, so an invariant running inside the traced process

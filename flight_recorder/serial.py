@@ -316,6 +316,8 @@ def _trace_encode(v: Any, depth: int) -> Any:
         return {"__dt__": v.isoformat()}
     if isinstance(v, date):
         return {"__date__": v.isoformat()}
+    if isinstance(v, types.ModuleType):
+        return _module_reference(v)
     if _snapshottable(v):  # a document snapshot: the surface a consumer actually reads
         try:
             return {"__snap__": snapshot_jsonable(v)}
@@ -350,6 +352,22 @@ def _trace_encode(v: Any, depth: int) -> Any:
     if callable(v) or isinstance(v, type):
         return _opaque(v)
     return _trace_object(v, depth) or _trace_opaque(v)
+
+
+def _module_reference(v: types.ModuleType) -> dict:
+    """A module in a traced frame, written as its name.
+
+    A module is code and the process's shared state, not a value the execution computed, and
+    its attributes reach everything: `os.sys.modules["nt"].environ` is the whole environment.
+    Walked as an object, a frame of the import machinery (which holds `os`) wrote every
+    credential in the environment into the trace, 312 times in one file. Functions and classes
+    were already names (`callable`, below); a module is the one namespace that is neither.
+    The name only, not the repr: `<module 'x' from '/home/someone/...'>` carries a path."""
+    try:
+        name = v.__name__
+    except Exception:
+        name = "?"
+    return {"__opaque__": f"<module {str(name)!r}>"}
 
 
 _ENCODING: set = set()   # ids of the objects whose attributes are being encoded, a cycle guard

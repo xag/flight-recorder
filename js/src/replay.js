@@ -18,7 +18,7 @@ import fs from 'node:fs';
 
 import { hook, active, installClock, installRandom, patchMark, restoreTo } from './record.js';
 import { toJsonable, fromJsonable, redactJsonable } from './serial.js';
-import { ReplayDivergence, ProbeUnanswerable } from './errors.js';
+import { ReplayDivergence, ProbeUnanswerable, ForbiddenValue } from './errors.js';
 import { traced, Trace } from './trace.js';
 
 /** Read a tape. Tolerates a torn final line, which is the only corruption possible. */
@@ -294,13 +294,26 @@ export async function replayCall({ call, fn, boundary = {}, probe = false, semSt
   let divergence = null;
 
   let traceOf = new Trace([]);
+  // A forbidden value in the trace is not a field on a report: it is the one failure this
+  // library lets stop the caller. Held here and thrown after the finally has restored the
+  // patches, so a refused trace never leaves the process armed.
+  let violation = null;
 
   try {
     // The event buffer is what tells the wrapped client it is inside a call at all.
     const run = () => active.run([], () => fn(kwargs));
 
     if (trace) {
-      const t = await traced(run, { include: trace });
+      // The boundary's masks and tripwire reach the trace as they reach the tape.
+      const t = await traced(run, {
+        include: trace,
+        redact,
+        scrub: boundary.scrub ?? null,
+        forbid: boundary.forbid ?? [],
+      }).catch((e) => {
+        if (e instanceof ForbiddenValue) violation = e;
+        throw e;
+      });
       traceOf = t.trace;
       if (t.error) throw t.error;
       result = t.result;
@@ -319,6 +332,8 @@ export async function replayCall({ call, fn, boundary = {}, probe = false, semSt
     hook.sems = null;
     restoreTo(mark);
   }
+
+  if (violation) throw violation;
 
   // The sems trailing the last boundary answer — an outermost span's `end`, most often — were
   // never reached by a popExpect, and leaving them unread would report a shorter path than the

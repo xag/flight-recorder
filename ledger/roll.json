@@ -300,6 +300,26 @@
     "digest": "cacdf2502777"
   },
   {
+    "path": "the-credential-scrub-is-an-opt-in-declaration",
+    "kind": "decision",
+    "digest": "557938ea7c34"
+  },
+  {
+    "path": "the-credential-scrub-is-an-opt-in-declaration/alt-each-app-writes-its-own",
+    "kind": "alternative",
+    "digest": "461eba6ae3cb"
+  },
+  {
+    "path": "the-credential-scrub-is-an-opt-in-declaration/alt-on-by-default",
+    "kind": "alternative",
+    "digest": "60b6dc4d40ac"
+  },
+  {
+    "path": "the-credential-scrub-is-an-opt-in-declaration/alt-python-only-helper",
+    "kind": "alternative",
+    "digest": "073d36769757"
+  },
+  {
     "path": "the-deck-is-a-doc",
     "kind": "decision",
     "digest": "694a5c873e67"
@@ -378,5 +398,25 @@
     "path": "the-transport-is-one-method/alt-client-library-dependency",
     "kind": "alternative",
     "digest": "17f8b194f4f5"
+  },
+  {
+    "path": "what-masks-a-tape-masks-a-trace",
+    "kind": "decision",
+    "digest": "fc3feb5233e2"
+  },
+  {
+    "path": "what-masks-a-tape-masks-a-trace/alt-forbid-only-on-traces",
+    "kind": "alternative",
+    "digest": "04242bcb7c55"
+  },
+  {
+    "path": "what-masks-a-tape-masks-a-trace/alt-limit-the-trace-root",
+    "kind": "alternative",
+    "digest": "830201d98779"
+  },
+  {
+    "path": "what-masks-a-tape-masks-a-trace/alt-trace-specific-masks",
+    "kind": "alternative",
+    "digest": "93943c6f7a6f"
   }
 ]

@@ -44,6 +44,28 @@ final class TracedToy
         return $pct;
     }
 
+    /** Holds a credential in two locals, so a trace can be checked to carry its mask and not it. */
+    public static function signedHeader(string $token): string
+    {
+        $secret = $token;
+        $header = 'Bearer ' . $secret;
+        return $header;
+    }
+
+    /**
+     * Holds the closest PHP comes to Python's `os` module in a frame: handles onto process-wide
+     * state that are not themselves data. None of them may be opened by the encoder.
+     */
+    public static function holdsProcessHandles(): int
+    {
+        $reader = static fn (): array => getenv();
+        $wrapped = new \ArrayObject(getenv());
+        $iterator = new \ArrayIterator($_SERVER);
+        $reflected = new \ReflectionFunction('getenv');
+        $named = 'getenv';
+        return count($wrapped) > 0 ? 1 : 0;
+    }
+
     /** A function that throws, so the trace can be checked to carry the state up to the throw. */
     public static function divide(int $a, int $b): int
     {

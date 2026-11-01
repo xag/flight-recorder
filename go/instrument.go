@@ -51,9 +51,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/xag/flight-recorder/go/serial"
 	"github.com/xag/flight-recorder/go/tracehook"
 )
 
@@ -421,6 +423,13 @@ type TraceSpec struct {
 	//
 	// A hit in the child destroys the trace and comes back here as *ForbiddenValue from RunTraced.
 	Forbid []string
+	// Redact and Scrub are normally your Boundary's, verbatim. They mask the trace as they mask a
+	// tape, but they are funcs, and a func does not cross into the child: the child arms them with
+	// MaskTrace. What crosses is that they were declared (the rule names, and whether there is a
+	// scrub), so a child that traces a value without having armed them refuses its trace, and
+	// RunTraced returns ErrTraceUnmasked. Left empty, the child masks whatever it armed, if anything.
+	Redact serial.Rules
+	Scrub  serial.Scrub
 }
 
 // TracedRun is what came back: the trace, and the child's own account of itself.
@@ -489,6 +498,9 @@ func RunTraced(spec TraceSpec) (*TracedRun, error) {
 	if forbidEnv != "" {
 		cmd.Env = append(cmd.Env, tracehook.EnvForbid+"="+forbidEnv)
 	}
+	if maskEnv := maskEnviron(spec.Redact, spec.Scrub); maskEnv != "" {
+		cmd.Env = append(cmd.Env, tracehook.EnvMask+"="+maskEnv)
+	}
 	cmd.Env = append(cmd.Env, spec.Env...)
 	out, runErr := cmd.CombinedOutput()
 
@@ -501,6 +513,11 @@ func RunTraced(spec TraceSpec) (*TracedRun, error) {
 	if pattern, err := os.ReadFile(tracehook.RefusalPath(tracePath)); err == nil {
 		run.Trace = &Trace{}
 		return run, &ForbiddenValue{Pattern: string(pattern), What: "a traced local"}
+	}
+
+	if why, err := os.ReadFile(tracehook.UnmaskedPath(tracePath)); err == nil {
+		run.Trace = &Trace{}
+		return run, fmt.Errorf("%w (%s)", ErrTraceUnmasked, why)
 	}
 
 	if data, err := os.ReadFile(tracePath); err == nil {
@@ -532,6 +549,21 @@ func forbidEnviron(patterns []string) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// maskEnviron encodes the declaration that the boundary masks: the rule names and whether there is
+// a scrub. "" when it declares neither, which keeps the variable off the child's environment.
+func maskEnviron(rules serial.Rules, scrub serial.Scrub) string {
+	if len(rules) == 0 && scrub == nil {
+		return ""
+	}
+	names := make([]string, 0, len(rules))
+	for k := range rules {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	b, _ := json.Marshal(map[string]any{"redact": names, "scrub": scrub != nil})
+	return string(b)
 }
 
 // goCommand finds the toolchain. PATH first; GOROOT second, because a `go test` run can perfectly
