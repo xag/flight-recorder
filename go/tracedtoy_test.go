@@ -86,3 +86,14 @@ func toySecrets() string {
 	_ = len(secret)
 	return note
 }
+
+// separatedKey is built by concatenation, so this file is not one a scanner reads as carrying a
+// live-looking key.
+var separatedKey = "sk-" + "proj-0123456789abcdefghijklmnop"
+
+// toySeparated holds a credential right after a line separator (U+2028), which Go's encoder
+// writes as a six-character escape ending in a word character.
+func toySeparated() int {
+	note := "\u2028" + separatedKey
+	return len(note)
+}

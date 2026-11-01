@@ -289,11 +289,13 @@ func Short(v any, limit int) string {
 // \u003c, \u003e and \u0026 (JSON that is safe inside HTML); every other runtime writes them as
 // themselves, and a pattern is written against the characters. Read against the escapes, `<script>`
 // could never fire, a credential right after a `<` escaped every shape whose lookbehind reads the
-// character before it, and a masked `?api_key=<secret:…>` read as an unmasked value. Only those
-// three escapes are undone, and only where the backslash is an escape's own (`\\u003c` is a
+// character before it, and a masked `?api_key=<secret:…>` read as an unmasked value. The encoder
+// also writes U+2028 and U+2029 (line and paragraph separator) as \u2028 and \u2029, with or
+// without HTML escaping, and a credential right after one had a word character before it. Only
+// those five escapes are undone, and only where the backslash is an escape's own (`\\u003c` is a
 // backslash and the text u003c, and stays so). The line written to disk is not changed.
 func ForbidView(line []byte) []byte {
-	if !bytes.Contains(line, []byte(`\u00`)) {
+	if !bytes.Contains(line, []byte(`\u00`)) && !bytes.Contains(line, []byte(`\u202`)) {
 		return line
 	}
 	out := make([]byte, 0, len(line))
@@ -313,6 +315,9 @@ func ForbidView(line []byte) []byte {
 				continue
 			case "0026":
 				out, i = append(out, '&'), i+5
+				continue
+			case "2028", "2029":
+				out, i = append(out, string(rune(0x2028+int(line[i+5]-'8')))...), i+5
 				continue
 			}
 		}
