@@ -407,7 +407,7 @@ namespace FlightRecorder
                     };
             }
 
-            var reference = ProcessReference(v) ?? AwaitableReference(v);
+            var reference = ProcessReference(v) ?? AwaitableReference(v) ?? LazyReference(v);
             if (reference != null) return reference;
 
             var t = v.GetType();
@@ -464,17 +464,23 @@ namespace FlightRecorder
 
             if (v is IEnumerable en)
             {
+                // Only a collection holds its items. Anything else that enumerates (an iterator
+                // method, a lazy LINQ query) computes them when asked, running the app's own code
+                // with its side effects, perhaps without end: it is written as its name, as Python
+                // writes a generator. A collection is counted by its Count and enumerated no
+                // further than the head kept.
+                var count = CollectionCount(v);
+                if (count == null) return SequenceReference(v.GetType());
                 var items = new List<object?>();
-                var n = 0;
                 foreach (var x in en)
                 {
-                    if (n < TraceMaxItems) items.Add(TraceEncode(x, depth + 1, walk));
-                    n += 1;
+                    if (items.Count >= TraceMaxItems) break;
+                    items.Add(TraceEncode(x, depth + 1, walk));
                 }
-                if (n <= TraceMaxItems) return items;
+                if (count.Value <= TraceMaxItems) return items;
                 return new Dictionary<string, object?>
                 {
-                    ["__seq__"] = new Dictionary<string, object?> { ["len"] = (long)n, ["head"] = items },
+                    ["__seq__"] = new Dictionary<string, object?> { ["len"] = (long)count.Value, ["head"] = items },
                 };
             }
 
@@ -605,6 +611,47 @@ namespace FlightRecorder
             if (Flag("IsCanceled")) return "Canceled";
             if (Flag("IsFaulted")) return "Faulted";
             return "Pending";
+        }
+
+        /// <summary>A <c>Lazy&lt;T&gt;</c>, written as its name and whether it holds a value. Its
+        /// public <c>Value</c> runs the factory: walked as an object, a trace ran the app's code from
+        /// inside the hook, and waited on another thread that was running it. Null when the value
+        /// is not a Lazy.</summary>
+        private static Dictionary<string, object?>? LazyReference(object v)
+        {
+            for (var b = v.GetType(); b != null; b = b.BaseType)
+            {
+                if (!b.IsGenericType || b.GetGenericTypeDefinition() != typeof(Lazy<>)) continue;
+                var created = Named(() => (b.GetProperty("IsValueCreated")?.GetValue(v) is bool c && c) ? "True" : "False");
+                return new Dictionary<string, object?> { ["__opaque__"] = $"<{ArgName(b)} IsValueCreated={created}>" };
+            }
+            return null;
+        }
+
+        /// <summary>How many items a collection holds, from its Count; null when the value is not
+        /// a collection (an array, an <see cref="ICollection"/>, an <c>ICollection&lt;T&gt;</c> or
+        /// an <c>IReadOnlyCollection&lt;T&gt;</c>).</summary>
+        private static int? CollectionCount(object v)
+        {
+            if (v is ICollection c) return c.Count;
+            foreach (var i in v.GetType().GetInterfaces())
+            {
+                if (!i.IsGenericType) continue;
+                var def = i.GetGenericTypeDefinition();
+                if (def == typeof(ICollection<>) || def == typeof(IReadOnlyCollection<>))
+                    return i.GetProperty("Count")?.GetValue(v) is int n ? n : 0;
+            }
+            return null;
+        }
+
+        /// <summary>A sequence that is not a collection, by name: an iterator method's
+        /// compiler-generated class (<c>&lt;Naturals&gt;d__3</c>) as <c>&lt;iterator 'Naturals'&gt;</c>,
+        /// anything else as its type.</summary>
+        private static Dictionary<string, object?> SequenceReference(Type t)
+        {
+            var iterator = Regex.Match(t.Name, @"^<(?<m>[^>]+)>d__\d+");
+            var name = iterator.Success ? $"<iterator '{iterator.Groups["m"].Value}'>" : $"<{ArgName(t)}>";
+            return new Dictionary<string, object?> { ["__opaque__"] = name };
         }
 
         private static bool HasGetAwaiter(Type t)

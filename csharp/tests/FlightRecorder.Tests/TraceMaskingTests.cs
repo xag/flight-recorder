@@ -313,5 +313,91 @@ namespace FlightRecorder.Tests
             public System.Runtime.CompilerServices.TaskAwaiter<int> GetAwaiter() =>
                 System.Threading.Tasks.Task.FromResult(Value).GetAwaiter();
         }
+
+        // --- a deferred computation is never run -------------------------------------------
+        //
+        // A Lazy<T> was walked through its public Value, which runs the factory; an iterator or a
+        // lazy LINQ query was enumerated to the end to count it. Either runs the app's own code
+        // from inside the trace hook, once per traced line, with whatever side effects it has, and
+        // an endless sequence never let the hook return. Both are written as their names, as
+        // Python writes a generator. A collection, which holds its items, is still written as its
+        // items, counted by its Count rather than by enumerating it to the end.
+
+        [Fact]
+        public void ALazyIsWrittenAsWhetherItHoldsAValueAndNeverForced()
+        {
+            var runs = 0;
+            var gate = new System.Threading.ManualResetEventSlim(false);
+            var lazy = new Lazy<int>(() => { runs++; gate.Wait(); return 4242; });
+            Assert.Equal(Ref("<Lazy<Int32> IsValueCreated=False>"), EncodeWithin(lazy, gate.Set));
+            Assert.Equal(0, runs);
+
+            Assert.Equal(4242, lazy.Value);
+            var forced = EncodeWithin(lazy, () => { });
+            Assert.Equal(Ref("<Lazy<Int32> IsValueCreated=True>"), forced);
+            Assert.Equal(1, runs);
+        }
+
+        private sealed class Counter { public int Steps; }
+
+        private static IEnumerable<int> Counted(Counter c)
+        {
+            c.Steps++;
+            yield return 1;
+            c.Steps++;
+            yield return 2;
+        }
+
+        private static IEnumerable<long> Naturals(System.Runtime.CompilerServices.StrongBox<bool> stop)
+        {
+            for (long i = 0; !stop.Value; i++) yield return i;
+        }
+
+        [Fact]
+        public void AnIteratorIsWrittenAsItsNameAndNeverEnumerated()
+        {
+            var counter = new Counter();
+            Assert.Equal(Ref("<iterator 'Counted'>"), EncodeWithin(Counted(counter), () => { }));
+            Assert.Equal(0, counter.Steps);
+
+            var calls = 0;
+            var query = new[] { 1, 2, 3 }.Where(i => { calls++; return i > 1; });
+            var json = EncodeWithin(query, () => { });
+            Assert.StartsWith("{\"__opaque__\":\"<", json);
+            Assert.Equal(0, calls);
+
+            var stop = new System.Runtime.CompilerServices.StrongBox<bool>(false);
+            Assert.Equal(Ref("<iterator 'Naturals'>"), EncodeWithin(Naturals(stop), () => stop.Value = true));
+        }
+
+        /// <summary>A collection that says how many it holds and whose enumerator never ends.</summary>
+        private sealed class EndlessCollection : IReadOnlyCollection<int>
+        {
+            public volatile bool Stop;
+            public int Count => 500;
+
+            public IEnumerator<int> GetEnumerator()
+            {
+                for (var i = 0; !Stop; i++) yield return i;
+            }
+
+            System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+        }
+
+        [Fact]
+        public void ACollectionIsWrittenAsItsItemsCountedByItsCount()
+        {
+            Assert.Equal("[1,2,3]", EncodeWithin(new HashSet<int> { 1, 2, 3 }, () => { }));
+            Assert.Equal("[1,2]", EncodeWithin(new[] { 1, 2 }, () => { }));
+            Assert.Equal("[\"a\"]", EncodeWithin(new System.Collections.ObjectModel.ReadOnlyCollection<string>(new[] { "a" }), () => { }));
+
+            var long150 = EncodeWithin(Enumerable.Range(0, 150).ToList(), () => { });
+            Assert.StartsWith("{\"__seq__\":{\"len\":150,\"head\":[0,1,", long150);
+
+            // Counted by Count, and enumerated no further than the head it keeps.
+            var endless = new EndlessCollection();
+            var json = EncodeWithin(endless, () => endless.Stop = true);
+            Assert.StartsWith("{\"__seq__\":{\"len\":500,\"head\":[0,1,", json);
+        }
     }
 }
