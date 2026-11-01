@@ -1635,6 +1635,7 @@ _TRACE_MASKED_LIKE_TAPE = Node(
 _STOCK_CREDENTIAL_SCRUB = Node(
     id="the-credential-scrub-is-an-opt-in-declaration",
     kind="decision",
+    meta={"amended": "80dfb286d937 consequence names the forms that leaked (nested JSON pairs, unquoted assignments), what a leaf sweep cannot see, and the fixed point; the decision is unchanged"},
     name="A stock credential scrub ships in every runtime as a declaration the app chooses to "
          "hand its Boundary (`scrubs.credentials` as scrub, `CREDENTIAL_SHAPES` as forbid, "
          "exemptions as a parameter); the recorder never applies it on its own, and its output "
@@ -1660,7 +1661,16 @@ _STOCK_CREDENTIAL_SCRUB = Node(
             "file is the Python implementation's output over that domain, and a change to a "
             "pattern regenerates it and must turn all six suites green again. A credential "
             "written inside the value of another field in text can mask differently in the text "
-            "than in its parse; that is outside the domain.",
+            "than in its parse; that is outside the domain. It masks what actually leaked, "
+            "not only what harness-hub's configs hold: a pair inside a JSON string at any depth "
+            "(a transcript's tool result), and unquoted assignments (dotenv, export, set, "
+            "$env:, --flag=). As a Boundary scrub it sweeps leaf strings without their keys, so "
+            "a parsed mapping whose secret is in a value with no shape (a copy of the "
+            "environment) is masked by credentials_data, or by redact naming its fields, not "
+            "by the sweep. The passes repeat until the text stops changing, so a second scrub is a "
+            "no-op by construction: differential fuzzing of the ports found inputs where a later "
+            "pass changed how an earlier one read the text, and a replay re-scrubs what it read "
+            "off the tape.",
     },
     children=[
         Node(id="alt-each-app-writes-its-own", kind="alternative",

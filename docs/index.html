@@ -793,8 +793,11 @@ the leak it was there to prevent.</p>
 
 <p>Every runtime ships one declaration you may hand your boundary: <code>credentials</code> masks, in any
 string, every credential shape (an <code>sk-</code> key, a GitHub or GitLab token, an AWS access key id, a
-Slack token, a JWT, a Bearer or Basic credential, a password in a URL, a secret in a query string) and,
-in JSON, YAML or TOML text, the value of every field whose name says it holds one. A masked value is
+Slack token, a JWT, a Bearer or Basic credential, a password in a URL, a secret in a query string) and
+the value of every field whose name says it holds one: in JSON, YAML or TOML text, in such text held
+inside a JSON string at any depth (<code>\"KEY\": \"value\"</code>, which is how a coding agent's
+transcript holds a file it read), and in unquoted assignments (<code>KEY=value</code>,
+<code>export KEY=value</code>, <code>$env:KEY = value</code>, <code>--password=value</code>). A masked value is
 <code>&lt;secret:1a2b3c4d&gt;</code>, the first 8 hex of its sha256, so a replay re-derives the same mask
 and two different keys stay two different masks. Its shapes are offered as <code>forbid</code> patterns
 too. Nothing applies it unless you declare it, and all six runtimes mask the same text to the same

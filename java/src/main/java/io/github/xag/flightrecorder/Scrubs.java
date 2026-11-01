@@ -63,7 +63,12 @@ public final class Scrubs {
 
     /** A variable reference names a secret without holding it. Matched whole. */
     private static final Pattern REFERENCE = Pattern.compile(
-            "(?:\\$\\{(?:env:)?\\w+\\}|\\{env:\\w+\\}|%\\w+%)");
+            "(?:\\$\\{(?:env:)?\\w+\\}|\\{env:\\w+\\}|%\\w+%|\\$(?:env:)?\\w+)");
+
+    /** A delimited reference opening an unquoted value ({@code TOKEN=${MY_TOKEN}}): the value
+     *  pattern stops at its {@code }}, so it is matched where the value starts. */
+    private static final Pattern REFERENCE_AT = Pattern.compile(
+            "\\$\\{(?:env:)?\\w+\\}|\\{env:\\w+\\}|%\\w+%");
 
     /**
      * Credential shapes, wherever they appear. Group {@code v} is the part masked; the rest is
@@ -86,10 +91,52 @@ public final class Scrubs {
 
     private static final List<Pattern> SHAPES = compile(CREDENTIAL_SHAPES);
 
+    /**
+     * A double-quoted string: Python's {@code "(?:[^"\\\n]|\\.)*"}, unrolled. The two match the
+     * same text (a body ends only at its first unescaped quote, so there is nothing to backtrack
+     * into), but Java's engine recurses once per iteration of a group loop: the alternation form
+     * overflowed the stack on a JSON string a few thousand characters long, and this one recurses
+     * once per escape instead of once per character.
+     */
+    private static final String QUOTED = "\"[^\"\\\\\\n]*+(?:\\\\.[^\"\\\\\\n]*+)*+\"";
+
     /** A {@code key: "value"} (JSON, YAML) or {@code key = "value"} (TOML) pair in text. */
     private static final Pattern PAIR = Pattern.compile(
-            "(?<k>\"(?:[^\"\\\\\\n]|\\\\.)*\"|'[^'\\n]*'|(?<![\\w.-])[A-Za-z0-9_.-]+)(?<sep>\\s*[:=]\\s*)"
-            + "(?<v>\"(?:[^\"\\\\\\n]|\\\\.)*\"|'[^'\\n]*')",
+            // A quoted key never opens at an escaped quote: if every \" of a long string of escaped
+            // JSON could open one running to the string's end, the pass would be quadratic.
+            "(?<k>(?<!\\\\)" + QUOTED + "|'[^'\\n]*'|(?<![\\w.-])[A-Za-z0-9_.-]+)(?<sep>\\s*[:=]\\s*)"
+            + "(?<v>" + QUOTED + "|'[^'\\n]*')",
+            Pattern.UNIX_LINES);
+
+    /**
+     * The same pair written inside a JSON string, at any depth: {@code \"KEY\": \"value\"} is a
+     * JSON document held in a string (a tool result in a Claude Code transcript),
+     * {@code \\\"KEY\\\": ...} that string held in another. All four quotes carry the same run of
+     * backslashes. Key and value hold no quote, backslash or line break, so the value in the text
+     * is the value in its parse, and both mask to the same {@code <secret:...>}.
+     */
+    private static final Pattern ESCAPED_PAIR = Pattern.compile(
+            "(?<!\\\\)(?<q>\\\\+)\"(?<k>[^\"\\\\\\n]+)\\k<q>\"(?<sep>[ \\t]*[:=][ \\t]*)"
+            + "(?<q2>\\k<q>)\"(?<v>[^\"\\\\\\n]*)\\k<q>\"",
+            Pattern.UNIX_LINES);
+
+    /** ...and with a bare key: {@code KEY=\"value\"}, {@code password: \"value\"}, a dotenv or
+     *  YAML line held in a JSON string. */
+    private static final Pattern ESCAPED_VALUE = Pattern.compile(
+            "(?<![\\w.-])(?<k>[A-Za-z0-9_.-]+)(?<sep>[ \\t]*[:=][ \\t]*)"
+            + "(?<q>\\\\+)\"(?<v>[^\"\\\\\\n]*)\\k<q>\"",
+            Pattern.UNIX_LINES);
+
+    /**
+     * An unquoted assignment: {@code KEY=value}, {@code export KEY=value}, {@code set KEY=value},
+     * {@code $env:KEY = value}, a .env line, a {@code --password=...} flag. The value runs to
+     * whitespace or the end of the line, and stops at a quote, a backslash (where a JSON escape
+     * such as {@code \n} begins), or {@code &;|<>,)}]}. A value starting with {@code =} is a
+     * comparison ({@code token == x}), not an assignment. Quoted values are the pair's.
+     */
+    private static final Pattern ASSIGN = Pattern.compile(
+            "(?<![\\w.-])(?<k>[A-Za-z0-9_.-]+)(?<sep>[ \\t]*=[ \\t]*)"
+            + "(?<v>(?!=)[^\\s\"'`\\\\\\&;|<>,)}\\]]+)",
             Pattern.UNIX_LINES);
 
     private static List<Pattern> compile(List<String> patterns) {
@@ -113,12 +160,17 @@ public final class Scrubs {
 
     /** Whether a field of this name holds a credential, unless the app exempted the name. */
     public static boolean secretField(String name, Collection<String> exempt) {
-        return !exempt.contains(name) && SECRET_FIELD.matcher(name).find();
+        // A name holding a mask is a value an earlier pass masked, read back as the key of the next
+        // pair (`token="<secret:...>": "v"`); `secret` in the mask is not the field saying anything.
+        return !exempt.contains(name) && !MASK.matcher(name).find() && SECRET_FIELD.matcher(name).find();
     }
 
     /** A value left as it is under a credential field: empty, a reference, already a mask. */
-    private static boolean keeps(String value) {
-        return value.isEmpty() || REFERENCE.matcher(value).matches() || MASK.matcher(value).matches();
+    static boolean keeps(String value) {
+        // A mask ANYWHERE, not only the whole value: a reference kept on a first pass ($AKIA...)
+        // can have a shape masked inside it, and what is left ($<secret:...>) is no longer a
+        // reference but must not be masked again, or the scrub is not a no-op on its own output.
+        return value.isEmpty() || REFERENCE.matcher(value).matches() || MASK.matcher(value).find();
     }
 
     /** A quoted token's content: a single-quoted one as it stands, a double-quoted one as JSON
@@ -193,23 +245,144 @@ public final class Scrubs {
     public static String credentials(String text, Collection<String> exempt) {
         if (text == null) return null;
         Set<String> ex = Set.copyOf(exempt);
-        Matcher m = PAIR.matcher(text);
-        StringBuilder out = new StringBuilder(text.length());
-        int last = 0;
-        while (m.find()) {
+        // The passes run until a round changes nothing. A later pass can change how an earlier one
+        // reads the text (a shape masked inside a key frees the pair after it), so one round is
+        // not idempotent on dense input; a fixed point makes a second scrub a no-op by
+        // construction, as in the Python reference.
+        while (true) {
+            String before = text;
+            text = round(text, ex);
+            if (text.equals(before)) return text;
+        }
+    }
+
+    /** One round of the five passes: pair, escaped pair, escaped value, assignment, shapes. */
+    private static String round(String text, Set<String> ex) {
+        text = chained(PAIR, "v", text, m -> {
             String k = m.group("k");
             // A bare dotted TOML key (`env.API_KEY`) is a table path: its field is the last part.
-            String name = (k.charAt(0) == '"' || k.charAt(0) == '\'') ? unquote(k) : k.substring(k.lastIndexOf('.') + 1);
+            String name = (k.charAt(0) == '"' || k.charAt(0) == '\'') ? unquote(k) : lastPart(k);
             String quoted = m.group("v");
             String value = unquote(quoted);
-            if (!secretField(name, ex) || keeps(value)) continue;
+            if (!secretField(name, ex) || keeps(value)) return null;
             char quote = quoted.charAt(0);
-            out.append(text, last, m.start()).append(k).append(m.group("sep"))
-                    .append(quote).append(secret(value)).append(quote);
+            return k + m.group("sep") + quote + secret(value) + quote;
+        });
+        text = chained(ESCAPED_PAIR, "q2", text, m -> {
+            String value = m.group("v"), q = m.group("q");
+            if (!secretField(m.group("k"), ex) || keeps(value)) return null;
+            return q + "\"" + m.group("k") + q + "\"" + m.group("sep") + q + "\"" + secret(value) + q + "\"";
+        });
+        text = sub(ESCAPED_VALUE, text, m -> {
+            String value = m.group("v"), q = m.group("q");
+            if (!secretField(lastPart(m.group("k")), ex) || keeps(value)) return null;
+            return m.group("k") + m.group("sep") + q + "\"" + secret(value) + q + "\"";
+        });
+        text = assignments(text, ex);
+        return shapes(text);
+    }
+
+    /**
+     * The unquoted assignments masked, scanning left to right.
+     *
+     * <p>Unlike the other passes, an assignment left as it is gives its value back to the scan:
+     * the search resumes right after its name, not after its value. In {@code a=token=x} the value
+     * of {@code a} holds an assignment of its own, and in {@code AKIA...=Bearer = v} a shape masked
+     * later turns the first name into a mask and frees {@code Bearer = v}; a scan that had
+     * swallowed it would mask it only on a second pass. A value directly followed by a mask is the
+     * rest of a value already masked ({@code $env:<secret:...>}) and is kept.
+     */
+    private static String assignments(String text, Set<String> exempt) {
+        Matcher m = ASSIGN.matcher(text);
+        Matcher mask = MASK.matcher(text);
+        Matcher ref = REFERENCE_AT.matcher(text);
+        StringBuilder out = new StringBuilder(text.length());
+        int pos = 0;
+        // find(int) resets the region to the whole text, so the lookbehind still sees what
+        // precedes pos, as Python's pattern.search(text, pos) does.
+        while (m.find(pos)) {
+            String value = m.group("v");
+            int vs = m.start("v"), ve = m.end("v");
+            if (!secretField(lastPart(m.group("k")), exempt) || keeps(value)
+                    || mask.region(ve, text.length()).lookingAt()
+                    || ref.region(vs, text.length()).lookingAt()) {
+                out.append(text, pos, m.end("k"));
+                pos = m.end("k");
+                continue;
+            }
+            out.append(text, pos, vs).append(secret(value));
+            pos = ve;
+        }
+        return out.append(text, pos, text.length()).toString();
+    }
+
+    private static String lastPart(String dotted) {
+        return dotted.substring(dotted.lastIndexOf('.') + 1);
+    }
+
+    /**
+     * {@link #sub}, except that a pair left as it is ({@code fn} returns null) gives its value back
+     * when that value opens a pair of its own.
+     *
+     * <p>In {@code x = "api_key": "v1"} the pair {@code x = "api_key"} is not a credential, and a
+     * scan that resumed after its value never saw {@code "api_key": "v1"}. So the scan tries one
+     * match anchored at the value's start, and only if none opens there does it skip the value
+     * whole: resuming inside a quoted value would read its escaped quotes as the openings of new
+     * tokens. {@code valueGroup} names the group where the value's token begins.
+     */
+    private static String chained(Pattern p, String valueGroup, String text,
+                                  java.util.function.Function<Matcher, String> fn) {
+        Matcher m = p.matcher(text);
+        StringBuilder out = new StringBuilder(text.length());
+        int pos = 0, anchor = -1, skip = 0;
+        while (true) {
+            boolean found;
+            if (anchor >= 0) {
+                // Python's pattern.match(text, anchor): anchored there, lookbehind still sees
+                // what precedes it.
+                m.region(anchor, text.length()).useTransparentBounds(true).useAnchoringBounds(false);
+                found = m.lookingAt();
+            } else {
+                found = m.find(pos);
+            }
+            if (!found) {
+                if (anchor >= 0) {
+                    anchor = -1;
+                    out.append(text, pos, skip);
+                    pos = skip;
+                    continue;
+                }
+                return out.append(text, pos, text.length()).toString();
+            }
+            anchor = -1;
+            String replaced = fn.apply(m);
+            if (replaced == null) {
+                int vs = m.start(valueGroup);
+                out.append(text, pos, vs);
+                pos = anchor = vs;
+                skip = m.end();
+                continue;
+            }
+            out.append(text, pos, m.start()).append(replaced);
+            pos = m.end();
+        }
+    }
+
+    /** Python's {@code pattern.sub(fn, text)}: each match replaced by what {@code fn} returns,
+     *  or left as it is when {@code fn} returns null. */
+    private static String sub(Pattern p, String text, java.util.function.Function<Matcher, String> fn) {
+        Matcher m = p.matcher(text);
+        StringBuilder out = null;
+        int last = 0;
+        while (m.find()) {
+            String r = fn.apply(m);
+            if (r == null) continue;
+            if (out == null) out = new StringBuilder(text.length());
+            out.append(text, last, m.start()).append(r);
             last = m.end();
         }
-        out.append(text, last, text.length());
-        return shapes(out.toString());
+        if (out == null) return text;
+        return out.append(text, last, text.length()).toString();
     }
 
     /** {@link #credentials} for parsed data. */

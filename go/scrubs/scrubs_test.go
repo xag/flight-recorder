@@ -201,8 +201,13 @@ func TestAForbidShapeFiresExactlyWhenTheScrubMasks(t *testing.T) {
 				fires = true
 			}
 		}
-		if masks := Credentials(text) != text; masks != fires {
-			t.Errorf("%q: the scrub masks=%v but a Forbid shape fires=%v", text, masks, fires)
+		// The shapes alone: `?Key=1` is also an assignment, which a name masks and no shape sees.
+		masked := text
+		for _, s := range shapes {
+			masked = s.sub(masked)
+		}
+		if masks := masked != text; masks != fires {
+			t.Errorf("%q: the scrub's shapes mask=%v but a Forbid shape fires=%v", text, masks, fires)
 		}
 	}
 }

@@ -17,15 +17,19 @@
 //
 // Credentials masks TEXT: in any string, every credential shape (an `sk-` key, a GitHub or GitLab
 // token, an AWS access key id, a Slack token, a JWT, a Bearer or Basic credential, a password in a
-// URL, a secret in a query string), and in JSON, YAML or TOML text, the value of every field whose
-// name says it holds a credential. CredentialsData masks what that text parses to, and the two
-// agree: parsing masked text gives the masked parse.
+// URL, a secret in a query string), and the value of every field whose name says it holds a
+// credential: in JSON, YAML or TOML text; in such text held inside a JSON string at any depth (a
+// pair whose quotes are all escaped alike, which is how a transcript holds a file a tool read);
+// and in unquoted assignments (`KEY=value`, `export KEY=value`, `set KEY=value`,
+// `$env:KEY = value`, `--password=value`), whose value runs to whitespace or the end of the line.
+// CredentialsData masks what that text parses to, and the two agree: parsing masked text gives
+// the masked parse.
 //
 // A masked value is `<secret:1a2b3c4d>`, the first 8 hex of the value's sha256: deterministic, so a
 // replay re-derives the same mask, and distinct, so two different keys stay two different masks.
 // Both functions are idempotent (a mask is never masked again), which Boundary.Scrub requires. A
 // value under a credential field is kept when it is empty, a variable reference (`${TOKEN}`,
-// `{env:TOKEN}`, `%TOKEN%`) or already a mask.
+// `{env:TOKEN}`, `%TOKEN%`, `$TOKEN`, `$env:TOKEN`) or already a mask.
 //
 // This is the Go port of flight_recorder/scrubs.py, and it masks every text to the same bytes
 // (spec/fixtures/credentials.json). The Python patterns are ASCII regular expressions with
@@ -47,9 +51,11 @@ import (
 var Mask = regexp.MustCompile(`<secret:[0-9a-f]{8}>`)
 
 var (
-	maskWhole = regexp.MustCompile(`^<secret:[0-9a-f]{8}>\z`)
+	maskAt = regexp.MustCompile(`^<secret:[0-9a-f]{8}>`)
 	// A variable reference names a secret without holding it.
-	reference = regexp.MustCompile(`^(?:\$\{(?:env:)?\w+\}|\{env:\w+\}|%\w+%)\z`)
+	reference = regexp.MustCompile(`^(?:\$\{(?:env:)?\w+\}|\{env:\w+\}|%\w+%|\$(?:env:)?\w+)\z`)
+	// ...and one that opens an unquoted value, which stops at `}`: `TOKEN=${MY_TOKEN}` is a reference.
+	referenceAt = regexp.MustCompile(`^(?:\$\{(?:env:)?\w+\}|\{env:\w+\}|%\w+%)`)
 )
 
 // pyspace is Python's ASCII \s, which has \v where RE2's \s does not.
@@ -187,7 +193,9 @@ func SecretField(name string, exempt ...string) bool {
 }
 
 func secretField(name string, exempt map[string]bool) bool {
-	if exempt[name] {
+	// A name holding a mask is a value an earlier pass masked, read back as the key of the next
+	// pair (`token="<secret:...>": "v"`); `secret` in the mask is not the field saying anything.
+	if exempt[name] || Mask.MatchString(name) {
 		return false
 	}
 	n := asciiLower(name)
@@ -236,8 +244,11 @@ func set(names []string) map[string]bool {
 	return m
 }
 
-// keeps reports a value left as it is under a credential field: empty, a reference, a mask.
-func keeps(v string) bool { return v == "" || reference.MatchString(v) || maskWhole.MatchString(v) }
+// keeps reports a value left as it is under a credential field: empty, a reference, or one already
+// holding a mask. The last is what makes a second pass a no-op: a reference kept on the first pass
+// (`$AKIA...`, `${...}`) can have a shape masked inside it, and what is left (`$<secret:...>`) is no
+// longer a reference but must not be masked again.
+func keeps(v string) bool { return v == "" || reference.MatchString(v) || Mask.MatchString(v) }
 
 // unquote reads a quoted token as its value: a single-quoted one is its contents, a double-quoted
 // one is a JSON string, or its contents when it is not valid JSON.
@@ -264,12 +275,30 @@ func CredentialsExcept(exempt ...string) func(string) string {
 	return func(text string) string { return credentials(text, ex) }
 }
 
+// credentials runs the passes until the text stops changing. A later pass can change how an
+// earlier one reads the text: a shape or an assignment masks the key of a pair that had swallowed
+// the next pair's opening quote, and the next round reads that pair. Repeating makes the result a
+// fixed point, so a second scrub is a no-op by construction (a replay re-scrubs what it read off
+// the tape and must find it unchanged). It ends: every round that changes the text replaces at
+// least one character outside the masks with a mask, and a mask is never masked again. Text that
+// holds no credential costs one round.
 func credentials(text string, exempt map[string]bool) string {
-	text = pairs(text, exempt)
-	for _, s := range shapes {
-		text = s.sub(text)
+	pair := func(t string, at int) (pairMatch, bool) { return pairMatchAt(t, at, exempt) }
+	escapedPair := func(t string, at int) (pairMatch, bool) { return escapedPairAt(t, at, exempt) }
+	escapedValue := func(t string, at int) (int, string, bool) { return escapedValueAt(t, at, exempt) }
+	for {
+		before := text
+		text = chained(text, pair)
+		text = chained(text, escapedPair)
+		text = sub(text, escapedValue)
+		text = assignments(text, exempt)
+		for _, s := range shapes {
+			text = s.sub(text)
+		}
+		if text == before {
+			return text
+		}
 	}
-	return text
 }
 
 // CredentialsData is Credentials for parsed data: a string under a credential field is masked
@@ -344,7 +373,7 @@ func dq(t string, at int) int {
 	return -1
 }
 
-// sq reads '[^'\n]*' from t[at]=='\” and returns the index past it, or -1.
+// sq reads '[^'\n]*' from a single quote at t[at] and returns the index past it, or -1.
 func sq(t string, at int) int {
 	for i := at + 1; i < len(t); i++ {
 		switch t[i] {
@@ -367,8 +396,14 @@ func quoted(t string, at int) int {
 	return -1
 }
 
-// pairAt matches a pair starting at t[at]: the key's end, the separator's end, the value's end.
+// pairAt matches a pair starting at t[at]: the key's end, the value's start, the value's end. A
+// double-quoted key does not open at an escaped quote (Python's (?<!\\)"): without that, every
+// escaped quote in a long string of escaped JSON opened a token running to the string's end, and
+// the pass took time quadratic in the length.
 func pairAt(t string, at int) (k, sep, end int, ok bool) {
+	if t[at] == '"' && at > 0 && t[at-1] == '\\' {
+		return 0, 0, 0, false
+	}
 	k = quoted(t, at)
 	if k < 0 {
 		if !isBare(t[at]) || (at > 0 && isBare(t[at-1])) {
@@ -395,32 +430,275 @@ func pairAt(t string, at int) (k, sep, end int, ok bool) {
 	return k, i, end, true
 }
 
-func pairs(t string, exempt map[string]bool) string {
+// A pairMatch is a pair matched at a start position: where the token its value opens with begins,
+// where the match ends, and its masked text, "" when the pair is left as it is.
+type pairMatch struct {
+	value, end int
+	masked     string
+}
+
+// pairMatchAt is the quoted-value pair at t[at], masked when its name holds a credential.
+func pairMatchAt(t string, at int, exempt map[string]bool) (pairMatch, bool) {
+	k, vs, end, ok := pairAt(t, at)
+	if !ok {
+		return pairMatch{}, false
+	}
+	key, value := t[at:k], unquote(t[vs:end])
+	name := key
+	if key[0] == '"' || key[0] == '\'' {
+		name = unquote(key)
+	} else {
+		// A bare dotted TOML key (`env.API_KEY`) is a table path: its field is the last part.
+		name = lastPart(key)
+	}
+	m := pairMatch{value: vs, end: end}
+	if secretField(name, exempt) && !keeps(value) {
+		q := t[vs : vs+1]
+		m.masked = t[at:vs] + q + Secret(value) + q
+	}
+	return m, true
+}
+
+// chained is a substitution pass in which a pair left as it is gives its value back when that
+// value opens a pair of its own. In `x = "api_key": "v1"` the pair `x = "api_key"` is not a
+// credential, and a scan that resumed after its value never saw `"api_key": "v1"`. So the scan
+// tries one pair anchored at the value's start, and only if none opens there does it skip the
+// value whole: resuming inside a quoted value would read its escaped quotes as the openings of
+// new tokens. A masked pair resumes the search after its end. This is Python's _chained.
+func chained(t string, at func(t string, p int) (pairMatch, bool)) string {
 	var b strings.Builder
-	last := 0
-	for at := 0; at < len(t); {
-		k, sep, end, ok := pairAt(t, at)
-		if !ok {
-			at++
+	pos, anchor, skip, changed := 0, -1, 0, false
+	for {
+		var m pairMatch
+		start, found := -1, false
+		if anchor >= 0 {
+			start = anchor
+			m, found = at(t, anchor)
+		} else {
+			for p := pos; p < len(t) && !found; p++ {
+				if m, found = at(t, p); found {
+					start = p
+				}
+			}
+		}
+		if !found {
+			if anchor >= 0 {
+				b.WriteString(t[pos:skip])
+				pos, anchor = skip, -1
+				continue
+			}
+			if !changed {
+				return t
+			}
+			b.WriteString(t[pos:])
+			return b.String()
+		}
+		anchor = -1
+		if m.masked == "" {
+			b.WriteString(t[pos:m.value])
+			pos, anchor, skip = m.value, m.value, m.end
 			continue
 		}
-		key, value := t[at:k], unquote(t[sep:end])
-		name := key
-		if key[0] == '"' || key[0] == '\'' {
-			name = unquote(key)
-		} else {
-			// A bare dotted TOML key (`env.API_KEY`) is a table path: its field is the last part.
-			name = key[strings.LastIndexByte(key, '.')+1:]
-		}
-		if secretField(name, exempt) && !keeps(value) {
-			q := t[sep : sep+1]
-			b.WriteString(t[last:sep])
-			b.WriteString(q + Secret(value) + q)
-			last = end
-		}
-		at = end
+		b.WriteString(t[pos:start])
+		b.WriteString(m.masked)
+		pos, changed = m.end, true
 	}
-	if last == 0 {
+}
+
+// --- a pair inside a JSON string, and unquoted assignments ------------------------------------
+//
+// Three more passes, run in this order after the pairs and before the shapes, each matched by
+// hand: two need a backreference (all of a pair's quotes carry the same run of backslashes) and
+// all three a lookbehind, neither of which RE2 has. As with the pairs, every part of each pattern
+// is deterministic at a given start, so a failed match moves on one position and a match resumes
+// at its end, which is Python's re.sub.
+
+// sub rewrites t with every match of at: at reports, for a start position, the match's end and
+// its replacement (the matched text itself when nothing is to be masked).
+func sub(t string, at func(t string, p int) (end int, repl string, ok bool)) string {
+	var b strings.Builder
+	last, changed := 0, false
+	for p := 0; p < len(t); {
+		end, repl, ok := at(t, p)
+		if !ok {
+			p++
+			continue
+		}
+		if repl != t[p:end] {
+			b.WriteString(t[last:p])
+			b.WriteString(repl)
+			last, changed = end, true
+		}
+		p = end
+	}
+	if !changed {
+		return t
+	}
+	b.WriteString(t[last:])
+	return b.String()
+}
+
+// run is the end of the run of bytes from i that in accepts.
+func run(t string, i int, in func(byte) bool) int {
+	for i < len(t) && in(t[i]) {
+		i++
+	}
+	return i
+}
+
+func isBlank(c byte) bool { return c == ' ' || c == '\t' }
+
+// plain is [^"\\\n]: what a key or a value inside a JSON string may hold here.
+func plain(c byte) bool { return c != '"' && c != '\\' && c != '\n' }
+
+// escQuote reads exactly n backslashes and a quote at t[i], and returns the index past them, or -1.
+func escQuote(t string, i, n int) int {
+	if i+n >= len(t) || strings.Count(t[i:i+n], `\`) != n || t[i+n] != '"' {
+		return -1
+	}
+	return i + n + 1
+}
+
+// sep reads [ \t]*[:=][ \t]* (or [ \t]*=[ \t]* when only is '=') at t[i], and returns its end.
+func sepAt(t string, i int, only byte) int {
+	i = run(t, i, isBlank)
+	if i >= len(t) || !(t[i] == '=' || only == 0 && t[i] == ':') {
+		return -1
+	}
+	return run(t, i+1, isBlank)
+}
+
+// bareKey reads [A-Za-z0-9_.-]+ at t[at] where the byte before is not one of those (Python's
+// (?<![\w.-])), and returns its end, or -1.
+func bareKey(t string, at int) int {
+	if !isBare(t[at]) || at > 0 && isBare(t[at-1]) {
+		return -1
+	}
+	return run(t, at, isBare)
+}
+
+func lastPart(k string) string { return k[strings.LastIndexByte(k, '.')+1:] }
+
+// escapedPairAt is (?<!\\)(?P<q>\\+)"(?P<k>[^"\\\n]+)(?P=q)"(?P<sep>[ \t]*[:=][ \t]*)
+// (?P<q2>(?P=q))"(?P<v>[^"\\\n]*)(?P=q)": a pair inside a JSON string, at any depth. The key is
+// the name as written: it holds no escape. The value's token opens at q2, its run of backslashes.
+func escapedPairAt(t string, at int, exempt map[string]bool) (pairMatch, bool) {
+	if t[at] != '\\' || at > 0 && t[at-1] == '\\' {
+		return pairMatch{}, false
+	}
+	qe := run(t, at, func(c byte) bool { return c == '\\' })
+	if qe >= len(t) || t[qe] != '"' {
+		return pairMatch{}, false
+	}
+	n := qe - at
+	ks := qe + 1
+	ke := run(t, ks, plain)
+	if ke == ks {
+		return pairMatch{}, false
+	}
+	ss := escQuote(t, ke, n)
+	if ss < 0 {
+		return pairMatch{}, false
+	}
+	se := sepAt(t, ss, 0)
+	if se < 0 {
+		return pairMatch{}, false
+	}
+	vs := escQuote(t, se, n)
+	if vs < 0 {
+		return pairMatch{}, false
+	}
+	ve := run(t, vs, plain)
+	end := escQuote(t, ve, n)
+	if end < 0 {
+		return pairMatch{}, false
+	}
+	m := pairMatch{value: se, end: end}
+	k, v, q := t[ks:ke], t[vs:ve], t[at:qe]
+	if secretField(k, exempt) && !keeps(v) {
+		m.masked = q + `"` + k + q + `"` + t[ss:se] + q + `"` + Secret(v) + q + `"`
+	}
+	return m, true
+}
+
+// escapedValueAt is (?<![\w.-])(?P<k>[A-Za-z0-9_.-]+)(?P<sep>[ \t]*[:=][ \t]*)
+// (?P<q>\\+)"(?P<v>[^"\\\n]*)(?P=q)": a bare key and an escaped quoted value, a dotenv or YAML
+// line held in a JSON string.
+func escapedValueAt(t string, at int, exempt map[string]bool) (int, string, bool) {
+	ke := bareKey(t, at)
+	if ke < 0 {
+		return 0, "", false
+	}
+	se := sepAt(t, ke, 0)
+	if se < 0 {
+		return 0, "", false
+	}
+	qe := run(t, se, func(c byte) bool { return c == '\\' })
+	if qe == se || qe >= len(t) || t[qe] != '"' {
+		return 0, "", false
+	}
+	ve := run(t, qe+1, plain)
+	end := escQuote(t, ve, qe-se)
+	if end < 0 {
+		return 0, "", false
+	}
+	k, v, q := t[at:ke], t[qe+1:ve], t[se:qe]
+	if !secretField(lastPart(k), exempt) || keeps(v) {
+		return end, t[at:end], true
+	}
+	return end, t[at:se] + q + `"` + Secret(v) + q + `"`, true
+}
+
+// assignValue is [^\s"'`\\&;|<>,)}\]]: what an unquoted assigned value runs over.
+func assignValue(c byte) bool {
+	return !isSpace(c) && strings.IndexByte("\"'`\\&;|<>,)}]", c) < 0
+}
+
+// assignAt matches (?<![\w.-])(?P<k>[A-Za-z0-9_.-]+)(?P<sep>[ \t]*=[ \t]*)(?P<v>(?!=)[^\s"'`\\&;|<>,)}\]]+)
+// at t[at]: an unquoted assignment, whose value runs to whitespace or the end of the line. It
+// returns the key's end and the value's span. A value starting with `=` is a comparison
+// (`token == x`), not an assignment.
+func assignAt(t string, at int) (ke, vs, ve int, ok bool) {
+	if ke = bareKey(t, at); ke < 0 {
+		return 0, 0, 0, false
+	}
+	vs = sepAt(t, ke, '=')
+	if vs < 0 || vs >= len(t) || t[vs] == '=' {
+		return 0, 0, 0, false
+	}
+	if ve = run(t, vs, assignValue); ve == vs {
+		return 0, 0, 0, false
+	}
+	return ke, vs, ve, true
+}
+
+// assignments masks the unquoted assignments, scanning left to right. Unlike the other passes, an
+// assignment left as it is gives its value back to the scan: the search resumes right after its
+// name, not after its value. In `a=token=x` the value of `a` holds an assignment of its own, and in
+// `AKIA...=Bearer = v` a shape masked later turns the first name into a mask and frees
+// `Bearer = v`; a scan that had swallowed it would mask it only on a second pass, and a scrub must
+// be a no-op on its own output. A value directly followed by a mask is the rest of a value already
+// masked (`$env:<secret:...>`) and is kept, as is one a reference opens (`${MY_TOKEN}`).
+func assignments(t string, exempt map[string]bool) string {
+	var b strings.Builder
+	last, changed := 0, false
+	for p := 0; p < len(t); {
+		ke, vs, ve, ok := assignAt(t, p)
+		if !ok {
+			p++
+			continue
+		}
+		v := t[vs:ve]
+		if !secretField(lastPart(t[p:ke]), exempt) || keeps(v) ||
+			maskAt.MatchString(t[ve:]) || referenceAt.MatchString(t[vs:]) {
+			p = ke
+			continue
+		}
+		b.WriteString(t[last:vs])
+		b.WriteString(Secret(v))
+		last, p, changed = ve, ve, true
+	}
+	if !changed {
 		return t
 	}
 	b.WriteString(t[last:])

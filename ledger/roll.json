@@ -302,7 +302,7 @@
   {
     "path": "the-credential-scrub-is-an-opt-in-declaration",
     "kind": "decision",
-    "digest": "557938ea7c34"
+    "digest": "80dfb286d937"
   },
   {
     "path": "the-credential-scrub-is-an-opt-in-declaration/alt-each-app-writes-its-own",
