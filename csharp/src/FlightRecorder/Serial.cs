@@ -49,6 +49,23 @@ namespace FlightRecorder
         public override string ToString() => $"[{Head.Count} of {Length} items]";
     }
 
+    /// <summary>A traced map that was too long to hold whole: its first
+    /// <see cref="Serial.TraceMaxItems"/> entries, and the length the original really had. Like
+    /// <see cref="Truncated"/>, it reports its true <see cref="Length"/>, so an invariant asking
+    /// how many entries there were is not told the count of what survived.</summary>
+    public sealed class TruncatedMap : Dictionary<string, object?>
+    {
+        public int Length { get; }
+
+        public TruncatedMap(IEnumerable<KeyValuePair<string, object?>> head, int length)
+        {
+            foreach (var kv in head) this[kv.Key] = kv.Value;
+            Length = length;
+        }
+
+        public override string ToString() => $"{{{Count} of {Length} entries}}";
+    }
+
     /// <summary>A traced string cut to a prefix, still reporting its true length.</summary>
     public sealed class TruncatedText
     {
@@ -332,13 +349,40 @@ namespace FlightRecorder
         /// that throws, a cyclic graph, a ToString that dies) degrades to an opaque marker.</summary>
         public static object? TraceJsonable(object? v)
         {
-            try { return TraceEncode(v, 0); }
+            try { return TraceEncode(v, 0, new TraceWalk()); }
             catch { return Opaque(v); }
         }
 
-        private static object? TraceEncode(object? v, int depth)
+        /// <summary>The nodes one traced value may encode to, over every level. Each level is capped
+        /// at <see cref="TraceMaxItems"/>, but a hundred of a hundred of a hundred is a million, and
+        /// an object graph fans out faster than a depth cap can see: one budget over the whole value
+        /// bounds the cost of a local on an executed line to a constant, whatever it holds. Past
+        /// it, a value is <c>{"__opaque__": "&lt;Type (beyond the trace budget)&gt;"}</c>.</summary>
+        public const int TraceMaxNodes = 2000;
+
+        /// <summary>The state of encoding one top-level traced value: the nodes it has left, and the
+        /// objects on the path being encoded (a cycle guard). One per call, never shared, so frames
+        /// traced on two threads at once do not spend each other's budget.</summary>
+        private sealed class TraceWalk
+        {
+            public int Budget = TraceMaxNodes;
+            public readonly HashSet<object> Path = new HashSet<object>(SameObject.Instance);
+        }
+
+        private sealed class SameObject : IEqualityComparer<object>
+        {
+            public static readonly SameObject Instance = new SameObject();
+            public new bool Equals(object? x, object? y) => ReferenceEquals(x, y);
+            public int GetHashCode(object o) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(o);
+        }
+
+        private static Dictionary<string, object?> TraceMarker(object? v, string why) =>
+            new Dictionary<string, object?> { ["__opaque__"] = $"<{(v == null ? "null" : ArgName(v.GetType()))} ({why})>" };
+
+        private static object? TraceEncode(object? v, int depth, TraceWalk walk)
         {
             if (depth > MaxDepth) return Opaque(v);
+            if (--walk.Budget < 0) return TraceMarker(v, "beyond the trace budget");
             switch (v)
             {
                 case null:
@@ -375,11 +419,38 @@ namespace FlightRecorder
             }
             if (t.IsEnum) return v.ToString();
 
+            // A graph that refers back to itself is written once, then as a cycle marker. The guard
+            // is the path being encoded, not every object seen: a value reached twice by two routes
+            // is written twice. A value type is a copy and cannot hold itself.
+            if (!t.IsValueType && !walk.Path.Add(v)) return TraceMarker(v, "cycle");
+            try
+            {
+                return TraceContainer(v, depth, walk);
+            }
+            finally
+            {
+                if (!t.IsValueType) walk.Path.Remove(v);
+            }
+        }
+
+        private static object? TraceContainer(object v, int depth, TraceWalk walk)
+        {
             if (v is IDictionary dict)
             {
+                // A map is cut like a sequence: a rank map of thousands of entries, encoded whole on
+                // every executed line, is the cost the per-level cap exists to bound.
                 var outMap = new Dictionary<string, object?>();
+                var n = 0;
                 foreach (DictionaryEntry e in dict)
-                    outMap[Convert.ToString(e.Key, CultureInfo.InvariantCulture) ?? ""] = TraceEncode(e.Value, depth + 1);
+                {
+                    if (n++ >= TraceMaxItems) break;
+                    outMap[Convert.ToString(e.Key, CultureInfo.InvariantCulture) ?? ""] = TraceEncode(e.Value, depth + 1, walk);
+                }
+                if (dict.Count > TraceMaxItems)
+                    return new Dictionary<string, object?>
+                    {
+                        ["__map__"] = new Dictionary<string, object?> { ["len"] = (long)dict.Count, ["head"] = outMap },
+                    };
                 // A traced dict that happens to have exactly one key spelled like a marker would
                 // revive as the thing the marker means. Escape it so it revives as itself.
                 if (outMap.Count == 1)
@@ -397,7 +468,7 @@ namespace FlightRecorder
                 var n = 0;
                 foreach (var x in en)
                 {
-                    if (n < TraceMaxItems) items.Add(TraceEncode(x, depth + 1));
+                    if (n < TraceMaxItems) items.Add(TraceEncode(x, depth + 1, walk));
                     n += 1;
                 }
                 if (n <= TraceMaxItems) return items;
@@ -407,7 +478,7 @@ namespace FlightRecorder
                 };
             }
 
-            return TracePocoOrOpaque(v, depth);
+            return TracePocoOrOpaque(v, depth, walk);
         }
 
         /// <summary>A handle on the process or on code, in a traced frame, written as its name.
@@ -546,7 +617,7 @@ namespace FlightRecorder
             catch { return false; }
         }
 
-        private static object? TracePocoOrOpaque(object v, int depth)
+        private static object? TracePocoOrOpaque(object v, int depth, TraceWalk walk)
         {
             try
             {
@@ -559,7 +630,7 @@ namespace FlightRecorder
                     object? val;
                     try { val = p.GetValue(v); }
                     catch { continue; }
-                    outMap[CamelCase(p.Name)] = TraceEncode(val, depth + 1);
+                    outMap[CamelCase(p.Name)] = TraceEncode(val, depth + 1, walk);
                 }
                 if (outMap.Count > 0) return outMap;
             }
@@ -569,7 +640,7 @@ namespace FlightRecorder
 
         private static readonly HashSet<string> TraceMarkers = new HashSet<string>
         {
-            "__str__", "__seq__", "__snap__", "__esc__",
+            "__str__", "__seq__", "__map__", "__snap__", "__esc__",
         };
 
         /// <summary>Revive a traced value into something an invariant can assert on.</summary>
@@ -598,6 +669,15 @@ namespace FlightRecorder
                                     var head = (spec?.GetValueOrNull("head") as IEnumerable<object?>
                                                 ?? Enumerable.Empty<object?>()).Select(FromTraceJsonable).ToList();
                                     return new Truncated(head, ToLen(spec?.GetValueOrNull("len")));
+                                }
+                            case "__map__":
+                                {
+                                    var spec = kv.Value as IDictionary<string, object?>;
+                                    var head = spec?.GetValueOrNull("head") as IDictionary<string, object?>
+                                               ?? new Dictionary<string, object?>();
+                                    return new TruncatedMap(
+                                        head.Select(e => new KeyValuePair<string, object?>(e.Key, FromTraceJsonable(e.Value))),
+                                        ToLen(spec?.GetValueOrNull("len")));
                                 }
                             case "__str__":
                                 {
