@@ -53,8 +53,10 @@ func TestATracedValueCarriesNoEnvironmentTheAppDidNotPutInIt(t *testing.T) {
 
 	// The control: the sentinel is detectable, and an environment the app copied into a value is
 	// traced like any other data the app holds. Masking that is Redact's and Scrub's job.
+	// One variable, not cmd.Environ(): a list is cut at TraceMaxItems, and a CI runner holds more
+	// variables than that, so the sentinel appended last would fall outside the traced head.
 	cmd := exec.Command("go", "version")
-	cmd.Env = cmd.Environ()
+	cmd.Env = []string{"FR_TRACE_SENTINEL=" + os.Getenv("FR_TRACE_SENTINEL")}
 	b, _ := json.Marshal(ToTraceJsonable(cmd))
 	if !strings.Contains(string(b), envSentinel) {
 		t.Fatalf("the sentinel is not detectable, so the assertions above prove nothing")
