@@ -363,7 +363,7 @@ namespace FlightRecorder
                     };
             }
 
-            var reference = ProcessReference(v);
+            var reference = ProcessReference(v) ?? AwaitableReference(v);
             if (reference != null) return reference;
 
             var t = v.GetType();
@@ -464,6 +464,86 @@ namespace FlightRecorder
         {
             try { return read(); }
             catch { return "?"; }
+        }
+
+        /// <summary>An awaitable in a traced frame, written as its name and its status, never its
+        /// result.
+        ///
+        /// Walked as an object, a pending <c>Task&lt;T&gt;</c> was read through its public
+        /// <c>Result</c>, which blocks until the task completes: the trace hook, running on the
+        /// traced code's own line, stopped the code it was observing, or deadlocked it. A
+        /// <c>ValueTask&lt;T&gt;</c> over an <c>IValueTaskSource</c> is worse: reading its result
+        /// consumes the operation, so the traced code would later await a result that was already
+        /// taken. A Task is named as the Task or <c>Task&lt;T&gt;</c> it is (an async method's task
+        /// is a runtime subclass) with its <see cref="System.Threading.Tasks.TaskStatus"/>; a
+        /// ValueTask with the status its <c>Is*</c> flags give, or <c>Pending</c>. Any other type
+        /// with a public <c>GetAwaiter()</c> is a name only: its awaiter is never asked for, since
+        /// asking can start the work. Python does not trace an awaitable's result either.
+        /// ValueTask is recognised by name, so the netstandard2.0 build needs no package for it.
+        /// Null when the value is not awaitable.</summary>
+        private static Dictionary<string, object?>? AwaitableReference(object v)
+        {
+            string? name = null;
+            if (v is System.Threading.Tasks.Task task)
+            {
+                name = $"<{TaskName(task.GetType())} {Named(() => task.Status.ToString())}>";
+            }
+            else
+            {
+                var t = v.GetType();
+                var def = t.IsGenericType ? t.GetGenericTypeDefinition() : t;
+                if (def.FullName == "System.Threading.Tasks.ValueTask"
+                    || def.FullName == "System.Threading.Tasks.ValueTask`1")
+                {
+                    var label = t.IsGenericType ? $"ValueTask<{ArgName(t.GetGenericArguments()[0])}>" : "ValueTask";
+                    name = $"<{label} {Named(() => ValueTaskStatus(v, t))}>";
+                }
+                else if (HasGetAwaiter(t))
+                {
+                    name = $"<{ArgName(t)}>";
+                }
+            }
+            return name == null ? null : new Dictionary<string, object?> { ["__opaque__"] = name };
+        }
+
+        /// <summary><c>Task</c>, or <c>Task&lt;T&gt;</c> for the nearest generic Task in its
+        /// ancestry.</summary>
+        private static string TaskName(Type t)
+        {
+            for (var b = t; b != null; b = b.BaseType)
+                if (b.IsGenericType && b.GetGenericTypeDefinition() == typeof(System.Threading.Tasks.Task<>))
+                    return $"Task<{ArgName(b.GetGenericArguments()[0])}>";
+            return "Task";
+        }
+
+        private static string ArgName(Type t)
+        {
+            if (!t.IsGenericType) return t.Name;
+            var tick = t.Name.IndexOf('`');
+            var bare = tick < 0 ? t.Name : t.Name.Substring(0, tick);
+            return $"{bare}<{string.Join(",", t.GetGenericArguments().Select(ArgName))}>";
+        }
+
+        /// <summary>A ValueTask's status from its <c>Is*</c> flags, which ask a source for its
+        /// status and never for its result.</summary>
+        private static string ValueTaskStatus(object v, Type t)
+        {
+            bool Flag(string property) =>
+                t.GetProperty(property)?.GetValue(v) is bool b && b;
+            if (Flag("IsCompletedSuccessfully")) return "RanToCompletion";
+            if (Flag("IsCanceled")) return "Canceled";
+            if (Flag("IsFaulted")) return "Faulted";
+            return "Pending";
+        }
+
+        private static bool HasGetAwaiter(Type t)
+        {
+            try
+            {
+                return t.GetMethod("GetAwaiter", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance,
+                    null, Type.EmptyTypes, null) != null;
+            }
+            catch { return false; }
         }
 
         private static object? TracePocoOrOpaque(object v, int depth)

@@ -199,5 +199,119 @@ namespace FlightRecorder.Tests
             }
             finally { Environment.SetEnvironmentVariable(EnvName, null); }
         }
+
+        // --- an awaitable is never waited on -----------------------------------------------
+        //
+        // A traced local holding a pending Task<T> was walked through its public properties, and
+        // Task<T>.Result blocks until the task completes: the trace hook, running on the traced
+        // code's own line, stopped the code it was observing. An awaitable is written as its name
+        // and its status, never its result, as Python writes it.
+
+        /// <summary>Encode on a worker and give up after a while, so a red run fails instead of
+        /// hanging the suite. <paramref name="release"/> then unblocks whatever the encoder
+        /// waited on, so the worker does not outlive the test.</summary>
+        private static string EncodeWithin(object? v, Action release)
+        {
+            var work = System.Threading.Tasks.Task.Run(() => Json.Stringify(Serial.TraceJsonable(v)));
+            try
+            {
+                Assert.True(work.Wait(TimeSpan.FromSeconds(5)), "the trace encoder blocked on " + v?.GetType().Name);
+                return work.Result;
+            }
+            finally { release(); }
+        }
+
+        private static async System.Threading.Tasks.Task<int> Awaiting(System.Threading.Tasks.Task<int> pending) =>
+            await pending + 1;
+
+        [Fact]
+        public void APendingTaskIsTracedAsItsNameAndStatusWithoutWaiting()
+        {
+            var tcs = new System.Threading.Tasks.TaskCompletionSource<int>();
+            Assert.Equal(Ref("<Task<Int32> WaitingForActivation>"), EncodeWithin(tcs.Task, () => tcs.TrySetResult(1)));
+
+            // An async method's task is a runtime subclass of Task<T>; it is named as the Task<T> it is.
+            var gate = new System.Threading.Tasks.TaskCompletionSource<int>();
+            var running = Awaiting(gate.Task);
+            Assert.Equal(Ref("<Task<Int32> WaitingForActivation>"), EncodeWithin(running, () => gate.TrySetResult(1)));
+
+            var plain = new System.Threading.Tasks.TaskCompletionSource<bool>();
+            Assert.Equal(Ref("<Task WaitingForActivation>"),
+                EncodeWithin((System.Threading.Tasks.Task)plain.Task.ContinueWith(_ => { }), () => plain.TrySetResult(true)));
+        }
+
+        [Fact]
+        public void ACompletedTaskIsTracedWithoutItsResult()
+        {
+            Assert.Equal(Ref("<Task<Int32> RanToCompletion>"), EncodeWithin(System.Threading.Tasks.Task.FromResult(4242), () => { }));
+            var failed = System.Threading.Tasks.Task.FromException<int>(new InvalidOperationException("boom"));
+            Assert.Equal(Ref("<Task<Int32> Faulted>"), EncodeWithin(failed, () => { }));
+        }
+
+        [Fact]
+        public void AValueTaskIsNeverWaitedOnNorConsumed()
+        {
+            var tcs = new System.Threading.Tasks.TaskCompletionSource<int>();
+            var overTask = new System.Threading.Tasks.ValueTask<int>(tcs.Task);
+            Assert.Equal(Ref("<ValueTask<Int32> Pending>"), EncodeWithin(overTask, () => tcs.TrySetResult(1)));
+
+            var source = new OneShotSource();
+            var overSource = new System.Threading.Tasks.ValueTask<int>(source, 0);
+            Assert.Equal(Ref("<ValueTask<Int32> Pending>"), EncodeWithin(overSource, source.Release));
+            Assert.Equal(0, source.ResultsTaken);       // reading a source's result consumes it
+
+            Assert.Equal(Ref("<ValueTask<Int32> RanToCompletion>"),
+                EncodeWithin(new System.Threading.Tasks.ValueTask<int>(7), () => { }));
+            Assert.Equal(Ref("<ValueTask RanToCompletion>"), EncodeWithin(default(System.Threading.Tasks.ValueTask), () => { }));
+        }
+
+        [Fact]
+        public void AnyAwaitableIsTracedAsItsNameAndNeverOpened()
+        {
+            var cold = new ColdAwaitable();
+            Assert.Equal(Ref("<ColdAwaitable>"), EncodeWithin(cold, cold.Release));
+            Assert.False(cold.Started);
+            // ...including where an object holds it.
+            var holder = new Dictionary<string, object?> { ["job"] = cold, ["n"] = 1 };
+            Assert.Equal("{\"job\":" + Ref("<ColdAwaitable>") + ",\"n\":1}", EncodeWithin(holder, cold.Release));
+        }
+
+        /// <summary>An IValueTaskSource that blocks a caller of GetResult until released, and counts them.</summary>
+        private sealed class OneShotSource : System.Threading.Tasks.Sources.IValueTaskSource<int>
+        {
+            private readonly System.Threading.ManualResetEventSlim _released = new System.Threading.ManualResetEventSlim(false);
+            public int ResultsTaken;
+            public void Release() => _released.Set();
+
+            public int GetResult(short token)
+            {
+                System.Threading.Interlocked.Increment(ref ResultsTaken);
+                _released.Wait();
+                return 1;
+            }
+
+            public System.Threading.Tasks.Sources.ValueTaskSourceStatus GetStatus(short token) =>
+                _released.IsSet ? System.Threading.Tasks.Sources.ValueTaskSourceStatus.Succeeded
+                    : System.Threading.Tasks.Sources.ValueTaskSourceStatus.Pending;
+
+            public void OnCompleted(Action<object?> continuation, object? state, short token,
+                System.Threading.Tasks.Sources.ValueTaskSourceOnCompletedFlags flags) { }
+        }
+
+        /// <summary>An awaitable whose public property waits for the work it starts.</summary>
+        private sealed class ColdAwaitable
+        {
+            private readonly System.Threading.ManualResetEventSlim _released = new System.Threading.ManualResetEventSlim(false);
+            public bool Started { get; private set; }
+            public void Release() => _released.Set();
+
+            public int Value
+            {
+                get { Started = true; _released.Wait(); return 1; }
+            }
+
+            public System.Runtime.CompilerServices.TaskAwaiter<int> GetAwaiter() =>
+                System.Threading.Tasks.Task.FromResult(Value).GetAwaiter();
+        }
     }
 }
