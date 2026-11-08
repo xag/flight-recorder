@@ -554,7 +554,7 @@ _PHP_DECISION = Node(
 # the very id the guide told people to install).
 _DISTRIBUTIONS = {
     "py":   {"registry": "PyPI",       "id": "xag-flight-recorder",
-             "status": "published",   "version": "0.10.0"},
+             "status": "published",   "version": "0.11.1"},
     "js":   {"registry": "npm",        "id": "@xag/flight-recorder",
              "status": "published",   "version": "0.10.2"},
     "go":   {"registry": "Go modules", "id": "github.com/xag/flight-recorder/go",
